@@ -1,8 +1,16 @@
-# Room for the UK OSM extract (~2.3 GB), a second copy while updates are applied, and the database.
+# Persistent storage for everything bandobuddy writes to /data: the UK OSM extract (~2.3 GB),
+# a second copy while daily updates are applied, and the SQLite database. Room to spare.
+#
+# local-path volumes live on one node's disk and survive pod restarts and redeploys (the pod is
+# always scheduled back onto that node). The storage class deletes the data when the claim is
+# deleted, so the claim is protected from being pruned or cascade-deleted by Argo CD or Helm.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: portfolio-bandobuddy-data
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
+    helm.sh/resource-policy: keep
 spec:
   accessModes:
     - ReadWriteOnce
