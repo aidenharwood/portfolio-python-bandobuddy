@@ -375,7 +375,7 @@ const S = {
   map: null, bases: null, base: "Map", zoomCtl: null, markers: new Map(), version: -1, mapSeq: 0, listSeq: 0,
   list: null, listNear: null, selected: null, site: null, status: null, prevVisit: null,
   view: "list", listSnap: "peek",
-  loc: { wanted: false, watch: null, pos: null, follow: false, first: false, quiet: false, paused: false, warned: false },
+  loc: { wanted: false, watch: null, pos: null, follow: false, first: false, quiet: false, auto: false, paused: false, warned: false },
   me: { dot: null, acc: null },
 };
 
@@ -901,10 +901,11 @@ function watchLocation() {
     { enableHighAccuracy: true, maximumAge: 10000, timeout: 30000 });
 }
 
-function startLocate({ quiet = false } = {}) {
+// `auto`: asked for when the page opened rather than by a tap, so a "no" is taken quietly.
+function startLocate({ quiet = false, auto = false } = {}) {
   if (!("geolocation" in navigator)) { toast("This browser can't share your location."); return; }
   if (!window.isSecureContext) { toast("Browsers only share your location over HTTPS (or on localhost)."); return; }
-  Object.assign(S.loc, { wanted: true, follow: !quiet, first: true, quiet, warned: false });
+  Object.assign(S.loc, { wanted: true, follow: !quiet, first: true, quiet, auto, warned: false });
   savePrefs({ locOn: true });
   if (S.loc.watch == null) watchLocation();
   renderLocBtn();
@@ -946,12 +947,13 @@ function onPosition(pos) {
 }
 
 function onPositionError(err) {
-  if (err.code === 1) {  // permission denied
+  if (err.code === 1) {  // permission denied (or the prompt dismissed): don't ask again on open
+    const auto = S.loc.auto;
     stopLocate();
-    toast("Location is blocked for this site. Allow it in your browser's site settings, then try again.", 6000);
+    if (!auto) toast("Location is blocked for this site. Allow it in your browser's site settings, then try again.", 6000);
     return;
   }
-  if (!S.loc.pos && !S.loc.warned) {
+  if (!S.loc.pos && !S.loc.warned && !S.loc.auto) {
     S.loc.warned = true;
     toast(err.code === 3 ? "Still looking for your location…" : "Couldn't find your location. Check location services are on.");
   }
@@ -979,12 +981,16 @@ document.addEventListener("visibilitychange", () => {
   }
 });
 
-async function resumeLocation(quiet) {
-  if (!loadPrefs().locOn || !("geolocation" in navigator) || !navigator.permissions) return;
-  try {
-    const perm = await navigator.permissions.query({ name: "geolocation" });
-    if (perm.state === "granted") startLocate({ quiet });
-  } catch (_) { /* not supported */ }
+// Ask for the user's location as the page opens (the browser shows its own prompt the first time),
+// unless they turned it off here or blocked it, or the browser won't share it over this connection.
+async function locateOnOpen(quiet) {
+  if (loadPrefs().locOn === false || !("geolocation" in navigator) || !window.isSecureContext) return;
+  if (navigator.permissions) {
+    try {
+      if ((await navigator.permissions.query({ name: "geolocation" })).state === "denied") return;
+    } catch (_) { /* can't tell: ask anyway */ }
+  }
+  startLocate({ quiet, auto: true });
 }
 
 // ---------- data & status ----------
@@ -1209,7 +1215,7 @@ if (window.L) {
   initMap();
   scheduleFetch(0);
   if (linked) openSite(linked, { pan: true, push: false });
-  resumeLocation(!!linked);
+  locateOnOpen(!!linked);  // a shared link keeps its place in view
 } else {
   $("map").innerHTML = '<p style="padding:90px 20px;color:#333">Couldn’t load the map library. Check your internet connection and reload.</p>';
 }

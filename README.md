@@ -12,7 +12,7 @@ bandobuddy builds its own database of the whole country from **OpenStreetMap** a
 - **Evidence, not scores.** Uses OpenStreetMap lifecycle tags (`abandoned:*`, `disused:*`, ruins, old mines, bunkers, dead railway tunnels), Wikidata state-of-use and closure dates, and wording in Wikipedia intros ("disused", "demolished", "converted to flats").
 - **Stays up to date.** Scheduled refreshes apply OpenStreetMap's daily change files instead of downloading the country again. Places are flagged **NEW** when they appear and dropped when they disappear from the data.
 - **Resumable.** Crawls survive restarts: downloads resume, and the Wikidata crawl remembers which areas are finished.
-- **Made for phones.** A full-screen map with a draggable bottom sheet (a side panel on wider screens). Tap the locate button to see where you are and list places nearest first, then get directions or share a link to a place.
+- **Made for phones.** A full-screen map with a draggable bottom sheet (a side panel on wider screens). It asks for your location when it opens (or tap the locate button later) to show where you are and list places nearest first, then get directions or share a link to a place.
 - **Live map.** Built with Leaflet and OpenStreetMap tiles, with category icons that group into counts when zoomed out and fill in while an update runs. It also has category and source filters, place search (via Nominatim), [Panoramax](https://panoramax.fr) photos, and CSV/KML/GPX exports.
 - **Two modes.** A personal mode with full update controls, and a read-only public mode for hosting.
 
