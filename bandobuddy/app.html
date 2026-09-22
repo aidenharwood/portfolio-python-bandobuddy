@@ -2,184 +2,325 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1a1916" media="(prefers-color-scheme: dark)">
+<meta name="description" content="A free, open map of likely-abandoned places across the UK.">
 <title>bandobuddy</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%23ea580c'/%3E%3Cpath d='M4 19h16M6 19v-6a6 6 0 0 1 12 0v6M10 19v-5a2 2 0 0 1 4 0v5' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
       integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
 <style>
   :root {
-    --bg:#0f0e0c; --panel:#171613; --raised:#201f1b; --ink:#ece8e1; --muted:#9a948a; --faint:#6b665e;
-    --line:#2c2a25; --accent:#fb923c; --accent-ink:#1a1206; --err:#f87171; --ok:#a3e635;
-    --prime:#ef4444; --likely:#f97316; --maybe:#eab308; --long:#78716c; --osm:#60a5fa; --wiki:#c4b5fd;
-    color-scheme: dark;
+    --bg:#eeece8; --panel:#ffffff; --raised:#f4f2ee; --ink:#1c1917; --muted:#6b645c; --faint:#a19b92; --line:#e7e3dc;
+    --accent:#ea580c; --accent-ink:#ffffff; --err:#dc2626; --me:#2563eb;
+    --shadow:0 2px 10px rgba(0,0,0,.18);
+    --sheet-h:0px; --sheet-full:0px;
+    color-scheme:light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0f0e0c; --panel:#1a1916; --raised:#25231f; --ink:#ece8e1; --muted:#a39d93; --faint:#6b665e; --line:#312e29;
+      --accent:#fb923c; --accent-ink:#1a1206; --err:#f87171; --me:#3b82f6; --shadow:0 2px 12px rgba(0,0,0,.55); color-scheme:dark; }
   }
   * { box-sizing:border-box }
-  html, body { margin:0; height:100%; background:var(--bg); color:var(--ink);
-    font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif }
+  html, body { margin:0; height:100%; overflow:hidden; overscroll-behavior:none; background:var(--bg); color:var(--ink);
+    font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; -webkit-tap-highlight-color:transparent }
   button, input, select { font:inherit; color:inherit }
+  button { cursor:pointer }
   a { color:var(--accent) }
   [hidden] { display:none !important }
-
-  #app { display:grid; grid-template-columns:minmax(330px, 400px) 1fr; height:100vh; height:100dvh }
-  aside { background:var(--panel); border-right:1px solid var(--line); display:flex; flex-direction:column; min-height:0 }
-  #map { min-height:0; background:#e5e3df }
-  @media (max-width: 760px) {
-    #app { grid-template-columns:1fr; grid-template-rows:45vh 1fr; grid-template-rows:45dvh 1fr }
-    #map { order:-1 }
-    aside { border-right:0; border-top:1px solid var(--line) }
-  }
-
-  header.top { display:flex; align-items:center; gap:8px; padding:12px 14px 8px }
-  header.top h1 { margin:0; font-size:20px; letter-spacing:-.02em; flex:1 }
-  header.top h1 span { color:var(--accent) }
-  .status { margin:0 14px 10px; padding:8px 10px; border:1px solid var(--line); border-radius:10px; background:var(--raised);
-    font-size:12px; color:var(--muted); cursor:pointer; display:grid; gap:4px; text-align:left; width:calc(100% - 28px) }
-  .status b { color:var(--ink); font-weight:600 }
-  .status:hover { border-color:var(--faint) }
-  .bar { height:4px; background:var(--line); border-radius:4px; overflow:hidden }
-  .bar i { display:block; height:100%; width:0; background:var(--accent); transition:width .5s ease }
-  .scroll { overflow-y:auto; flex:1; min-height:0; padding:0 14px 20px; display:flex; flex-direction:column; gap:12px }
-
-  .row { display:flex; gap:8px; align-items:center }
+  .ico { width:22px; height:22px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; flex:none }
   .grow { flex:1; min-width:0 }
-  input[type=text], input[type=number], select { background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:7px 9px }
-  input[type=text] { width:100% }
-  input:focus, select:focus, button:focus-visible { outline:2px solid var(--accent); outline-offset:1px }
-  input[type=range] { width:100%; accent-color:var(--accent) }
-  .btn { border:1px solid var(--line); background:var(--raised); border-radius:8px; padding:7px 11px; cursor:pointer; white-space:nowrap; text-decoration:none; color:var(--ink) }
+  .note { color:var(--muted); font-size:13px; margin:0 }
+  .err { color:var(--err); font-size:14px; margin:0 }
+  :focus-visible { outline:2px solid var(--accent); outline-offset:2px }
+
+  #map { position:fixed; inset:0; background:#e5e3df }
+
+  /* search bar */
+  .topbar { position:fixed; z-index:1000; top:calc(10px + env(safe-area-inset-top)); left:10px; right:10px; height:52px;
+    display:flex; align-items:center; gap:2px; padding:4px; background:var(--panel); border-radius:26px; box-shadow:var(--shadow) }
+  .topbar input { flex:1; min-width:0; height:100%; border:0; background:transparent; padding:0 4px; font-size:16px; outline:none }
+  .topbar input::-webkit-search-cancel-button { display:none }
+  .icon-btn { width:44px; height:44px; border:0; border-radius:50%; background:transparent; color:var(--muted);
+    display:grid; place-items:center; position:relative; flex:none }
+  .icon-btn:hover { background:var(--raised); color:var(--ink) }
+  .count { position:absolute; top:5px; right:4px; min-width:17px; height:17px; padding:0 4px; border-radius:9px;
+    background:var(--accent); color:var(--accent-ink); font:700 11px/17px system-ui; text-align:center }
+
+  .toast { position:fixed; z-index:1200; left:50%; top:calc(74px + env(safe-area-inset-top)); transform:translateX(-50%);
+    width:max-content; max-width:calc(100% - 32px); padding:10px 14px; border-radius:12px; background:var(--ink); color:var(--panel);
+    box-shadow:var(--shadow); font-size:14px; opacity:0; pointer-events:none; transition:opacity .2s }
+  .toast.show { opacity:1 }
+
+  /* floating locate button: rides on top of the sheet */
+  .fabs { position:fixed; z-index:900; right:12px; bottom:calc(var(--sheet-h) + 30px); display:grid; gap:10px;
+    transition:bottom .25s ease, opacity .2s }
+  .fabs.hide { opacity:0; pointer-events:none }
+  .fab { width:52px; height:52px; border:0; border-radius:50%; background:var(--panel); color:var(--muted); box-shadow:var(--shadow);
+    display:grid; place-items:center }
+  .fab .dot { fill:none; stroke:none }
+  .fab.on, .fab.searching { color:var(--me) }
+  .fab.on .dot, .fab.follow .dot { fill:currentColor }
+  .fab.follow { background:var(--me); color:#fff }
+  .fab.searching svg { animation:pulse 1s ease-in-out infinite alternate }
+  @keyframes pulse { to { opacity:.3 } }
+
+  /* the sheet: bottom sheet on phones, side panel on wide screens */
+  .sheet { position:fixed; z-index:950; left:0; right:0; bottom:0; height:var(--sheet-full); display:flex; flex-direction:column;
+    background:var(--panel); border-radius:18px 18px 0 0; box-shadow:0 -2px 16px rgba(0,0,0,.2);
+    transform:translateY(calc(var(--sheet-full) - var(--sheet-h))); transition:transform .25s ease; will-change:transform }
+  .grab { flex:none; width:100%; height:22px; border:0; background:transparent; display:grid; place-items:center; touch-action:none; cursor:grab }
+  .grab span { width:40px; height:5px; border-radius:3px; background:var(--line) }
+  .sheet-body { flex:1; min-height:0; overflow-y:auto; overscroll-behavior:contain;
+    padding:0 16px calc(var(--sheet-full) - var(--sheet-h) + 24px + env(safe-area-inset-bottom)) }
+  [data-drag] { touch-action:none; -webkit-user-select:none; user-select:none }
+  .sheet[data-snap="peek"] .sheet-body { overflow:hidden }
+  body.dragging { -webkit-user-select:none; user-select:none; cursor:grabbing }
+  body.dragging .sheet, body.dragging .fabs, body.dragging .leaflet-bottom { transition:none }
+  body.dragging .sheet-body { padding-bottom:24px }
+
+  @media (min-width: 900px) {
+    .topbar { top:12px; left:12px; right:auto; width:400px }
+    .sheet { top:76px; left:12px; right:auto; bottom:12px; width:400px; height:auto; border-radius:16px; box-shadow:var(--shadow); transform:none }
+    .grab { display:none }
+    .sheet-body { padding:12px 16px 24px }
+    [data-drag] { touch-action:auto }
+    .fabs { right:16px; bottom:36px }
+    .toast { top:76px; left:calc(50% + 206px) }
+    .leaflet-bottom.leaflet-left { left:424px }
+  }
+  @media (prefers-reduced-motion: reduce) { .sheet, .fabs, .leaflet-bottom { transition:none } }
+
+  /* headings inside the sheet */
+  .head { display:flex; align-items:center; gap:10px; padding:2px 0 12px }
+  .head h2 { margin:0; font-size:18px; line-height:1.25 }
+  .head h2 span { color:var(--accent) }
+  .head p { margin:2px 0 0; font-size:13px; color:var(--muted) }
+
+  /* category badges and map pins */
+  .badge { width:36px; height:36px; border-radius:50%; background:var(--c); color:#fff; display:grid; place-items:center; flex:none }
+  .badge .ico { width:20px; height:20px }
+  .badge.big { width:48px; height:48px } .badge.big .ico { width:26px; height:26px }
+  .badge.sm { width:28px; height:28px } .badge.sm .ico { width:16px; height:16px }
+  .bb-icon { background:none; border:0 }
+  .pin { position:absolute; inset:5px; border-radius:50%; background:var(--c); color:#fff; display:grid; place-items:center;
+    border:2px solid #fff; box-shadow:0 1px 4px rgba(0,0,0,.5) }
+  .pin .ico { width:64%; height:64% }
+  .pin.weak { inset:6px; opacity:.85; border-width:1.5px }
+  .pin.weak .ico { stroke-width:2.4 }
+  .pin-new { position:absolute; top:-3px; right:-3px; width:10px; height:10px; border-radius:50%; background:#f97316; border:2px solid #fff }
+  .sel { width:46px; height:46px; border-radius:50% 50% 50% 0; transform:rotate(-45deg); background:var(--c); border:3px solid #fff;
+    box-shadow:-2px 3px 8px rgba(0,0,0,.45); display:grid; place-items:center }
+  .sel .ico { transform:rotate(45deg); color:#fff; width:24px; height:24px }
+  .cluster { width:100%; height:100%; border-radius:50%; background:var(--c); color:#fff; display:grid; place-items:center;
+    font:700 13px/1 system-ui; border:3px solid rgba(255,255,255,.95);
+    box-shadow:0 0 0 4px color-mix(in srgb, var(--c) 35%, transparent), 0 2px 6px rgba(0,0,0,.35) }
+  .me { width:22px; height:22px; border-radius:50%; background:var(--me); border:3px solid #fff; box-shadow:0 1px 5px rgba(0,0,0,.45); position:relative }
+  .me::after { content:""; position:absolute; inset:-9px; border-radius:50%; background:var(--me); opacity:.3; animation:halo 2s ease-out infinite }
+  @keyframes halo { from { transform:scale(.4); opacity:.45 } to { transform:scale(1.4); opacity:0 } }
+
+  /* list */
+  .card { display:flex; gap:12px; align-items:center; width:100%; margin:0 0 12px; padding:12px; text-align:left; color:var(--ink);
+    border:1px solid var(--line); border-radius:12px; background:var(--raised) }
+  .card b { display:block } .card small { display:block; color:var(--muted); font-size:13px }
+  .card.loc > .ico { color:var(--me) } .card.fresh > .ico { color:var(--accent) }
+  .bar { height:4px; margin-top:6px; border-radius:4px; background:var(--line); overflow:hidden }
+  .bar i { display:block; height:100%; background:var(--accent); transition:width .5s ease }
+  ul.list { list-style:none; margin:0; padding:0 }
+  .item { display:grid; grid-template-columns:36px 1fr auto; gap:12px; align-items:center; width:100%; min-height:62px; padding:10px 4px;
+    border:0; border-bottom:1px solid var(--line); background:transparent; text-align:left }
+  .item:hover { background:var(--raised) }
+  .item .name { display:block; font-weight:600; line-height:1.25; overflow-wrap:anywhere }
+  .item .meta { display:block; font-size:13px; color:var(--muted) }
+  .item .dist { font-size:13px; color:var(--muted); white-space:nowrap }
+  .item.weak .badge { opacity:.75 }
+  .new { margin-left:6px; padding:2px 4px; border-radius:4px; background:var(--accent); color:var(--accent-ink); font:700 10px/1 system-ui; vertical-align:2px }
+  .tag { display:inline-block; margin-left:6px; padding:1px 8px; border:1px solid var(--line); border-radius:999px; font-size:11px;
+    font-weight:600; letter-spacing:0; text-transform:none; color:var(--muted); vertical-align:1px }
+  .tag.strong { border-color:var(--accent); color:var(--accent) }
+  .foot { display:grid; gap:10px; padding-top:14px }
+  .exports { display:flex; gap:6px; align-items:center; flex-wrap:wrap }
+
+  .btn { display:inline-flex; align-items:center; justify-content:center; gap:6px; padding:8px 12px; border:1px solid var(--line);
+    border-radius:10px; background:var(--raised); color:var(--ink); text-decoration:none; font-size:14px }
   .btn:hover { border-color:var(--faint) }
   .btn:disabled { opacity:.5; cursor:default }
-  .btn.small { padding:3px 8px; font-size:12px }
+  .btn.small { padding:5px 10px; font-size:13px }
   .btn.accent { background:var(--accent); border-color:var(--accent); color:var(--accent-ink); font-weight:700 }
-  .label { display:flex; justify-content:space-between; color:var(--muted); font-size:12px; margin-bottom:4px }
-  .label b { color:var(--ink) }
-  .note { color:var(--muted); font-size:12px; margin:0 }
-  .credits { margin-top:auto; padding-top:8px; border-top:1px solid var(--line); font-size:11px; color:var(--faint) }
-  .credits a { color:var(--muted) }
-  .err { color:var(--err); font-size:13px; margin:0 }
+  .btn.block { width:100%; height:48px }
+  .linkbtn { border:0; background:transparent; color:var(--accent); font-weight:600; padding:6px 4px }
 
-  .chips { display:flex; flex-wrap:wrap; gap:6px }
-  .chip { border:1px solid var(--line); background:var(--raised); border-radius:999px; padding:3px 10px; font-size:12px; cursor:pointer; color:var(--muted) }
-  .chip.on { background:var(--ink); color:var(--bg); border-color:var(--ink) }
-  .checks { display:flex; gap:14px; font-size:13px; flex-wrap:wrap }
-  .checks label { display:flex; gap:6px; align-items:center; cursor:pointer }
-  .checks input { accent-color:var(--accent) }
-  .newbadge { border:1px solid var(--accent); color:var(--accent); background:transparent; border-radius:8px; padding:6px 10px; cursor:pointer; text-align:left }
-
-  .listhead { display:flex; justify-content:space-between; align-items:center; gap:8px; font-size:12px; color:var(--muted) }
-  .exports { display:flex; gap:4px }
-  ul.list { list-style:none; margin:0; padding:0; display:grid; gap:4px }
-  ul.list li { display:grid; grid-template-columns:38px 1fr; gap:8px; align-items:center; padding:7px 8px; border-radius:8px; cursor:pointer; border:1px solid transparent }
-  ul.list li:hover { background:var(--raised); border-color:var(--line) }
-  ul.list .name { font-weight:600; overflow-wrap:anywhere; line-height:1.25 }
-  ul.list .meta { font-size:12px; color:var(--muted) }
-  .score { font-weight:800; font-size:17px; text-align:center; line-height:1 }
-  .score small { display:block; font-size:9px; font-weight:600; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); margin-top:2px }
-  .t-prime { color:var(--prime) } .t-likely { color:var(--likely) } .t-maybe { color:var(--maybe) } .t-long-shot { color:var(--long) }
-  .new { font-size:10px; font-weight:700; color:var(--accent-ink); background:var(--accent); border-radius:4px; padding:0 4px; margin-left:4px; vertical-align:2px }
-  .src { font-size:11px; font-weight:600 } .src.osm { color:var(--osm) } .src.wiki { color:var(--wiki) }
-
-  /* detail */
-  .detail { display:grid; gap:10px }
-  .detail h2 { margin:0; font-size:18px; line-height:1.25; overflow-wrap:anywhere }
-  .detail .head { display:grid; grid-template-columns:1fr auto; gap:8px; align-items:start }
-  .detail .score { font-size:26px }
-  .detail ul.reasons { margin:0; padding-left:18px; display:grid; gap:4px }
-  .links { display:flex; flex-wrap:wrap; gap:6px }
-  .photos { display:grid; grid-template-columns:repeat(auto-fill, minmax(110px, 1fr)); gap:6px }
-  .photos a { display:block; position:relative; border-radius:6px; overflow:hidden; background:#000; aspect-ratio:4/3 }
+  /* one place */
+  .site-head { display:flex; gap:12px; align-items:flex-start; padding:2px 0 12px }
+  .site-head h2 { margin:0; font-size:20px; line-height:1.2; overflow-wrap:anywhere }
+  .site-head p { margin:4px 0 0; color:var(--muted); font-size:14px }
+  .actions { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 6px; padding:0 0 8px }
+  .act { flex:none; display:inline-flex; align-items:center; gap:6px; height:40px; padding:0 14px; border:1px solid var(--line);
+    border-radius:20px; background:var(--panel); color:var(--accent); font-size:14px; font-weight:600; text-decoration:none }
+  .act .ico { width:18px; height:18px }
+  .act.primary { background:var(--accent); border-color:var(--accent); color:var(--accent-ink) }
+  .block { padding:14px 0; border-top:1px solid var(--line) }
+  .block h3 { margin:0 0 8px; font-size:12px; letter-spacing:.05em; text-transform:uppercase; color:var(--muted) }
+  .reasons { margin:0; padding-left:18px; display:grid; gap:6px }
+  .photos { display:flex; gap:8px; margin:0 -16px; padding:0 16px 4px; overflow-x:auto; scroll-snap-type:x mandatory }
+  .photos a { flex:none; width:180px; aspect-ratio:4/3; position:relative; border-radius:8px; overflow:hidden; background:#000; scroll-snap-align:start }
   .photos img { width:100%; height:100%; object-fit:cover; display:block }
-  .photos span { position:absolute; left:0; right:0; bottom:0; background:rgba(0,0,0,.7); color:#fff; font-size:10px; padding:2px 4px }
-  details.box { border:1px solid var(--line); border-radius:8px; background:var(--raised) }
-  details.box > summary { cursor:pointer; padding:7px 10px; color:var(--muted); font-size:12px }
-  details.box > div { padding:0 10px 10px }
+  .photos span { position:absolute; left:0; right:0; bottom:0; padding:2px 6px; background:rgba(0,0,0,.7); color:#fff; font-size:11px }
+  .links { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px }
+  details.box { margin-top:12px; border:1px solid var(--line); border-radius:10px; background:var(--raised) }
+  details.box > summary { padding:9px 12px; color:var(--muted); font-size:13px; cursor:pointer }
+  details.box > div { padding:0 12px 12px }
   table.tags { width:100%; border-collapse:collapse; font-size:12px }
-  table.tags td { padding:2px 4px; border-top:1px solid var(--line); vertical-align:top; overflow-wrap:anywhere }
+  table.tags td { padding:3px 4px; border-top:1px solid var(--line); vertical-align:top; overflow-wrap:anywhere }
   table.tags td:first-child { color:var(--muted); white-space:nowrap }
 
-  /* data panel */
-  .source { border:1px solid var(--line); border-radius:10px; background:var(--raised); padding:10px; display:grid; gap:6px }
-  .source h3 { margin:0; font-size:14px; display:flex; justify-content:space-between; gap:8px }
-  pre.log { margin:0; max-height:200px; overflow:auto; font-size:11px; line-height:1.5; color:var(--muted); white-space:pre-wrap }
+  /* filters */
+  .cats { display:grid; grid-template-columns:1fr 1fr; gap:8px }
+  .cat { display:flex; align-items:center; gap:10px; min-height:48px; padding:8px; border:1px solid var(--line); border-radius:12px;
+    background:var(--panel); text-align:left; font-size:14px; line-height:1.2 }
+  .cat[aria-pressed="true"] { border-color:var(--c); box-shadow:inset 0 0 0 1px var(--c) }
+  .cat[aria-pressed="false"] { color:var(--muted) }
+  .cat[aria-pressed="false"] .badge { background:var(--faint) }
+  .switch { display:flex; gap:12px; align-items:flex-start; cursor:pointer }
+  .switch input[type=checkbox] { appearance:none; -webkit-appearance:none; flex:none; width:44px; height:26px; margin:2px 0 0; border-radius:13px;
+    background:var(--line); position:relative; cursor:pointer; transition:background .2s }
+  .switch input[type=checkbox]::after { content:""; position:absolute; top:3px; left:3px; width:20px; height:20px; border-radius:50%; background:#fff;
+    box-shadow:0 1px 2px rgba(0,0,0,.35); transition:transform .2s }
+  .switch input[type=checkbox]:checked { background:var(--accent) }
+  .switch input[type=checkbox]:checked::after { transform:translateX(18px) }
+  .switch small { display:block; color:var(--muted); font-size:13px }
+  .checks { display:flex; gap:18px; flex-wrap:wrap }
+  .checks label { display:flex; align-items:center; gap:8px; min-height:36px; cursor:pointer }
+  input[type=checkbox] { accent-color:var(--accent); width:18px; height:18px }
+  select, input[type=number] { padding:8px 10px; border:1px solid var(--line); border-radius:10px; background:var(--raised) }
+  .seg { display:flex; border:1px solid var(--line); border-radius:10px; overflow:hidden }
+  .seg button { flex:1; padding:9px; border:0; background:transparent; font-size:14px }
+  .seg button + button { border-left:1px solid var(--line) }
+  .seg button[aria-pressed="true"] { background:var(--ink); color:var(--panel) }
+  .sticky { position:sticky; bottom:0; padding:12px 0 4px; background:linear-gradient(transparent, var(--panel) 30%) }
 
-  /* leaflet tweaks for the dark panel */
+  /* data & updates */
+  .source { display:grid; gap:6px; margin-bottom:10px; padding:12px; border:1px solid var(--line); border-radius:12px; background:var(--raised) }
+  .source h3 { margin:0; display:flex; justify-content:space-between; align-items:center; gap:8px; font-size:15px }
+  pre.log { margin:0; max-height:220px; overflow:auto; font-size:11px; line-height:1.5; color:var(--muted); white-space:pre-wrap }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap }
+  .credits { font-size:12px; color:var(--muted) }
+  .credits a { color:var(--muted) }
+
+  /* Leaflet: keep bottom controls above the sheet; top ones below the search bar */
   .leaflet-container { font:inherit }
-  .leaflet-tooltip { font-size:12px }
+  .leaflet-bottom { bottom:var(--sheet-h); transition:bottom .25s ease }
+  .leaflet-top { top:calc(66px + env(safe-area-inset-top)) }
+  .leaflet-control-attribution { font-size:10px }
+  @media (min-width: 900px) { .leaflet-top { top:0 } }
 </style>
 </head>
 <body>
-<div id="app">
-  <aside>
-    <header class="top">
-      <h1>bando<span>buddy</span></h1>
-      <button class="btn small" id="dataBtn" type="button">Data</button>
-    </header>
-    <button class="status" id="statusStrip" type="button"><span id="statusText">Loading…</span><div class="bar" id="statusBarWrap" hidden><i id="statusBar"></i></div></button>
+<div id="map" role="application" aria-label="Map"></div>
 
-    <!-- Browse -->
-    <div class="scroll" id="view-browse">
-      <form class="row" id="searchForm">
-        <input type="text" id="searchInput" class="grow" placeholder="Go to a town, postcode or landmark" autocomplete="off">
-        <button class="btn" type="submit">Go</button>
-      </form>
-      <p class="err" id="searchErr" hidden></p>
-      <button class="newbadge" id="newBadge" type="button" hidden></button>
+<form class="topbar" id="topbar" role="search" autocomplete="off">
+  <button type="button" class="icon-btn" id="menuBtn" aria-label="Data, updates and about"></button>
+  <input type="search" id="searchInput" enterkeyhint="search" placeholder="Search a town, postcode or place" aria-label="Search for a place">
+  <button type="button" class="icon-btn" id="clearBtn" aria-label="Clear search" hidden></button>
+  <button type="button" class="icon-btn" id="filterBtn" aria-label="Filters and map style"><i class="count" id="filterCount" hidden></i></button>
+</form>
 
-      <div>
-        <div class="label"><span>Minimum score</span><b id="minScoreOut"></b></div>
-        <input type="range" id="minScore" min="0" max="100" step="5">
-      </div>
-      <div class="chips" id="catChips"></div>
-      <div class="checks">
-        <label><input type="checkbox" id="srcOsm" checked> OpenStreetMap</label>
-        <label><input type="checkbox" id="srcWiki" checked> Wikidata</label>
-        <select id="newMode" aria-label="Added">
-          <option value="">Any time</option>
-          <option value="visit">New since last visit</option>
-          <option value="30">Added in last 30 days</option>
-          <option value="90">Added in last 90 days</option>
-        </select>
-      </div>
+<section class="sheet" id="sheet" aria-label="Places">
+  <button type="button" class="grab" id="grab" aria-label="Expand or collapse the list"><span></span></button>
+  <div class="sheet-body" id="sheetBody">
 
-      <div class="listhead">
-        <span id="listHead">-</span>
-        <span class="exports" title="Download what's in view">
-          <a class="btn small" id="expCsv">CSV</a><a class="btn small" id="expKml">KML</a><a class="btn small" id="expGpx">GPX</a>
-        </span>
+    <!-- Places in view, nearest first -->
+    <div id="view-list">
+      <div class="head" data-drag>
+        <div class="grow"><h2 id="listTitle">Loading places…</h2><p id="listSub"></p></div>
       </div>
+      <button type="button" class="card" id="statusCard" hidden></button>
+      <button type="button" class="card loc" id="locCard" hidden></button>
+      <button type="button" class="card fresh" id="newCard" hidden></button>
       <ul class="list" id="list"></ul>
-      <p class="note credits">Places from <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors (ODbL),
-        <a href="https://www.wikidata.org" target="_blank" rel="noopener">Wikidata</a> (CC0) and
-        <a href="https://en.wikipedia.org" target="_blank" rel="noopener">Wikipedia</a> (CC BY-SA). A place being on this map
-        doesn't mean you can go in: check who owns it and stay off anything posted or secured.</p>
+      <p class="note" id="listNote" hidden></p>
+      <div class="foot">
+        <div class="exports"><span class="note">Download these for a GPS app:</span>
+          <a class="btn small" id="expGpx">GPX</a><a class="btn small" id="expKml">KML</a><a class="btn small" id="expCsv">CSV</a></div>
+        <p class="credits">Places from <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors (ODbL),
+          <a href="https://www.wikidata.org" target="_blank" rel="noopener">Wikidata</a> (CC0) and
+          <a href="https://en.wikipedia.org" target="_blank" rel="noopener">Wikipedia</a> (CC BY-SA). Being on this map doesn't mean you
+          can go in: check who owns a place, and stay off anything posted or secured.</p>
+      </div>
     </div>
 
     <!-- One place -->
-    <div class="scroll" id="view-site" hidden>
-      <div class="row"><button class="btn" id="backBtn" type="button">&larr; Back to list</button></div>
-      <div class="detail" id="detail"></div>
+    <div id="view-site" hidden><div id="detail"></div></div>
+
+    <!-- Filters -->
+    <div id="view-filters" hidden>
+      <div class="head" data-drag>
+        <div class="grow"><h2>Filters</h2></div>
+        <button type="button" class="linkbtn" id="resetFilters">Reset</button>
+        <button type="button" class="icon-btn" data-close aria-label="Close filters"></button>
+      </div>
+      <div class="block" style="border-top:0; padding-top:0">
+        <div class="row" style="justify-content:space-between"><h3 style="margin:0">What was it?</h3><button type="button" class="linkbtn" id="allCats">Show all</button></div>
+        <div class="cats" id="catChips" style="margin-top:8px"></div>
+      </div>
+      <div class="block">
+        <label class="switch"><input type="checkbox" id="weak">
+          <span><b>Show weaker leads</b><small>Closed shop units, heritage ruins, caves and brownfield land. There are lots of these and most aren't worth the trip.</small></span></label>
+      </div>
+      <div class="block">
+        <h3>Found in</h3>
+        <div class="checks">
+          <label><input type="checkbox" id="srcOsm" checked> OpenStreetMap</label>
+          <label><input type="checkbox" id="srcWiki" checked> Wikidata</label>
+        </div>
+      </div>
+      <div class="block">
+        <h3>Added</h3>
+        <select id="newMode" aria-label="When places were added">
+          <option value="">Any time</option>
+          <option value="visit">Since my last visit</option>
+          <option value="30">In the last 30 days</option>
+          <option value="90">In the last 90 days</option>
+        </select>
+      </div>
+      <div class="block">
+        <h3>Map style</h3>
+        <div class="seg" id="baseSeg"></div>
+      </div>
+      <div class="sticky"><button type="button" class="btn accent block" id="applyFilters" data-close>Show places</button></div>
     </div>
 
-    <!-- Data & updates -->
-    <div class="scroll" id="view-data" hidden>
-      <div class="row"><button class="btn" id="dataBack" type="button">&larr; Back to map</button></div>
-      <p class="note">bandobuddy keeps its own copy of the UK's likely-abandoned places, built from OpenStreetMap and Wikidata, and refreshes it in the background. Nothing here needs an account or costs anything.</p>
+    <!-- Data, updates, about -->
+    <div id="view-data" hidden>
+      <div class="head" data-drag>
+        <div class="grow"><h2>bando<span>buddy</span></h2><p id="dataSummary"></p></div>
+        <button type="button" class="icon-btn" data-close aria-label="Close"></button>
+      </div>
+      <p class="note" style="margin-bottom:12px">A free, open map of likely-abandoned places across the UK, built from OpenStreetMap and Wikidata and
+        kept up to date in the background. Nothing here needs an account or costs anything.</p>
       <div id="sources"></div>
       <div class="source" id="settingsBox">
         <h3>Automatic updates</h3>
-        <div class="checks">
-          <label><input type="checkbox" id="autoUpdate"> Keep the data up to date</label>
-        </div>
-        <div class="row"><span class="note">Refresh every</span><input type="number" id="updateDays" min="1" max="90" style="width:70px"><span class="note">days while bandobuddy is open</span></div>
+        <div class="checks"><label><input type="checkbox" id="autoUpdate"> Keep the data up to date</label></div>
+        <div class="row"><span class="note">Refresh every</span><input type="number" id="updateDays" min="1" max="90" style="width:72px"><span class="note">days</span></div>
         <p class="note" id="dataDir"></p>
       </div>
       <details class="box" id="logBox"><summary>Log</summary><div><pre class="log" id="log"></pre></div></details>
-      <p class="note" id="publicNote" hidden>This public copy refreshes itself automatically. To run your own, with update controls,
-        see the project on <a href="https://github.com/aidenharwood/portfolio-python-bandobuddy" target="_blank" rel="noopener">GitHub</a>.</p>
+      <p class="note" id="publicNote" style="margin-top:12px" hidden>This public copy refreshes itself automatically.</p>
+      <p class="credits" style="margin-top:12px">Map tiles &copy; OpenStreetMap contributors, OpenTopoMap and Esri. Photos from
+        <a href="https://panoramax.fr" target="_blank" rel="noopener">Panoramax</a>. Search by
+        <a href="https://nominatim.org" target="_blank" rel="noopener">Nominatim</a>. Source code on
+        <a href="https://github.com/aidenharwood/portfolio-python-bandobuddy" target="_blank" rel="noopener">GitHub</a>. <span id="versionText"></span></p>
     </div>
-  </aside>
-  <div id="map"></div>
+  </div>
+</section>
+
+<div class="fabs" id="fabs">
+  <button type="button" class="fab" id="locBtn" aria-label="Show my location"></button>
 </div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<div id="safeProbe" style="position:fixed; bottom:0; width:0; height:env(safe-area-inset-bottom); visibility:hidden"></div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
         integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
@@ -187,30 +328,68 @@
 "use strict";
 const BOOT = __BOOT__;
 const $ = id => document.getElementById(id);
-const TIER_COLOURS = { prime: "#ef4444", likely: "#f97316", maybe: "#eab308", "long shot": "#78716c" };
-const CAT_LABELS = Object.fromEntries(BOOT.categories);
-const LIST_LIMIT = 150;
+const esc = v => String(v ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const safeUrl = u => (/^https?:\/\//.test(String(u || "")) ? esc(u) : "#");
+const fmtN = n => Number(n || 0).toLocaleString();
+const wide = () => window.matchMedia("(min-width: 900px)").matches;
+const CAN_HOVER = window.matchMedia("(hover: hover)").matches;
+const LIST_LIMIT = 100;
+
+// ---------- icons (24x24, stroked) ----------
+const CAT_ICON = {
+  military: '<path d="M12 3l7 3v5c0 4.5-3 7.8-7 10-4-2.2-7-5.5-7-10V6z"/><path d="M9 10.5l3 2 3-2M9 14l3 2 3-2"/>',
+  underground: '<path d="M3 20h18"/><path d="M5 20v-8a7 7 0 0 1 14 0v8"/><path d="M9.5 20v-5.5a2.5 2.5 0 0 1 5 0V20"/>',
+  rail: '<path d="M8 3 6 21M16 3l2 18"/><path d="M7.6 7h8.8M7 12h10M6.4 17h11.2"/>',
+  industrial: '<path d="M3 21V11l5 3v-3l5 3v-3l5 3V4h3v17z"/>',
+  religious: '<path d="M12 2v5M10 4h4"/><path d="M5 21v-9l7-5 7 5v9z"/><path d="M10 21v-4a2 2 0 0 1 4 0v4"/>',
+  institutional: '<path d="M3 21h18M4 18h16"/><path d="M3 10h18L12 4z"/><path d="M6 10v8M10 10v8M14 10v8M18 10v8"/>',
+  leisure: '<path d="M4 9.5V21h16V9.5"/><path d="M3 4h18l1.5 5.5h-21z"/><path d="M10 21v-6h4v6"/>',
+  historic: '<path d="M3 21h18"/><path d="M5 21V7h2.5v3H10V7h4v3h2.5V7H19v14"/><path d="M10 21v-4a2 2 0 0 1 4 0v4"/>',
+  buildings: '<path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 9.5V21h13V9.5"/><path d="M10 21v-6h4v6"/>',
+  other: '<circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.4 2.3c-.6.3-.9.8-.9 1.4v.3"/><path d="M12 17h.01"/>',
+};
+const CAT_COLOUR = {
+  military: "#4d7c0f", underground: "#7c4a1e", rail: "#475569", industrial: "#ea580c", religious: "#7c3aed",
+  institutional: "#0284c7", leisure: "#db2777", historic: "#0f766e", buildings: "#dc2626", other: "#6b7280",
+};
+const UI = {
+  menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
+  filter: '<path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>',
+  close: '<path d="M6 6l12 12M18 6 6 18"/>',
+  locate: '<circle cx="12" cy="12" r="7"/><circle class="dot" cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>',
+  nav: '<path d="M3 11 21 3l-8 18-2-8z"/>',
+  share: '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 13.5 6.8 4M15.4 6.5l-6.8 4"/>',
+  person: '<circle cx="12" cy="5" r="2.5"/><path d="M9 21v-6H7.5v-4a2 2 0 0 1 2-2h5a2 2 0 0 1 2 2v4H15v6"/>',
+  copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/>',
+  new: '<path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/>',
+  refresh: '<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/>',
+};
+const svg = (paths, cls = "") => `<svg class="ico ${cls}" viewBox="0 0 24 24" aria-hidden="true">${paths}</svg>`;
+const colour = cat => CAT_COLOUR[cat] || CAT_COLOUR.other;
+const catIcon = cat => svg(CAT_ICON[cat] || CAT_ICON.other);
+const badge = (cat, cls = "") => `<span class="badge ${cls}" style="--c:${colour(cat)}">${catIcon(cat)}</span>`;
+const CAT_LABEL = Object.fromEntries(BOOT.categories);
+const catLabel = k => CAT_LABEL[k] || k;
+
 const S = {
-  map: null, layer: null, sites: [], total: 0, version: -1, selected: null, site: null, fetchSeq: 0,
-  status: null, prevVisit: null, view: "browse",
+  map: null, bases: null, base: "Map", zoomCtl: null, markers: new Map(), version: -1, mapSeq: 0, listSeq: 0,
+  list: null, listNear: null, selected: null, site: null, status: null, prevVisit: null,
+  view: "list", listSnap: "peek",
+  loc: { wanted: false, watch: null, pos: null, follow: false, first: false, quiet: false, paused: false, warned: false },
+  me: { dot: null, acc: null },
 };
 
 // ---------- helpers ----------
-const esc = v => String(v ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const safeUrl = u => (/^https?:\/\//.test(String(u || "")) ? esc(u) : "#");
-const tierClass = t => String(t || "long shot").replace(/\s+/g, "-");
-const fmtN = n => Number(n || 0).toLocaleString();
-
 async function api(path, body) {
   const opts = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
   const res = await fetch(path, opts);
   let data = null;
-  try { data = await res.json(); } catch (_) { /* non-JSON */ }
+  try { data = await res.json(); } catch (_) { /* not JSON */ }
   if (!res.ok) throw new Error((data && data.error) || `Request failed (${res.status})`);
   return data;
 }
 
-const PREFS_KEY = "bandobuddy:v2";
+const PREFS_KEY = "bandobuddy:v3";
 function loadPrefs() { try { return JSON.parse(localStorage.getItem(PREFS_KEY)) || {}; } catch (_) { return {}; } }
 function savePrefs(patch) { try { localStorage.setItem(PREFS_KEY, JSON.stringify({ ...loadPrefs(), ...patch })); } catch (_) { /* private mode */ } }
 
@@ -223,64 +402,291 @@ function ago(iso) {
   return `${Math.round(s / 86400)} days ago`;
 }
 
-function show(view) {
+function fmtDist(m) {
+  if (m == null) return "";
+  if (m < 1000) return `${Math.max(10, Math.round(m / 10) * 10)} m`;
+  if (m < 10000) return `${(m / 1000).toFixed(1)} km`;
+  return `${fmtN(Math.round(m / 1000))} km`;
+}
+
+function metres(a, b) {
+  const r = Math.PI / 180, dLat = (b.lat - a.lat) * r, dLng = (b.lng - a.lng) * r;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.sin(dLng / 2) ** 2;
+  return 2 * 6371000 * Math.asin(Math.sqrt(h));
+}
+
+const fmtCount = n => n >= 10000 ? `${Math.round(n / 1000)}k` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+
+let toastTimer = null;
+function toast(msg, ms = 4000) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove("show"), ms);
+}
+
+async function copyText(text, done = "Copied") {
+  try { await navigator.clipboard.writeText(text); toast(done); }
+  catch (_) { window.prompt("Copy this:", text); }
+}
+
+// ---------- the sheet ----------
+const Sheet = {
+  snap: "peek", visible: 0, full: 0,
+  sizes() {
+    const h = window.innerHeight;
+    const top = $("topbar").getBoundingClientRect().bottom + 10;
+    return { peek: 92 + $("safeProbe").offsetHeight, half: Math.round(h * 0.5), full: Math.round(h - top) };
+  },
+  apply(visible) {
+    this.visible = wide() ? 0 : visible;
+    const root = document.documentElement.style;
+    root.setProperty("--sheet-full", `${wide() ? 0 : this.full}px`);
+    root.setProperty("--sheet-h", `${this.visible}px`);
+    $("fabs").classList.toggle("hide", !wide() && this.visible > this.sizes().half + 40);
+  },
+  set(snap) {
+    const s = this.sizes();
+    this.snap = snap;
+    this.full = s.full;
+    this.apply(s[snap]);
+    $("sheet").dataset.snap = snap;
+    $("grab").setAttribute("aria-expanded", String(snap !== "peek"));
+  },
+};
+
+function initSheetDrag() {
+  const sheet = $("sheet");
+  let d = null;
+  sheet.addEventListener("pointerdown", e => {
+    d = null;
+    if (wide() || e.button > 0 || !e.target.closest("[data-drag], .grab")) return;
+    d = { id: e.pointerId, y0: e.clientY, v0: Sheet.visible, lastY: e.clientY, lastT: e.timeStamp, vel: 0, moved: false,
+          onControl: !!e.target.closest("[data-drag] button, [data-drag] a, input, select") };
+  });
+  window.addEventListener("pointermove", e => {
+    if (!d || e.pointerId !== d.id) return;
+    if (e.pointerType === "mouse" && !e.buttons) { end(e); return; }  // released somewhere we didn't hear about
+    const dy = e.clientY - d.y0;
+    if (!d.moved) {
+      if (Math.abs(dy) < 6) return;
+      d.moved = true;
+      document.body.classList.add("dragging");
+      sheet.setPointerCapture(e.pointerId);
+    }
+    const s = Sheet.sizes();
+    d.vel = (e.clientY - d.lastY) / Math.max(1, e.timeStamp - d.lastT);
+    d.lastY = e.clientY;
+    d.lastT = e.timeStamp;
+    Sheet.full = s.full;
+    Sheet.apply(Math.max(s.peek - 30, Math.min(s.full, d.v0 - dy)));
+  });
+  function end(e) {
+    if (!d || e.pointerId !== d.id) return;
+    const drag = d;
+    d = null;
+    document.body.classList.remove("dragging");
+    if (!drag.moved) {
+      if (e.type === "pointerup" && !drag.onControl) Sheet.set({ peek: "half", half: "full", full: "half" }[Sheet.snap]);
+      return;
+    }
+    const s = Sheet.sizes();
+    const aim = Sheet.visible - drag.vel * 180;  // a flick carries on in the direction it was going
+    Sheet.set(["peek", "half", "full"].reduce((a, b) => (Math.abs(s[b] - aim) < Math.abs(s[a] - aim) ? b : a)));
+  }
+  window.addEventListener("pointerup", end);
+  window.addEventListener("pointercancel", end);
+}
+
+function show(view, snap) {
+  if (S.view === "list" && view !== "list") S.listSnap = Sheet.snap;
+  if (S.view === "site" && view !== "site" && S.selected) {  // e.g. straight from a place to the filters
+    S.selected = null;
+    S.site = null;
+    clearSelected();
+    if (location.hash) history.replaceState(null, "", location.pathname + location.search);
+  }
   S.view = view;
-  for (const v of ["browse", "site", "data"]) $(`view-${v}`).hidden = v !== view;
+  for (const v of ["list", "site", "filters", "data"]) $(`view-${v}`).hidden = v !== view;
+  $("sheetBody").scrollTop = 0;
+  if (snap && !wide()) Sheet.set(snap);
+}
+
+function backToList() {
+  show("list", S.listSnap);
 }
 
 // ---------- map ----------
+function visibleRect() {
+  const size = S.map.getSize();
+  if (wide()) return { x0: $("sheet").getBoundingClientRect().right, y0: 0, x1: size.x, y1: size.y };
+  return { x0: 0, y0: $("topbar").getBoundingClientRect().bottom, x1: size.x, y1: size.y - Sheet.visible };
+}
+
+// What the list covers: on wide screens, leave out the map under the side panel. On phones the whole
+// map counts, so dragging the sheet up and down doesn't reshuffle the list.
+function listArea() {
+  const r = visibleRect(), size = S.map.getSize();
+  const bounds = wide() ? L.latLngBounds(S.map.containerPointToLatLng([r.x0, size.y]), S.map.containerPointToLatLng([size.x, 0]))
+    : S.map.getBounds();
+  return { bounds, centre: S.map.containerPointToLatLng([(r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2]) };
+}
+
+function mapPadding() {
+  const r = visibleRect(), size = S.map.getSize();
+  return { paddingTopLeft: [r.x0 + 24, r.y0 + 24], paddingBottomRight: [size.x - r.x1 + 24, size.y - r.y1 + 24] };
+}
+
+// Centre a point in the part of the map that isn't covered by the sheet or the search bar.
+function centerOn(latlng, zoom) {
+  const z = zoom ?? S.map.getZoom();
+  const r = visibleRect(), size = S.map.getSize();
+  const off = L.point((r.x0 + r.x1 - size.x) / 2, (r.y0 + r.y1 - size.y) / 2);
+  S.map.setView(S.map.unproject(S.map.project(L.latLng(latlng), z).subtract(off), z), z);
+}
+
+function ensureVisible(latlng) {
+  const p = S.map.latLngToContainerPoint(latlng), r = visibleRect();
+  if (p.x < r.x0 + 30 || p.x > r.x1 - 30 || p.y < r.y0 + 70 || p.y > r.y1 - 20) centerOn(latlng);
+}
+
 function initMap() {
   const prefs = loadPrefs();
-  S.map = L.map("map", { preferCanvas: true });
-  const base = {
-    "Map": L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' }),
-    "Topo": L.tileLayer("https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png", {
-      maxZoom: 17, attribution: 'Map data &copy; OpenStreetMap contributors, SRTM | Style &copy; <a href="https://opentopomap.org">OpenTopoMap</a> (CC-BY-SA)' }),
-    "Satellite": L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+  S.map = L.map("map", { zoomControl: false, minZoom: 5, worldCopyJump: true });
+  S.bases = {
+    Map: L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' }),
+    Topo: L.tileLayer("https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png", {
+      maxZoom: 17, attribution: '&copy; OpenStreetMap, SRTM | <a href="https://opentopomap.org">OpenTopoMap</a> (CC-BY-SA)' }),
+    Satellite: L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
       maxZoom: 19, attribution: "Imagery &copy; Esri, Maxar, Earthstar Geographics" }),
   };
-  (base[prefs.baseLayer] || base.Map).addTo(S.map);
-  L.control.layers(base, null, { position: "topright" }).addTo(S.map);
+  S.base = S.bases[prefs.base] ? prefs.base : "Map";
+  S.bases[S.base].addTo(S.map);
   L.control.scale({ imperial: false }).addTo(S.map);
-  S.map.on("baselayerchange", e => savePrefs({ baseLayer: e.name }));
+  syncZoomControl();
+  S.clusterLayer = L.layerGroup().addTo(S.map);
+  S.siteLayer = L.layerGroup().addTo(S.map);
+  S.meLayer = L.layerGroup().addTo(S.map);
+  S.selLayer = L.layerGroup().addTo(S.map);
+
   const [s, w, n, e] = BOOT.uk_bbox;
   if (prefs.view) S.map.setView(prefs.view.center, prefs.view.zoom);
   else S.map.fitBounds([[s, w], [n, e]]);
-  S.layer = L.layerGroup().addTo(S.map);
   S.map.on("moveend", () => {
     savePrefs({ view: { center: S.map.getCenter(), zoom: S.map.getZoom() } });
     scheduleFetch();
   });
+  S.map.on("dragstart", () => {
+    if (S.loc.follow) { S.loc.follow = false; renderLocBtn(); }
+  });
+  S.map.on("click", () => {  // tapping empty map puts the map first
+    if (S.view === "site") closeSite();
+    else if (!wide() && S.view === "list" && Sheet.snap !== "peek") Sheet.set("peek");
+  });
+  renderBaseSeg();
 }
 
-function renderMarkers() {
-  S.layer.clearLayers();
-  for (const site of [...S.sites].reverse()) {  // best drawn last, on top
-    const selected = site.key === S.selected;
-    const marker = L.circleMarker([site.lat, site.lng], {
-      radius: selected ? 10 : site.score >= 60 ? 7 : site.score >= 35 ? 6 : 5,
-      color: selected ? "#ffffff" : "#1b1b1b", weight: selected ? 3 : 1,
-      fillColor: TIER_COLOURS[site.tier] || TIER_COLOURS["long shot"], fillOpacity: 0.92,
+function syncZoomControl() {
+  if (wide() && !S.zoomCtl) S.zoomCtl = L.control.zoom({ position: "topright" }).addTo(S.map);
+  else if (!wide() && S.zoomCtl) { S.zoomCtl.remove(); S.zoomCtl = null; }
+}
+
+function setBase(name) {
+  if (!S.bases[name] || name === S.base) return;
+  S.map.removeLayer(S.bases[S.base]);
+  S.base = name;
+  S.bases[name].addTo(S.map);
+  savePrefs({ base: name });
+  renderBaseSeg();
+}
+
+function renderBaseSeg() {
+  $("baseSeg").innerHTML = Object.keys(S.bases).map(n =>
+    `<button type="button" data-base="${n}" aria-pressed="${n === S.base}">${n}</button>`).join("");
+}
+
+const Z_BY_STRENGTH = { strong: 300, good: 200, weak: 0 };
+const sigOf = s => `${s.category}|${s.strength}|${s.added ? 1 : 0}|${s.name}`;
+
+function siteIcon(s) {
+  const size = s.strength === "weak" ? 32 : 40;  // the pin is drawn smaller; the rest is a bigger tap target
+  return L.divIcon({ className: "bb-icon", iconSize: [size, size],
+    html: `<div class="pin ${esc(s.strength)}" style="--c:${colour(s.category)}">${catIcon(s.category)}${s.added ? '<i class="pin-new"></i>' : ""}</div>` });
+}
+
+function renderMap(data) {
+  S.clusterLayer.clearLayers();
+  for (const c of data.clusters) {
+    const size = c.count < 10 ? 36 : c.count < 100 ? 42 : c.count < 1000 ? 48 : 54;
+    const m = L.marker([c.lat, c.lng], {
+      keyboard: false, zIndexOffset: 400,
+      icon: L.divIcon({ className: "bb-icon", iconSize: [size, size],
+        html: `<div class="cluster" style="--c:${colour(c.category)}">${fmtCount(c.count)}</div>` }),
     });
-    marker.bindTooltip(`${esc(site.name)} · ${site.score}`);
-    marker.on("click", () => openSite(site.key, false));
-    marker.addTo(S.layer);
+    m.on("click", () => {
+      const [w, s, e, n] = c.bounds;
+      if (S.loc.follow) { S.loc.follow = false; renderLocBtn(); }
+      S.map.fitBounds([[s, w], [n, e]], { ...mapPadding(), maxZoom: 17 });
+    });
+    m.addTo(S.clusterLayer);
+  }
+  const wanted = new Map(data.sites.map(s => [s.key, s]));
+  for (const [key, m] of S.markers) {
+    const s = wanted.get(key);
+    if (!s || m.sig !== sigOf(s)) { S.siteLayer.removeLayer(m); S.markers.delete(key); }
+  }
+  for (const s of data.sites) {
+    if (S.markers.has(s.key)) continue;
+    const m = L.marker([s.lat, s.lng], { icon: siteIcon(s), keyboard: false, zIndexOffset: Z_BY_STRENGTH[s.strength] || 0,
+                                          opacity: s.key === S.selected ? 0 : 1 });
+    m.sig = sigOf(s);
+    m.on("click", () => openSite(s.key));
+    if (CAN_HOVER) m.bindTooltip(`${esc(s.name)}<br><small>${esc(s.condition)}</small>`, { direction: "top", offset: [0, -14] });
+    m.addTo(S.siteLayer);
+    S.markers.set(s.key, m);
   }
 }
 
-// ---------- fetching places ----------
+function drawSelected(site) {
+  clearSelected();
+  S.markers.get(site.key)?.setOpacity(0);  // the big pin stands in for it
+  L.marker([site.lat, site.lng], {
+    keyboard: false, interactive: false, zIndexOffset: 3000,
+    icon: L.divIcon({ className: "bb-icon", iconSize: [46, 46], iconAnchor: [23, 56],
+      html: `<div class="sel" style="--c:${colour(site.category)}">${catIcon(site.category)}</div>` }),
+  }).addTo(S.selLayer);
+}
+
+function clearSelected() {
+  S.selLayer.clearLayers();
+  for (const m of S.markers.values()) m.setOpacity(1);
+}
+
+// ---------- fetching ----------
 let fetchTimer = null;
-function scheduleFetch(delay = 250) {
+function scheduleFetch(delay = 200) {
   clearTimeout(fetchTimer);
-  fetchTimer = setTimeout(fetchSites, delay);
+  fetchTimer = setTimeout(() => { fetchMap(); fetchList(); }, delay);
+}
+let listTimer = null;
+function scheduleList(delay = 300) {
+  clearTimeout(listTimer);
+  listTimer = setTimeout(fetchList, delay);
+}
+
+const bboxOf = b => [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].map(x => x.toFixed(5)).join(",");
+
+function selectedCats() {
+  return [...document.querySelectorAll('#catChips .cat[aria-pressed="true"]')].map(c => c.dataset.cat);
 }
 
 function filterParams() {
   const p = new URLSearchParams();
-  p.set("min_score", $("minScore").value);
-  const cats = [...document.querySelectorAll("#catChips .chip.on")].map(c => c.dataset.cat);
+  const cats = selectedCats();
   if (cats.length && cats.length < BOOT.categories.length) p.set("categories", cats.join(","));
+  if ($("weak").checked) p.set("weak", "1");
   const srcs = [$("srcOsm").checked && "osm", $("srcWiki").checked && "wikidata"].filter(Boolean);
   if (srcs.length === 1) p.set("sources", srcs[0]);
   const mode = $("newMode").value;
@@ -289,119 +695,324 @@ function filterParams() {
   return p;
 }
 
-async function fetchSites() {
+function renderFilterCount() {
+  const n = (selectedCats().length < BOOT.categories.length) + $("weak").checked
+    + ($("srcOsm").checked !== $("srcWiki").checked) + !!$("newMode").value;
+  $("filterCount").textContent = n;
+  $("filterCount").hidden = !n;
+}
+
+async function fetchMap() {
   if (!S.map) return;
-  const b = S.map.getBounds();
   const p = filterParams();
-  p.set("bbox", [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].map(x => x.toFixed(5)).join(","));
-  const seq = ++S.fetchSeq;
+  p.set("bbox", bboxOf(S.map.getBounds().pad(0.2)));  // a margin, so short pans already have pins
+  p.set("zoom", S.map.getZoom());
+  const seq = ++S.mapSeq;
   let data;
-  try { data = await api(`/api/sites?${p}`); } catch (_) { return; }
-  if (seq !== S.fetchSeq) return;  // a newer request superseded this one
-  S.sites = data.sites;
-  S.total = data.total;
+  try { data = await api(`/api/map?${p}`); } catch (_) { return; }
+  if (seq !== S.mapSeq) return;
   S.version = data.version;
-  for (const [id, fmt] of [["expCsv", "csv"], ["expKml", "kml"], ["expGpx", "gpx"]]) {
+  renderMap(data);
+}
+
+async function fetchList() {
+  if (!S.map) return;
+  const p = filterParams();
+  const area = listArea();
+  const b = area.bounds;
+  for (const [id, fmt] of [["expGpx", "gpx"], ["expKml", "kml"], ["expCsv", "csv"]]) {
     const q = new URLSearchParams(p);
+    q.set("bbox", bboxOf(b));
     q.set("format", fmt);
     $(id).href = `/api/export?${q}`;
   }
-  renderMarkers();
+  const near = S.loc.pos || area.centre;
+  p.set("bbox", bboxOf(b));
+  p.set("near", `${near.lat.toFixed(5)},${near.lng.toFixed(5)}`);
+  p.set("limit", String(LIST_LIMIT));
+  const seq = ++S.listSeq;
+  let data;
+  try { data = await api(`/api/list?${p}`); } catch (_) { return; }
+  if (seq !== S.listSeq) return;
+  S.list = data;
+  S.listNear = S.loc.pos ? "you" : "centre";
   renderList();
 }
 
 function renderList() {
-  const shown = S.sites.slice(0, LIST_LIMIT);
-  $("listHead").textContent = S.total > shown.length
-    ? `Top ${shown.length} of ${fmtN(S.total)} in view` : `${fmtN(S.total)} in view`;
-  $("list").innerHTML = shown.length ? shown.map(site => `
-    <li data-key="${esc(site.key)}">
-      <div class="score t-${tierClass(site.tier)}">${esc(site.score)}<small>${esc(site.tier)}</small></div>
-      <div><div class="name">${esc(site.name)}${site.added ? '<span class="new">NEW</span>' : ""}</div>
-        <div class="meta">${esc(CAT_LABELS[site.category] || site.category)} · ${sourceTags(site.sources)}</div></div>
-    </li>`).join("")
-    : `<li class="note" style="cursor:default">${S.status && !S.status.sites.total ? "No places yet. The UK database is being built; they'll appear here as it fills in." : "Nothing matches here. Zoom out, move the map, or loosen the filters."}</li>`;
+  const d = S.list;
+  if (!d) return;
+  const n = d.total;
+  const noData = S.status && !S.status.sites.total;
+  $("listTitle").textContent = n ? `${fmtN(n)} place${n === 1 ? "" : "s"} in view` : "No places in view";
+  $("listSub").textContent = n ? (S.listNear === "you" ? "Nearest to you first" : "Nearest to the middle of the map first")
+    : noData ? "The UK database is still being built" : "Zoom out, move the map or loosen the filters";
+  $("applyFilters").textContent = n ? `Show ${fmtN(n)} place${n === 1 ? "" : "s"}` : "No places match here";
+  renderLocCard();
+  $("list").innerHTML = d.sites.map(s => `
+    <li><button type="button" class="item ${esc(s.strength)}" data-key="${esc(s.key)}">
+      ${badge(s.category)}
+      <span><span class="name">${esc(s.name)}${s.added ? '<span class="new">NEW</span>' : ""}</span>
+        <span class="meta">${esc(s.condition)} · ${esc(catLabel(s.category))}</span></span>
+      <span class="dist">${fmtDist(s.distance_m)}</span>
+    </button></li>`).join("");
+  const note = $("listNote");
+  note.hidden = !(n > d.sites.length || (!n && noData));
+  note.textContent = n > d.sites.length ? `Showing the nearest ${d.sites.length} of ${fmtN(n)}. Zoom in to see the rest.`
+    : "Places will appear here as the update fills in.";
 }
 
-function sourceTags(sources) {
-  return String(sources || "").split("+").map(s => s === "osm"
-    ? '<span class="src osm">OSM</span>' : '<span class="src wiki">Wikidata</span>').join(" + ");
+function renderLocCard() {
+  const card = $("locCard");
+  card.hidden = S.loc.wanted || !("geolocation" in navigator);
+  if (!card.hidden) card.innerHTML = `${svg(UI.locate)}<span class="grow"><b>Find places near you</b><small>Uses your location to centre the map and sort by distance. It stays in your browser.</small></span>`;
 }
 
 // ---------- one place ----------
-async function openSite(key, pan) {
+const hashKey = () => {
+  const m = /^#site=(.+)$/.exec(location.hash);
+  try { return m ? decodeURIComponent(m[1]) : null; } catch (_) { return null; }
+};
+
+async function openSite(key, { pan = false, push = true } = {}) {
+  const wasSite = S.view === "site";
   S.selected = key;
-  renderMarkers();
-  show("site");
-  $("detail").innerHTML = `<p class="note">Loading…</p>`;
+  if (push && hashKey() !== key) {
+    const url = `#site=${encodeURIComponent(key)}`;
+    if (wasSite && history.state && history.state.site) history.replaceState({ site: key }, "", url);
+    else history.pushState({ site: key }, "", url);
+  }
+  show("site", !wide() && Sheet.snap === "full" ? "full" : "half");
+  $("detail").innerHTML = `<div class="site-head" data-drag><div class="grow"><p>Loading…</p></div>${closeButton()}</div>`;
   let site;
   try { site = await api(`/api/site/${encodeURIComponent(key)}`); } catch (err) {
-    $("detail").innerHTML = `<p class="err">${esc(err.message)}</p>`;
+    if (S.selected === key) $("detail").innerHTML = `<div class="site-head" data-drag><p class="err grow">${esc(err.message)}</p>${closeButton()}</div>`;
     return;
   }
   if (S.selected !== key) return;
   S.site = site;
-  if (pan) S.map.setView([site.lat, site.lng], Math.max(S.map.getZoom(), 16));
+  drawSelected(site);
+  if (pan) centerOn([site.lat, site.lng], Math.max(S.map.getZoom(), 16));
+  else ensureVisible([site.lat, site.lng]);
+  renderSite(site);
+  loadPhotos(site);
+}
+
+function closeSite(popping = false) {
+  if (!popping && history.state && history.state.site) { history.back(); return; }  // popstate comes back here
+  if (!popping && location.hash) history.replaceState(null, "", location.pathname + location.search);
+  S.selected = null;
+  S.site = null;
+  clearSelected();
+  if (S.view === "site") backToList();
+}
+
+const closeButton = (label = "Close") => `<button type="button" class="icon-btn" data-close aria-label="${label}">${svg(UI.close)}</button>`;
+
+function isApple() {
+  return /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+}
+
+function directions(site) {
+  const to = `${site.lat.toFixed(6)},${site.lng.toFixed(6)}`;
+  if (isApple()) return { href: `https://maps.apple.com/?daddr=${to}&q=${encodeURIComponent(site.name)}`, external: true };
+  if (/Android/.test(navigator.userAgent)) return { href: `geo:${to}?q=${to}(${encodeURIComponent(site.name)})`, external: false };
+  const from = S.loc.pos ? `${S.loc.pos.lat.toFixed(5)},${S.loc.pos.lng.toFixed(5)}` : "";
+  return { href: `https://www.openstreetmap.org/directions?route=${encodeURIComponent(`${from};${to}`)}`, external: true };
+}
+
+const SOURCE_NAMES = { osm: "OpenStreetMap", wikidata: "Wikidata" };
+
+function renderSite(site) {
   const lk = site.links;
-  const links = [
-    ["OpenStreetMap", lk.osm_element || lk.openstreetmap], ["Wikipedia", lk.wikipedia], ["Wikidata", lk.wikidata],
-    ["Street View ↗", lk.streetview], ["Mapillary ↗", lk.mapillary],
-  ].filter(([, url]) => url).map(([label, url]) => `<a class="btn small" href="${safeUrl(url)}" target="_blank" rel="noopener">${esc(label)}</a>`);
+  const dist = S.loc.pos ? fmtDist(metres(S.loc.pos, site)) : "";
+  const nav = directions(site);
+  const strength = site.strength === "strong" ? '<span class="tag strong">Strong evidence</span>'
+    : site.strength === "weak" ? '<span class="tag">Weak lead</span>' : "";
+  const more = [["OpenStreetMap", lk.osm_element || lk.openstreetmap], ["Wikipedia", lk.wikipedia], ["Wikidata", lk.wikidata],
+                ["Mapillary", lk.mapillary]]
+    .filter(([, url]) => url)
+    .map(([label, url]) => `<a class="btn small" href="${safeUrl(url)}" target="_blank" rel="noopener">${esc(label)} ↗</a>`).join("");
   const osm = (site.detail.osm || [])[0];
   const tags = osm ? Object.entries(osm.tags).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join("") : "";
+  const sources = String(site.sources || "").split("+").map(s => SOURCE_NAMES[s] || s).join(" and ");
+  const coords = `${site.lat.toFixed(6)}, ${site.lng.toFixed(6)}`;
   $("detail").innerHTML = `
-    <div class="head">
-      <div><h2>${esc(site.name)}${site.added ? '<span class="new">NEW</span>' : ""}</h2>
-        <p class="note">${esc(CAT_LABELS[site.category] || site.category)} · ${esc(site.kind)} · ${sourceTags(site.sources)}</p></div>
-      <div class="score t-${tierClass(site.tier)}">${esc(site.score)}<small>${esc(site.tier)}</small></div>
+    <div class="site-head" data-drag>
+      ${badge(site.category, "big")}
+      <div class="grow"><h2>${esc(site.name)}${site.added ? '<span class="new">NEW</span>' : ""}</h2>
+        <p>${esc(site.condition)} · ${esc(catLabel(site.category))}${dist ? ` · ${dist} away` : ""}</p></div>
+      ${closeButton()}
     </div>
-    <ul class="reasons">${site.reasons.map(r => `<li>${esc(r)}</li>`).join("")}</ul>
-    <div class="links">${links.join("")}</div>
-    <p class="note">${site.lat.toFixed(5)}, ${site.lng.toFixed(5)} · first seen ${esc((site.first_seen || "").slice(0, 10))}</p>
-    <div><div class="label"><span>Street-level photos (Panoramax)</span></div><div id="photos" class="photos"><p class="note">Looking…</p></div></div>
-    ${tags ? `<details class="box"><summary>OpenStreetMap tags</summary><div><table class="tags">${tags}</table></div></details>` : ""}`;
-  loadPhotos(site);
+    <div class="actions">
+      <a class="act primary" href="${esc(nav.href)}"${nav.external ? ' target="_blank" rel="noopener"' : ""}>${svg(UI.nav)}Directions</a>
+      <button type="button" class="act" data-share>${svg(UI.share)}Share</button>
+      <a class="act" href="${safeUrl(lk.streetview)}" target="_blank" rel="noopener">${svg(UI.person)}Street View</a>
+      <button type="button" class="act" data-copy="${coords}">${svg(UI.copy)}Copy location</button>
+    </div>
+    <div class="block"><h3>Why it's on the map${strength}</h3>
+      <ul class="reasons">${site.reasons.map(r => `<li>${esc(r)}</li>`).join("")}</ul></div>
+    <div class="block"><h3>Street-level photos</h3><div class="photos" id="photos"><p class="note">Looking…</p></div></div>
+    <div class="block"><h3>More about it</h3>
+      <div class="links">${more}</div>
+      <p class="note">${coords} · found in ${esc(sources)} · first seen ${esc((site.first_seen || "").slice(0, 10))}</p>
+      ${tags ? `<details class="box"><summary>OpenStreetMap tags</summary><div><table class="tags">${tags}</table></div></details>` : ""}
+    </div>
+    <p class="note">Being on this map doesn't mean you can go in. Check who owns it, and stay off anything posted or secured.</p>`;
 }
 
 async function loadPhotos(site) {
   let data;
   try { data = await api(`/api/photos?lat=${site.lat}&lng=${site.lng}`); } catch (err) {
-    if (S.selected === site.key) $("photos").innerHTML = `<p class="note">${esc(err.message)}</p>`;
+    if (S.selected === site.key && $("photos")) $("photos").innerHTML = `<p class="note">${esc(err.message)}</p>`;
     return;
   }
-  if (S.selected !== site.key) return;
+  if (S.selected !== site.key || !$("photos")) return;
   $("photos").innerHTML = data.photos.length ? data.photos.map(p => `
     <a href="${safeUrl(p.image)}" target="_blank" rel="noopener" title="${esc(p.producer)} · ${esc(p.license)}">
-      <img src="${safeUrl(p.thumb)}" alt="Photo near ${esc(site.name)}" loading="lazy">
+      <img src="${safeUrl(p.thumb)}" alt="Street photo near ${esc(site.name)}" loading="lazy">
       <span>${esc(p.taken)} · ${esc(p.distance_m)} m${p.facing ? " · facing it" : ""}</span></a>`).join("")
-    + `<p class="note" style="grid-column:1/-1">Photos CC-BY-SA via <a href="https://panoramax.fr" target="_blank" rel="noopener">Panoramax</a>.</p>`
-    : `<p class="note" style="grid-column:1/-1">No open street-level photos here yet. Try the Street View or Mapillary links.</p>`;
+    : `<p class="note">No open street-level photos here yet. Try Street View or Mapillary.</p>`;
+}
+
+async function shareSite(site) {
+  const url = `${location.origin}${location.pathname}#site=${encodeURIComponent(site.key)}`;
+  if (navigator.share) {
+    try { await navigator.share({ title: site.name, text: `${site.name}: ${site.condition.toLowerCase()} ${catLabel(site.category).toLowerCase()}`, url }); return; }
+    catch (err) { if (err && err.name === "AbortError") return; }
+  }
+  copyText(url, "Link copied");
+}
+
+// ---------- your location ----------
+function renderLocBtn() {
+  const st = !S.loc.wanted ? "off" : !S.loc.pos ? "searching" : S.loc.follow ? "follow" : "on";
+  const b = $("locBtn");
+  b.className = `fab ${st}`;
+  b.setAttribute("aria-pressed", String(st !== "off"));
+  const label = { off: "Show my location", searching: "Finding your location…", on: "Centre on my location", follow: "Stop showing my location" }[st];
+  b.setAttribute("aria-label", label);
+  b.title = label;
+  renderLocCard();
+}
+
+function watchLocation() {
+  S.loc.watch = navigator.geolocation.watchPosition(onPosition, onPositionError,
+    { enableHighAccuracy: true, maximumAge: 10000, timeout: 30000 });
+}
+
+function startLocate({ quiet = false } = {}) {
+  if (!("geolocation" in navigator)) { toast("This browser can't share your location."); return; }
+  if (!window.isSecureContext) { toast("Browsers only share your location over HTTPS (or on localhost)."); return; }
+  Object.assign(S.loc, { wanted: true, follow: !quiet, first: true, quiet, warned: false });
+  savePrefs({ locOn: true });
+  if (S.loc.watch == null) watchLocation();
+  renderLocBtn();
+}
+
+function stopLocate() {
+  if (S.loc.watch != null) navigator.geolocation.clearWatch(S.loc.watch);
+  Object.assign(S.loc, { wanted: false, watch: null, pos: null, follow: false, paused: false });
+  savePrefs({ locOn: false });
+  S.meLayer.clearLayers();
+  S.me = { dot: null, acc: null };
+  renderLocBtn();
+  scheduleList(0);
+}
+
+function onPosition(pos) {
+  const c = pos.coords;
+  const prev = S.loc.pos;
+  S.loc.pos = { lat: c.latitude, lng: c.longitude, acc: c.accuracy };
+  const ll = [c.latitude, c.longitude];
+  if (!S.me.dot) {
+    S.me.acc = L.circle(ll, { radius: c.accuracy, color: "#2563eb", weight: 1, opacity: 0.5, fillColor: "#2563eb",
+                              fillOpacity: 0.12, interactive: false }).addTo(S.meLayer);
+    S.me.dot = L.marker(ll, { interactive: false, keyboard: false, zIndexOffset: 2000,
+                              icon: L.divIcon({ className: "bb-icon", html: '<div class="me"></div>', iconSize: [22, 22] }) }).addTo(S.meLayer);
+  } else {
+    S.me.acc.setLatLng(ll).setRadius(c.accuracy);
+    S.me.dot.setLatLng(ll);
+  }
+  if (S.loc.first) {
+    S.loc.first = false;
+    if (!S.loc.quiet) centerOn(ll, Math.max(S.map.getZoom(), 14));
+  } else if (S.loc.follow) {
+    const p = S.map.latLngToContainerPoint(ll), r = visibleRect();
+    if (Math.hypot(p.x - (r.x0 + r.x1) / 2, p.y - (r.y0 + r.y1) / 2) > 40) centerOn(ll);
+  }
+  renderLocBtn();
+  if (!prev || metres(prev, S.loc.pos) > 75) scheduleList();
+}
+
+function onPositionError(err) {
+  if (err.code === 1) {  // permission denied
+    stopLocate();
+    toast("Location is blocked for this site. Allow it in your browser's site settings, then try again.", 6000);
+    return;
+  }
+  if (!S.loc.pos && !S.loc.warned) {
+    S.loc.warned = true;
+    toast(err.code === 3 ? "Still looking for your location…" : "Couldn't find your location. Check location services are on.");
+  }
+}
+
+function onLocateButton() {
+  if (!S.loc.wanted) startLocate();
+  else if (!S.loc.pos) stopLocate();
+  else if (!S.loc.follow) {
+    S.loc.follow = true;
+    centerOn([S.loc.pos.lat, S.loc.pos.lng], Math.max(S.map.getZoom(), 14));
+    renderLocBtn();
+  } else stopLocate();
+}
+
+// Don't run GPS in the background.
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden && S.loc.watch != null) {
+    navigator.geolocation.clearWatch(S.loc.watch);
+    S.loc.watch = null;
+    S.loc.paused = true;
+  } else if (!document.hidden && S.loc.paused && S.loc.wanted) {
+    S.loc.paused = false;
+    watchLocation();
+  }
+});
+
+async function resumeLocation(quiet) {
+  if (!loadPrefs().locOn || !("geolocation" in navigator) || !navigator.permissions) return;
+  try {
+    const perm = await navigator.permissions.query({ name: "geolocation" });
+    if (perm.state === "granted") startLocate({ quiet });
+  } catch (_) { /* not supported */ }
 }
 
 // ---------- data & status ----------
 function renderStatus(st) {
   S.status = st;
   const running = Object.values(st.sources).filter(s => s.running);
-  const sourceLine = s => {
-    const pct = s.total ? ` ${Math.round(100 * s.done / s.total)}%` : "";
-    return `${esc(s.label)}: ${esc(s.stage || "working")}${pct}`;
-  };
+  const card = $("statusCard");
   if (running.length) {
-    $("statusText").innerHTML = `<b>Updating the UK map</b> · ${fmtN(st.sites.total)} places so far<br>${running.map(sourceLine).join("<br>")}`;
     const fracs = running.filter(s => s.total).map(s => s.done / s.total);
-    $("statusBarWrap").hidden = !fracs.length;
-    if (fracs.length) $("statusBar").style.width = `${100 * Math.min(...fracs)}%`;
-  } else {
-    $("statusBarWrap").hidden = true;
-    const last = Object.values(st.sources).map(s => s.last_update).filter(Boolean).sort().pop();
-    const errors = Object.values(st.sources).filter(s => s.error);
-    $("statusText").innerHTML = st.sites.total
-      ? `<b>${fmtN(st.sites.total)} places</b> across the UK · updated ${ago(last)}${errors.length ? ' · <span style="color:var(--err)">update problem</span>' : ""}`
-      : `<b>No data yet.</b> ${st.auto_update || BOOT.read_only ? "Building starts automatically." : "Open Data to build it."}`;
-  }
-  // data panel
+    const lines = running.map(s => `${esc(s.label)}: ${esc(s.stage || "working")}${s.total ? ` ${Math.round(100 * s.done / s.total)}%` : ""}`);
+    card.innerHTML = `${svg(UI.refresh)}<span class="grow"><b>Updating the UK map</b><small>${lines.join(" · ")}</small>
+      ${fracs.length ? `<span class="bar" style="display:block"><i style="width:${100 * Math.min(...fracs)}%"></i></span>` : ""}</span>`;
+    card.hidden = false;
+  } else if (!st.sites.total) {
+    card.innerHTML = `${svg(UI.refresh)}<span class="grow"><b>No data yet</b><small>${st.auto_update || BOOT.read_only
+      ? "The UK database builds automatically. Places appear as it fills in." : "Tap here to build it."}</small></span>`;
+    card.hidden = false;
+  } else card.hidden = true;
+
+  const last = Object.values(st.sources).map(s => s.last_update).filter(Boolean).sort().pop();
+  const errors = Object.values(st.sources).filter(s => s.error);
+  $("dataSummary").innerHTML = st.sites.total
+    ? `${fmtN(st.sites.total)} places across the UK · updated ${ago(last)}${errors.length ? ' · <span class="err">update problem</span>' : ""}`
+    : "No data yet";
+
   const controls = (key, s) => BOOT.read_only ? ""
-    : s.running ? `<button class="btn small" data-pause="${key}">Pause</button>` : `<button class="btn small accent" data-update="${key}">Update now</button>`;
+    : s.running ? `<button type="button" class="btn small" data-pause="${key}">Pause</button>`
+    : `<button type="button" class="btn small accent" data-update="${key}">Update now</button>`;
   $("sources").innerHTML = Object.entries(st.sources).map(([key, s]) => `
     <div class="source">
       <h3><span>${esc(s.label)}</span>${controls(key, s)}</h3>
@@ -422,6 +1033,7 @@ function renderStatus(st) {
   if (atBottom) log.scrollTop = log.scrollHeight;
 
   if (st.sites_version !== S.version) scheduleFetch(0);
+  else renderList();
 }
 
 async function pollStatus() {
@@ -431,80 +1043,115 @@ async function pollStatus() {
     renderStatus(st);
     running = Object.values(st.sources).some(s => s.running);
   } catch (_) { /* server restarting */ }
-  setTimeout(pollStatus, running ? 2500 : 10000);
+  setTimeout(pollStatus, running ? 2500 : 15000);
 }
 
 async function checkNewSinceVisit() {
   if (!S.prevVisit) return;
   try {
-    const p = new URLSearchParams({ min_score: String(BOOT.min_score), added_since: S.prevVisit });
-    const data = await api(`/api/sites?${p}`);
+    const data = await api(`/api/list?${new URLSearchParams({ added_since: S.prevVisit, limit: "0" })}`);
     if (data.total) {
-      $("newBadge").textContent = `${fmtN(data.total)} new place${data.total === 1 ? "" : "s"} since your last visit →`;
-      $("newBadge").hidden = false;
+      $("newCard").innerHTML = `${svg(UI.new)}<span class="grow"><b>${fmtN(data.total)} new place${data.total === 1 ? "" : "s"} since your last visit</b><small>Tap to show only those</small></span>`;
+      $("newCard").hidden = false;
     }
   } catch (_) { /* not important */ }
 }
 
 // ---------- wiring ----------
-function initControls() {
+function initFilters() {
   const prefs = loadPrefs();
-  $("minScore").value = prefs.minScore ?? BOOT.min_score;
-  $("minScoreOut").textContent = $("minScore").value;
-  const onCats = new Set(prefs.categories || BOOT.categories.map(c => c[0]));
+  const on = new Set(prefs.categories || BOOT.categories.map(c => c[0]));
   $("catChips").innerHTML = BOOT.categories.map(([k, label]) =>
-    `<button type="button" class="chip ${onCats.has(k) ? "on" : ""}" data-cat="${esc(k)}">${esc(label)}</button>`).join("");
+    `<button type="button" class="cat" data-cat="${esc(k)}" style="--c:${colour(k)}" aria-pressed="${on.has(k)}">${badge(k, "sm")}<span>${esc(label)}</span></button>`).join("");
+  $("weak").checked = !!prefs.weak;
   $("srcOsm").checked = prefs.srcOsm ?? true;
   $("srcWiki").checked = prefs.srcWiki ?? true;
 
   const changed = () => {
-    savePrefs({
-      minScore: Number($("minScore").value),
-      categories: [...document.querySelectorAll("#catChips .chip.on")].map(c => c.dataset.cat),
-      srcOsm: $("srcOsm").checked, srcWiki: $("srcWiki").checked,
-    });
+    savePrefs({ categories: selectedCats(), weak: $("weak").checked, srcOsm: $("srcOsm").checked, srcWiki: $("srcWiki").checked });
+    renderFilterCount();
     scheduleFetch(0);
   };
-  $("minScore").addEventListener("input", () => { $("minScoreOut").textContent = $("minScore").value; scheduleFetch(); });
-  $("minScore").addEventListener("change", changed);
   $("catChips").addEventListener("click", e => {
-    const chip = e.target.closest(".chip");
+    const chip = e.target.closest(".cat");
     if (!chip) return;
-    chip.classList.toggle("on");
-    if (!document.querySelector("#catChips .chip.on")) chip.classList.add("on");  // never filter out everything
+    chip.setAttribute("aria-pressed", String(chip.getAttribute("aria-pressed") !== "true"));
+    if (!selectedCats().length) chip.setAttribute("aria-pressed", "true");  // never filter out everything
     changed();
   });
+  $("allCats").addEventListener("click", () => {
+    for (const c of document.querySelectorAll("#catChips .cat")) c.setAttribute("aria-pressed", "true");
+    changed();
+  });
+  $("weak").addEventListener("change", changed);
   for (const id of ["srcOsm", "srcWiki"]) $(id).addEventListener("change", () => {
     if (!$("srcOsm").checked && !$("srcWiki").checked) $(id).checked = true;
     changed();
   });
-  $("newMode").addEventListener("change", () => scheduleFetch(0));
-  $("newBadge").addEventListener("click", () => { $("newMode").value = "visit"; scheduleFetch(0); });
-
-  $("list").addEventListener("click", e => {
-    const li = e.target.closest("li[data-key]");
-    if (li) openSite(li.dataset.key, true);
+  $("newMode").addEventListener("change", changed);
+  $("resetFilters").addEventListener("click", () => {
+    for (const c of document.querySelectorAll("#catChips .cat")) c.setAttribute("aria-pressed", "true");
+    $("weak").checked = false;
+    $("srcOsm").checked = $("srcWiki").checked = true;
+    $("newMode").value = "";
+    changed();
   });
-  $("backBtn").addEventListener("click", () => { S.selected = null; renderMarkers(); show("browse"); });
-  $("dataBtn").addEventListener("click", () => show("data"));
-  $("statusStrip").addEventListener("click", () => show("data"));
-  $("dataBack").addEventListener("click", () => show("browse"));
+  $("baseSeg").addEventListener("click", e => {
+    const b = e.target.closest("[data-base]");
+    if (b) setBase(b.dataset.base);
+  });
+  renderFilterCount();
+}
 
-  $("searchForm").addEventListener("submit", async e => {
+function initControls() {
+  $("menuBtn").innerHTML = svg(UI.menu);
+  $("filterBtn").insertAdjacentHTML("afterbegin", svg(UI.filter));
+  $("clearBtn").innerHTML = svg(UI.close);
+  $("locBtn").innerHTML = svg(UI.locate);
+  for (const b of document.querySelectorAll("[data-close]:empty")) b.innerHTML = svg(UI.close);
+  $("versionText").textContent = `Version ${BOOT.version}.`;
+
+  $("menuBtn").addEventListener("click", () => (S.view === "data" ? backToList() : show("data", "full")));
+  $("filterBtn").addEventListener("click", () => (S.view === "filters" ? backToList() : show("filters", "full")));
+  $("statusCard").addEventListener("click", () => show("data", "full"));
+  $("locCard").addEventListener("click", () => startLocate());
+  $("newCard").addEventListener("click", () => {
+    $("newMode").value = "visit";
+    $("newMode").dispatchEvent(new Event("change"));
+    $("newCard").hidden = true;
+  });
+  $("locBtn").addEventListener("click", onLocateButton);
+
+  $("sheet").addEventListener("click", e => {
+    const item = e.target.closest(".item[data-key]");
+    if (item) { openSite(item.dataset.key, { pan: true }); return; }
+    if (e.target.closest("[data-close]")) { S.view === "site" ? closeSite() : backToList(); return; }
+    if (e.target.closest("[data-share]") && S.site) { shareSite(S.site); return; }
+    const copy = e.target.closest("[data-copy]");
+    if (copy) copyText(copy.dataset.copy, "Location copied");
+  });
+
+  $("searchInput").addEventListener("input", () => { $("clearBtn").hidden = !$("searchInput").value; });
+  $("clearBtn").addEventListener("click", () => {
+    $("searchInput").value = "";
+    $("clearBtn").hidden = true;
+    $("searchInput").focus();
+  });
+  $("topbar").addEventListener("submit", async e => {
     e.preventDefault();
     const q = $("searchInput").value.trim();
     if (!q) return;
-    $("searchErr").hidden = true;
+    $("searchInput").blur();  // put the phone keyboard away
     try {
       const hit = await api(`/api/search?q=${encodeURIComponent(q)}`);
+      if (S.loc.follow) { S.loc.follow = false; renderLocBtn(); }
+      if (S.view === "site") closeSite();
+      else if (S.view !== "list") backToList();
+      if (!wide()) Sheet.set("peek");
       const [w, s, ea, n] = hit.bbox;
-      if (n - s > 0.001) S.map.fitBounds([[s, w], [n, ea]], { maxZoom: 15 });
-      else S.map.setView([hit.lat, hit.lng], 15);
-      show("browse");
-    } catch (err) {
-      $("searchErr").textContent = err.message;
-      $("searchErr").hidden = false;
-    }
+      if (n - s > 0.001) S.map.fitBounds([[s, w], [n, ea]], { ...mapPadding(), maxZoom: 15 });
+      else centerOn([hit.lat, hit.lng], 15);
+    } catch (err) { toast(err.message); }
   });
 
   $("sources").addEventListener("click", async e => {
@@ -516,14 +1163,29 @@ function initControls() {
       if (up) await api("/api/update", { source: up.dataset.update });
       else await api("/api/pause", { source: pause.dataset.pause });
       renderStatus(await api("/api/status"));
-    } catch (err) { alert(err.message); }
+    } catch (err) { toast(err.message); }
   });
   const saveSettings = async () => {
     try { renderStatus(await api("/api/settings", { auto_update: $("autoUpdate").checked, update_days: Number($("updateDays").value) })); }
-    catch (err) { alert(err.message); }
+    catch (err) { toast(err.message); }
   };
   $("autoUpdate").addEventListener("change", saveSettings);
   $("updateDays").addEventListener("change", saveSettings);
+
+  document.addEventListener("keydown", e => {
+    if (e.key !== "Escape" || e.target === $("searchInput")) return;
+    if (S.view === "site") closeSite();
+    else if (S.view !== "list") backToList();
+  });
+  window.addEventListener("popstate", () => {
+    const key = hashKey();
+    if (key && key !== S.selected) openSite(key, { pan: true, push: false });
+    else if (!key && S.view === "site") closeSite(true);
+  });
+  window.addEventListener("resize", () => {
+    Sheet.set(Sheet.snap);
+    if (S.map) syncZoomControl();
+  });
 }
 
 // "New since last visit" compares against the previous session's visit time.
@@ -534,17 +1196,24 @@ try {
 } catch (_) { /* storage blocked */ }
 
 initControls();
-if (BOOT.read_only) {  // public copy: visitors can browse, but not drive updates
+initFilters();
+initSheetDrag();
+Sheet.set("peek");
+if (BOOT.read_only) {  // public copy: visitors browse, but don't drive updates
   $("settingsBox").hidden = true;
   $("logBox").hidden = true;
   $("publicNote").hidden = false;
 }
+const linked = hashKey();
 if (window.L) {
   initMap();
   scheduleFetch(0);
+  if (linked) openSite(linked, { pan: true, push: false });
+  resumeLocation(!!linked);
 } else {
-  $("map").innerHTML = '<p style="padding:20px;color:#333">Couldn’t load the map library. Check your internet connection and reload.</p>';
+  $("map").innerHTML = '<p style="padding:90px 20px;color:#333">Couldn’t load the map library. Check your internet connection and reload.</p>';
 }
+renderLocBtn();
 pollStatus();
 checkNewSinceVisit();
 </script>

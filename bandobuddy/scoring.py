@@ -1,4 +1,5 @@
-"""Abandonment likelihood scoring for a site built from open data.
+"""Describe a site for people: what it was (category), what state it's in (condition), and the
+evidence in plain English. An internal evidence score is kept only to rank and filter:
 
   - OpenStreetMap evidence (abandoned/disused/ruins tags, old mines, bunkers, dead railway tunnels)
   - Wikidata/Wikipedia evidence (state of use, old mines and quarries, closure dates, intro wording)
@@ -9,9 +10,15 @@ from __future__ import annotations
 
 import re
 
-from .config import CATEGORIES, DEAD_NAME_WORDS, OTHER_CATEGORY, URBEX_NAME_WORDS, URBEX_TYPES
+from .config import (
+    CATEGORIES,
+    DEAD_NAME_WORDS,
+    OTHER_CATEGORY,
+    STRENGTHS,
+    URBEX_NAME_WORDS,
+    URBEX_TYPES,
+)
 
-TIERS = [(60, "prime"), (35, "likely"), (15, "maybe"), (0, "long shot")]
 _CATEGORY_RX = [(key, label, re.compile(rx, re.I)) for key, label, rx in CATEGORIES]
 
 
@@ -35,11 +42,11 @@ def dead_name_hit(name: str | None) -> str | None:
     return None
 
 
-def tier_for(score: int) -> str:
-    for threshold, label in TIERS:
+def strength_for(score: int) -> str:
+    for threshold, label in STRENGTHS:
         if score >= threshold:
             return label
-    return TIERS[-1][1]
+    return STRENGTHS[-1][1]
 
 
 def category_for(site: dict) -> str:
@@ -51,8 +58,106 @@ def category_for(site: dict) -> str:
     return OTHER_CATEGORY[0]
 
 
+def _condition_from(evidence: str) -> str | None:
+    text = evidence.lower()
+    if "heritage site" in text:
+        return "Heritage site"
+    if "new use" in text:
+        return "Reused"
+    if "single shop unit" in text:
+        return "Closed"
+    if re.search(r"\bruin", text):
+        return "Ruin"
+    if re.search(r"abandoned|derelict|boarded up", text):
+        return "Abandoned"
+    m = re.search(r"closed in (\d{4})", text)
+    if m:
+        return f"Closed {m.group(1)}"
+    if re.search(r"disused|decommission|mothball|out of use|\bclosed\b|vacant|inactive", text):
+        return "Disused"
+    if "brownfield" in text:
+        return "Brownfield"
+    if "cave entrance" in text:
+        return "Cave"
+    if re.search(r"old (mine|quarry|colliery)|adit|mineshaft|mine_shaft", text):
+        return "Old workings"
+    if re.search(r"bunker|pillbox", text):
+        return "Old military"
+    if "former" in text:
+        return "Former"
+    return None
+
+
+def condition_for(site: dict) -> str:
+    """The state a site is in, judged from its strongest piece of evidence first."""
+    members = sorted((site.get("osm") or []) + (site.get("wikidata") or []), key=lambda m: -m["weight"])
+    for m in members:
+        found = _condition_from(m.get("evidence", ""))
+        if found:
+            return found
+    return "Historic"
+
+
+_LIFECYCLE = re.compile(r"^OSM: (abandoned|disused):(\w+)=([^\s(]+)\s*(.*)$")
+_SAYS = re.compile(r"^OSM: (\w+) says '(.+)'$")
+
+
+def describe_osm(evidence: str) -> str:
+    """'OSM: disused:amenity=hospital' -> 'OpenStreetMap lists it as a disused hospital'."""
+    m = _LIFECYCLE.match(evidence)
+    if m:
+        state, key, value, rest = m.groups()
+        thing = key if value == "yes" else value
+        thing = thing.replace("_", " ")
+        if key == "shop" and value != "yes":
+            thing += " shop"
+        article = "an" if state[0] in "aeiou" else "a"
+        return f"OpenStreetMap lists it as {article} {state} {thing}{(' ' + rest) if rest else ''}"
+    m = _SAYS.match(evidence)
+    if m:
+        key, word = m.groups()
+        return f"Its name says '{word}'" if key == "name" else f"Its OpenStreetMap {key} says '{word}'"
+    plain = {
+        "OSM: building=ruins": "OpenStreetMap maps it as a ruined building",
+        "OSM: building=abandoned": "OpenStreetMap maps it as an abandoned building",
+        "OSM: abandoned=yes": "OpenStreetMap tags it as abandoned",
+        "OSM: disused=yes": "OpenStreetMap tags it as disused",
+        "OSM: landuse=brownfield": "OpenStreetMap maps it as brownfield land",
+        "OSM: cave entrance": "OpenStreetMap maps a cave entrance here",
+        "OSM: historic=ruins": "OpenStreetMap maps ruins here",
+        "OSM: abandoned railway tunnel": "OpenStreetMap maps an abandoned railway tunnel here",
+        "OSM: disused railway tunnel": "OpenStreetMap maps a disused railway tunnel here",
+        "OSM: old mine or quarry": "OpenStreetMap maps an old mine or quarry here",
+        "OSM: military bunker": "OpenStreetMap maps a military bunker here",
+        "OSM: former railway station": "OpenStreetMap maps a former railway station here",
+    }
+    for prefix, text in plain.items():
+        if evidence.startswith(prefix):
+            return text + evidence[len(prefix):]
+    return "OpenStreetMap: " + evidence.removeprefix("OSM: ")
+
+
+_WIKIDATA = [
+    (re.compile(r"^Wikidata: state of use is '(.+)'$"), r"Wikidata records its state of use as '\1'"),
+    (re.compile(r"^Wikidata: closed in (\d{4})$"), r"Wikidata says it closed in \1"),
+    (re.compile(r"^Wikidata: old (.+)$"), r"Wikidata lists it as an old \1"),
+    (re.compile(r"^Wikidata: listed as (.+)$"), r"Wikidata lists it as \1"),
+    (re.compile(r"^Wikidata: (.+)$"), r"Wikidata lists it as a \1"),
+]
+
+
+def describe_wikidata(evidence: str) -> list[str]:
+    """"Wikidata: old quarry; Wikipedia describes it as disused" -> two plain-English reasons."""
+    first, *rest = evidence.split("; ")
+    for rx, text in _WIKIDATA:
+        if rx.match(first):
+            first = rx.sub(text, first)
+            break
+    return [first, *rest]
+
+
 def score_site(site: dict) -> tuple[int, list[str]]:
-    """Return (score 0-100, human-readable reasons)."""
+    """Return (internal evidence score 0-100, the evidence in plain English)."""
     score = 0
     reasons: list[str] = []
 
@@ -60,25 +165,25 @@ def score_site(site: dict) -> tuple[int, list[str]]:
     if osm:
         best = max(osm, key=lambda o: o["weight"])
         score += best["weight"]
-        extra = f" (+{len(osm) - 1} more OSM tags nearby)" if len(osm) > 1 else ""
-        reasons.append(f"Mapped as dead on OpenStreetMap - {best['evidence']}{extra}")
+        reasons.append(describe_osm(best["evidence"]))
+        if len(osm) > 1:
+            reasons.append(f"{len(osm) - 1} more OpenStreetMap feature{'s' if len(osm) > 2 else ''} here agree")
 
     wikidata = site.get("wikidata") or []
     if wikidata:
         best = max(wikidata, key=lambda w: w["weight"])
         score += best["weight"] if not osm else best["weight"] // 2
-        reasons.append(best["evidence"])
+        reasons.extend(describe_wikidata(best["evidence"]))
         if best.get("snippet"):
             reasons.append(f"Wikipedia: \"{best['snippet']}\"")
 
     word = dead_name_hit(site.get("name"))
     if word:
         score += 15
-        reasons.append(f"Name contains '{word}'")
+        if f"Its name says '{word}'" not in reasons:
+            reasons.append(f"Its name says '{word}'")
 
-    kind = urbex_hit(site)
-    if kind:
-        score += 10
-        reasons.append(f"Explorable building type: {kind}")
+    if urbex_hit(site):
+        score += 10  # ranking only: an explorable kind of building beats, say, a closed shop unit
 
     return max(0, min(100, score)), reasons

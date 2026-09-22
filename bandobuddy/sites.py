@@ -11,7 +11,7 @@ from difflib import SequenceMatcher
 
 from .geo import haversine_m
 from .osm import best_name, classify, describe_kind
-from .scoring import category_for, score_site, tier_for
+from .scoring import category_for, condition_for, score_site, strength_for
 from .store import Store
 from .wikidata import evaluate, wikipedia_title
 
@@ -119,8 +119,9 @@ def build_sites(store: Store) -> int:
             "lat": site["lat"],
             "lng": site["lng"],
             "score": score,
-            "tier": tier_for(score),
+            "strength": strength_for(score),
             "category": category_for(site),
+            "condition": condition_for(site),
             "kind": best["kind"],
             "sources": sources,
             "reasons": reasons,

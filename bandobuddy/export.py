@@ -5,6 +5,14 @@ import csv
 import io
 from html import escape
 
+from .config import CATEGORIES, OTHER_CATEGORY
+
+_LABELS = {k: label for k, label, _ in CATEGORIES} | {OTHER_CATEGORY[0]: OTHER_CATEGORY[1]}
+
+
+def category_label(key: str) -> str:
+    return _LABELS.get(key, key)
+
 
 def links(site: dict) -> dict[str, str]:
     lat, lng = site["lat"], site["lng"]
@@ -29,13 +37,13 @@ def links(site: dict) -> dict[str, str]:
 def to_csv(sites: list[dict]) -> str:
     buf = io.StringIO()
     w = csv.writer(buf)
-    w.writerow(["name", "score", "tier", "category", "latitude", "longitude", "sources", "reasons",
+    w.writerow(["name", "category", "condition", "evidence", "latitude", "longitude", "sources", "reasons",
                 "openstreetmap", "wikipedia", "added"])
     for s in sites:
         lk = links(s)
-        w.writerow([s["name"], s["score"], s["tier"], s["category"], f"{s['lat']:.6f}", f"{s['lng']:.6f}",
-                    s["sources"], " | ".join(s["reasons"]), lk.get("osm_element", lk["openstreetmap"]),
-                    lk.get("wikipedia", ""), s.get("added") or ""])
+        w.writerow([s["name"], category_label(s["category"]), s["condition"], s["strength"], f"{s['lat']:.6f}",
+                    f"{s['lng']:.6f}", s["sources"], " | ".join(s["reasons"]),
+                    lk.get("osm_element", lk["openstreetmap"]), lk.get("wikipedia", ""), s.get("added") or ""])
     return buf.getvalue()
 
 
@@ -44,7 +52,7 @@ def to_kml(sites: list[dict], title: str = "bandobuddy") -> str:
     for s in sites:
         desc = "<br>".join(escape(r) for r in s["reasons"])
         marks.append(
-            f"<Placemark><name>{escape(s['name'])} [{s['score']}]</name>"
+            f"<Placemark><name>{escape(s['name'])} ({escape(s['condition'])})</name>"
             f"<description><![CDATA[{desc}]]></description>"
             f"<Point><coordinates>{s['lng']:.6f},{s['lat']:.6f},0</coordinates></Point></Placemark>"
         )
@@ -56,8 +64,9 @@ def to_gpx(sites: list[dict], title: str = "bandobuddy") -> str:
     pts = []
     for s in sites:
         pts.append(
-            f'<wpt lat="{s["lat"]:.6f}" lon="{s["lng"]:.6f}"><name>{escape(s["name"])} [{s["score"]}]</name>'
-            f"<desc>{escape(' | '.join(s['reasons']))}</desc><type>{escape(s['category'])}</type></wpt>"
+            f'<wpt lat="{s["lat"]:.6f}" lon="{s["lng"]:.6f}"><name>{escape(s["name"])}</name>'
+            f"<desc>{escape(s['condition'] + ': ' + ' | '.join(s['reasons']))}</desc>"
+            f"<type>{escape(category_label(s['category']))}</type></wpt>"
         )
     return ('<?xml version="1.0" encoding="UTF-8"?>\n'
             '<gpx version="1.1" creator="bandobuddy" xmlns="http://www.topografix.com/GPX/1/1">'
