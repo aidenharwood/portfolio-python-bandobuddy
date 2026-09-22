@@ -764,7 +764,7 @@ function renderList() {
 
 function renderLocCard() {
   const card = $("locCard");
-  card.hidden = S.loc.wanted || !("geolocation" in navigator);
+  card.hidden = S.loc.wanted || !("geolocation" in navigator) || !window.isSecureContext;
   if (!card.hidden) card.innerHTML = `${svg(UI.locate)}<span class="grow"><b>Find places near you</b><small>Uses your location to centre the map and sort by distance. It stays in your browser.</small></span>`;
 }
 

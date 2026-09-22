@@ -66,7 +66,7 @@ The data lives in the `bandobuddy-data` volume, so it survives rebuilds. Without
 
 ```bash
 docker build -t bandobuddy .
-docker run -d --name bandobuddy -p 127.0.0.1:8642:8642 -v bandobuddy-data:/data bandobuddy
+docker run -d --name bandobuddy -p 8642:8642 -v bandobuddy-data:/data bandobuddy
 
 # one-off jobs in the same image
 docker run --rm -v bandobuddy-data:/data bandobuddy update --source wikidata
@@ -84,7 +84,7 @@ docker build --target test .
 | `BANDOBUDDY_DATA` | `/data` | Where the database and OSM extract are kept |
 | `BANDOBUDDY_HOST` / `BANDOBUDDY_PORT` | `0.0.0.0` / `8642` | Listen address |
 | `BANDOBUDDY_PUBLIC` | off | Read-only mode for visitors: update and settings controls are hidden and refused |
-| `BANDOBUDDY_ALLOWED_HOSTS` | *(none)* | Comma-separated hostnames the site is served on, e.g. `bandobuddy.example.org` (localhost is always allowed) |
+| `BANDOBUDDY_ALLOWED_HOSTS` | *(none)* | Comma-separated public hostnames the site is served on, e.g. `bandobuddy.example.org` (IP addresses and local names are always allowed) |
 | `BANDOBUDDY_NO_AUTO_UPDATE` | off | Don't refresh the data on a schedule |
 
 The refresh interval (7 days by default) is set in the app's **Data** panel, or with `bandobuddy update` from any scheduler. `/healthz` returns `{"ok": true, ...}` for container and Kubernetes health checks.
@@ -108,8 +108,26 @@ Needs Python 3.9 or newer. On Windows, double-click `run.bat`. Anywhere else:
 
 ```bash
 pip install -r requirements.txt
-python -m bandobuddy          # opens http://127.0.0.1:8642 in your browser
+python -m bandobuddy          # opens http://127.0.0.1:8642 here, and serves your network
 ```
+
+### On your phone
+
+bandobuddy is open to every device on your network, so a phone on the same Wi-Fi can use it too. It prints
+the address to type in when it starts, e.g. `http://192.168.1.20:8642/`. That works for Docker too. To keep it to
+this computer only, use `--host 127.0.0.1` (or `127.0.0.1:8642:8642` in `docker-compose.yml`). Add `--public` to
+make it read-only for everyone.
+
+It answers requests addressed to an IP address, a machine name or a home-network name (`.local`, `.lan`,
+`.home.arpa`…). Public domain names need `--allowed-host`, which stops websites using DNS-rebinding tricks to
+reach it.
+
+Phones only share their location with HTTPS sites, so the locate button won't work at a plain `http://192.168…`
+address. To try location locally, use Chrome's USB port forwarding (`chrome://inspect/#devices` → *Port forwarding*,
+`8642` → `localhost:8642`) and open `http://localhost:8642` on the phone, or use the HTTPS deployment.
+
+On Windows, if other devices can't connect, allow Python through Windows Firewall for private networks and check the
+Wi-Fi is set to a *Private* network.
 
 ## How places are described
 

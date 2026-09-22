@@ -226,6 +226,14 @@ class ServingModesTests(unittest.TestCase):
         port = self.start()
         self.assertEqual(call(port, "GET", "/api/status", host="bandobuddy.example.org")[0], 403)
         self.assertEqual(call(port, "GET", "/api/status", host="localhost:9999")[0], 200)  # any published port
+        # A phone on the same network, by IP or machine name, with full control.
+        self.assertEqual(call(port, "GET", "/api/status", host="192.168.1.20:8642")[0], 200)
+        self.assertEqual(call(port, "GET", "/api/status", host="desktop-4r6u799:8642")[0], 200)
+        status, _ = call(port, "POST", "/api/settings", {"update_days": 7}, host="192.168.1.20:8642",
+                         headers={"Origin": "http://192.168.1.20:8642"})
+        self.assertEqual(status, 200)
+        self.assertEqual(call(port, "POST", "/api/settings", {"update_days": 7}, host="192.168.1.20:8642",
+                              headers={"Origin": "https://evil.example.org"})[0], 403)
         port = self.start(allowed_hosts=["bandobuddy.example.org"])
         self.assertEqual(call(port, "GET", "/api/status", host="bandobuddy.example.org")[0], 200)
         self.assertEqual(call(port, "GET", "/api/status", host="evil.example.org")[0], 403)
@@ -268,6 +276,28 @@ class ContainerConfigTests(unittest.TestCase):
             args = cli.build_parser().parse_args([])
         self.assertEqual((args.host, args.port, args.public, args.no_browser, args.no_auto_update),
                          ("0.0.0.0", 9001, True, True, False))
+
+    def test_listens_on_the_whole_network_by_default(self):
+        env = {k: v for k, v in os.environ.items() if k != "BANDOBUDDY_HOST"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            self.assertEqual(cli.build_parser().parse_args([]).host, "0.0.0.0")
+            self.assertEqual(cli.build_parser().parse_args(["--host", "127.0.0.1"]).host, "127.0.0.1")
+
+    def test_lan_hosts_are_answered_but_public_names_are_not(self):
+        for host in ("192.168.1.20", "10.0.0.5", "[fe80::1]", "desktop-4r6u799", "nas.local", "pi.lan",
+                     "box.home.arpa", "localhost"):
+            self.assertTrue(webapp.is_lan_host(host), host)
+        # Public names could point anywhere: that's how DNS rebinding works (192.168.1.20.nip.io included).
+        for host in ("evil.example.org", "192.168.1.20.nip.io", "bandobuddy.example.org", ""):
+            self.assertFalse(webapp.is_lan_host(host), host)
+
+    def test_lan_addresses_are_private_ones_only(self):
+        infos = [(socket.AF_INET, 0, 0, "", (ip, 0)) for ip in ("127.0.0.1", "169.254.1.2", "8.8.8.8", "10.0.0.5")]
+        with mock.patch("socket.socket", side_effect=OSError), \
+                mock.patch("socket.getaddrinfo", return_value=infos):
+            self.assertEqual(webapp.lan_addresses(), ["10.0.0.5"])
+        for ip in webapp.lan_addresses():  # the real machine: whatever it has, it's private
+            self.assertTrue(ip.startswith(("10.", "172.", "192.168.")), ip)
 
     def test_host_only(self):
         self.assertEqual(webapp.host_only("Bandobuddy.Example.org:443"), "bandobuddy.example.org")
