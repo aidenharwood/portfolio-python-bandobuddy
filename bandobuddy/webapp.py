@@ -1,16 +1,20 @@
 """Web app: a map of every likely-abandoned place in the UK, kept up to date in the background.
 
 Two ways to run it:
-  - personal (default): bound to 127.0.0.1, full control over updates and settings
+  - personal (default): open to every device on your network, with full control over updates and settings
   - public (--public): read-only for visitors, e.g. behind an ingress; updates still run on schedule
 
-Every request must carry an allowed Host header (localhost, plus any --allowed-host), which stops
-DNS-rebinding tricks against a local copy. POSTs must also be same-origin JSON.
+Requests must be addressed to an IP address, a bare machine name, a home-network name (.local, .lan...)
+or a hostname given with --allowed-host. Anything on your network can reach it, but a public website
+can't use DNS-rebinding tricks to talk to it. POSTs must also be same-origin JSON.
 """
 from __future__ import annotations
 
+import ipaddress
 import json
+import os
 import signal
+import socket
 import threading
 import time
 import traceback
@@ -37,6 +41,7 @@ LIST_LIMIT = 100
 SCHEDULE_CHECK_S = 300
 CACHE_TTL_S = 24 * 3600
 LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "[::1]"})
+LAN_SUFFIXES = (".local", ".lan", ".home", ".home.arpa", ".internal", ".localdomain")
 CATEGORY_KEYS = [c[0] for c in CATEGORIES] + [OTHER_CATEGORY[0]]
 
 
@@ -244,11 +249,25 @@ def host_only(value: str) -> str:
     return v.split(":", 1)[0]
 
 
+def is_lan_host(host: str) -> bool:
+    """An IP address, a bare machine name ("desktop-4r6u799") or a home-network name ("nas.local").
+    A DNS-rebinding attack needs a public domain name, and none of these can be one."""
+    bare = host.strip("[]")
+    try:
+        ipaddress.ip_address(bare)
+        return True
+    except ValueError:
+        return bool(bare) and ("." not in bare or bare.endswith(LAN_SUFFIXES))
+
+
 def make_handler(app: App, allowed_hosts: Iterable[str] = ()) -> type[BaseHTTPRequestHandler]:
     allowed = LOCAL_HOSTS | {host_only(h) for h in allowed_hosts if h}
 
     def host_ok(value: str | None) -> bool:
-        return bool(value) and ("*" in allowed or host_only(value) in allowed)
+        if not value:
+            return False
+        host = host_only(value)
+        return "*" in allowed or host in allowed or is_lan_host(host)
 
     class Handler(BaseHTTPRequestHandler):
         server_version = f"bandobuddy/{__version__}"
@@ -362,6 +381,32 @@ def make_handler(app: App, allowed_hosts: Iterable[str] = ()) -> type[BaseHTTPRe
     return Handler
 
 
+def in_container() -> bool:
+    return Path("/.dockerenv").exists() or "KUBERNETES_SERVICE_HOST" in os.environ
+
+
+def lan_addresses() -> list[str]:
+    """This machine's private IPv4 addresses (the one used for outgoing traffic first), so a phone
+    on the same network can reach it."""
+    found: list[str] = []
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("192.0.2.1", 9))  # UDP: nothing is sent, it just picks the outgoing interface
+            found.append(s.getsockname()[0])
+    except OSError:
+        pass
+    try:
+        found += [info[4][0] for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)]
+    except OSError:
+        pass
+    usable = []
+    for ip in found:
+        addr = ipaddress.ip_address(ip)
+        if addr.is_private and not (addr.is_loopback or addr.is_link_local) and ip not in usable:
+            usable.append(ip)
+    return usable
+
+
 def make_server(app: App, port: int = DEFAULT_PORT, host: str = "127.0.0.1",
                 allowed_hosts: Iterable[str] = (), fallback: bool = True) -> ThreadingHTTPServer:
     """Bind to the port (trying the next few, then any free port, if fallback is on)."""
@@ -387,16 +432,27 @@ def run_scheduler(updater: Updater, stop: threading.Event, check_every: float = 
 
 
 def serve(data_dir: Path, port: int = DEFAULT_PORT, open_browser: bool = True, auto_update: bool = True,
-          session_factory: Callable[[], requests.Session] = requests.Session, host: str = "127.0.0.1",
+          session_factory: Callable[[], requests.Session] = requests.Session, host: str = "0.0.0.0",
           read_only: bool = False, allowed_hosts: Iterable[str] = ()) -> None:
     store = Store(data_dir / DB_NAME)
     updater = Updater(store, data_dir, session_factory=session_factory)
     app = App(store, updater, session_factory, read_only=read_only)
+    container = in_container()
+    if not container:  # e.g. desktop.example.com on a work network
+        allowed_hosts = [*allowed_hosts, socket.gethostname(), socket.getfqdn()]
     # In a container the published port is fixed, so never quietly move to another one.
-    server = make_server(app, port, host, allowed_hosts, fallback=host == "127.0.0.1")
-    shown = "127.0.0.1" if host in ("0.0.0.0", "::") else host
-    print(f"bandobuddy {__version__} listening on http://{shown}:{server.server_address[1]}/"
+    server = make_server(app, port, host, allowed_hosts, fallback=not container)
+    bound = server.server_address[1]
+    everywhere = host in ("0.0.0.0", "::")
+    shown = "127.0.0.1" if everywhere else host
+    print(f"bandobuddy {__version__} listening on http://{shown}:{bound}/"
           f"{' (read-only public mode)' if read_only else ''}")
+    if everywhere and not container:
+        for i, ip in enumerate(lan_addresses()):
+            print(f"{'On other devices on your network:' if i == 0 else '                              or'} http://{ip}:{bound}/")
+        print("  (Phones only share their location with HTTPS sites, so the locate button needs this computer or HTTPS.)")
+        if os.name == "nt":
+            print("  If other devices can't connect, allow Python through Windows Firewall on private networks.")
     print(f"Data is kept in {data_dir}")
 
     stop = threading.Event()

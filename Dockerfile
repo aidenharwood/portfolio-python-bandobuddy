@@ -7,8 +7,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /app
+# pyosmium's wheel links against the system expat, which the slim image doesn't include.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libexpat1 \
+    && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt .
-RUN pip install -r requirements.txt
+# Import it here too, so a missing system library fails the build rather than the running app.
+RUN pip install -r requirements.txt && python -c "import osmium"
 
 # `docker build --target test .` runs the test suite inside the image.
 FROM base AS test

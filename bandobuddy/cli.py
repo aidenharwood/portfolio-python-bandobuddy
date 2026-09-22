@@ -34,8 +34,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     p.add_argument("--data-dir", type=Path, default=DATA_DIR,
                    help="where the database and map extract live [BANDOBUDDY_DATA] (default: %(default)s)")
-    p.add_argument("--host", default=os.environ.get("BANDOBUDDY_HOST", "127.0.0.1"),
-                   help="address to listen on; 0.0.0.0 in a container [BANDOBUDDY_HOST] (default: %(default)s)")
+    p.add_argument("--host", default=os.environ.get("BANDOBUDDY_HOST", "0.0.0.0"),
+                   help="address to listen on; 127.0.0.1 keeps it to this computer [BANDOBUDDY_HOST] "
+                        "(default: %(default)s, every device on your network)")
     p.add_argument("--port", type=int, default=int(os.environ.get("BANDOBUDDY_PORT") or 8642),
                    help="port for the map [BANDOBUDDY_PORT] (default: %(default)s)")
     p.add_argument("--public", action="store_true", default=_env_flag("BANDOBUDDY_PUBLIC"),

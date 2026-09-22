@@ -5,7 +5,7 @@ services:
     image: bandobuddy:local
     container_name: bandobuddy
     ports:
-      - "127.0.0.1:8642:8642"   # only reachable from this machine
+      - "8642:8642"   # every device on your network; use "127.0.0.1:8642:8642" to keep it to this machine
     volumes:
       - bandobuddy-data:/data   # database + OSM extract survive rebuilds
     environment:
