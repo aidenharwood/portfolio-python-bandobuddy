@@ -1,0 +1,16 @@
+.git
+.github
+.venv
+**/__pycache__
+**/*.pyc
+*.egg-info
+.env
+data
+scans
+*.pbf
+*.osm
+*.part
+*.db
+deploy
+run.bat
+docker-compose.yml

@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bandobuddy"
+version = "0.3.0"
+description = "A free, open map of likely-abandoned places across the UK (OpenStreetMap + Wikidata)"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = ["requests>=2.31,<3", "osmium>=4.3,<5"]
+
+[project.scripts]
+bandobuddy = "bandobuddy.cli:main"
+
+[tool.setuptools]
+packages = ["bandobuddy"]
+
+[tool.setuptools.package-data]
+bandobuddy = ["app.html"]

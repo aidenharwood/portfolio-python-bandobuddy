@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: portfolio-bandobuddy
+spec:
+  replicas: 1 # one writer for the SQLite database and the OSM extract
+  strategy:
+    type: Recreate # never two pods on the same volume
+  selector:
+    matchLabels:
+      app: portfolio-bandobuddy
+  template:
+    metadata:
+      labels:
+        app: portfolio-bandobuddy
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      terminationGracePeriodSeconds: 30 # lets an update pause cleanly and resume on the next pod
+      containers:
+        - name: portfolio-bandobuddy
+          image: ghcr.io/aidenharwood/portfolio/bandobuddy:latest # replaced by CI on every build
+          ports:
+            - containerPort: 8642
+          env:
+            - name: BANDOBUDDY_PUBLIC # visitors can browse; update controls are hidden and refused
+              value: "true"
+            - name: BANDOBUDDY_ALLOWED_HOSTS
+              value: bandobuddy.aidenharwood.uk
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8642
+            periodSeconds: 10
+          livenessProbe: # generous: the server stays up while a big OSM update is being read
+            httpGet:
+              path: /healthz
+              port: 8642
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 2Gi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: portfolio-bandobuddy-data

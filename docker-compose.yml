@@ -1,0 +1,20 @@
+# Run bandobuddy locally:  docker compose up -d   then open http://localhost:8642
+services:
+  bandobuddy:
+    build: .
+    image: bandobuddy:local
+    container_name: bandobuddy
+    ports:
+      - "127.0.0.1:8642:8642"   # only reachable from this machine
+    volumes:
+      - bandobuddy-data:/data   # database + OSM extract survive rebuilds
+    environment:
+      # Uncomment to run it as a read-only public copy behind your own domain:
+      # BANDOBUDDY_PUBLIC: "true"
+      # BANDOBUDDY_ALLOWED_HOSTS: "bandobuddy.example.org"
+      BANDOBUDDY_NO_AUTO_UPDATE: "false"
+    restart: unless-stopped
+    stop_grace_period: 30s        # time to pause an update cleanly so it resumes next start
+
+volumes:
+  bandobuddy-data:

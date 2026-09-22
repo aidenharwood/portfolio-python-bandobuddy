@@ -1,0 +1,55 @@
+name: "[bandobuddy] Test, build and push Docker image"
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+env:
+  IMAGE_REGISTRY: ghcr.io
+  IMAGE_NAME: aidenharwood/portfolio/bandobuddy:${{ github.run_id }}-${{ github.run_number }}
+
+jobs:
+  test:
+    name: Run tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python -m unittest discover -s tests -t . -v
+
+  build_and_push:
+    name: Build and push Docker image
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name != 'pull_request'
+    steps:
+      - uses: aidenharwood/portfolio-action-docker-build-push@v1
+        with:
+          registry: ghcr.io
+          username: ${{ secrets.GHCR_USERNAME }}
+          password: ${{ secrets.GHCR_PAT }}
+          image_name: ${{ env.IMAGE_NAME }}
+          dockerfile: Dockerfile
+          context: .
+
+  update_helm_chart:
+    name: Update Helm chart with new image reference
+    runs-on: ubuntu-latest
+    needs: build_and_push
+    if: github.event_name != 'pull_request'
+    steps:
+      - uses: aidenharwood/portfolio-action-helm-update-image@v1
+        with:
+          target_repo: aidenharwood/portfolio-helm-website
+          repo_token: ${{ secrets.GH_PAT }}
+          registry: ghcr.io
+          image_name: ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}
+          yaml_file: templates/bandobuddy/application.portfolio-bandobuddy.yaml
+          yaml_path: .spec.template.spec.containers[0].image

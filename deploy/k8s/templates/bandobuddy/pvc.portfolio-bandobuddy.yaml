@@ -1,0 +1,12 @@
+# Room for the UK OSM extract (~2.3 GB), a second copy while updates are applied, and the database.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: portfolio-bandobuddy-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 15Gi

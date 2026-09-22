@@ -1,0 +1,552 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bandobuddy</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+<style>
+  :root {
+    --bg:#0f0e0c; --panel:#171613; --raised:#201f1b; --ink:#ece8e1; --muted:#9a948a; --faint:#6b665e;
+    --line:#2c2a25; --accent:#fb923c; --accent-ink:#1a1206; --err:#f87171; --ok:#a3e635;
+    --prime:#ef4444; --likely:#f97316; --maybe:#eab308; --long:#78716c; --osm:#60a5fa; --wiki:#c4b5fd;
+    color-scheme: dark;
+  }
+  * { box-sizing:border-box }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--ink);
+    font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif }
+  button, input, select { font:inherit; color:inherit }
+  a { color:var(--accent) }
+  [hidden] { display:none !important }
+
+  #app { display:grid; grid-template-columns:minmax(330px, 400px) 1fr; height:100vh; height:100dvh }
+  aside { background:var(--panel); border-right:1px solid var(--line); display:flex; flex-direction:column; min-height:0 }
+  #map { min-height:0; background:#e5e3df }
+  @media (max-width: 760px) {
+    #app { grid-template-columns:1fr; grid-template-rows:45vh 1fr; grid-template-rows:45dvh 1fr }
+    #map { order:-1 }
+    aside { border-right:0; border-top:1px solid var(--line) }
+  }
+
+  header.top { display:flex; align-items:center; gap:8px; padding:12px 14px 8px }
+  header.top h1 { margin:0; font-size:20px; letter-spacing:-.02em; flex:1 }
+  header.top h1 span { color:var(--accent) }
+  .status { margin:0 14px 10px; padding:8px 10px; border:1px solid var(--line); border-radius:10px; background:var(--raised);
+    font-size:12px; color:var(--muted); cursor:pointer; display:grid; gap:4px; text-align:left; width:calc(100% - 28px) }
+  .status b { color:var(--ink); font-weight:600 }
+  .status:hover { border-color:var(--faint) }
+  .bar { height:4px; background:var(--line); border-radius:4px; overflow:hidden }
+  .bar i { display:block; height:100%; width:0; background:var(--accent); transition:width .5s ease }
+  .scroll { overflow-y:auto; flex:1; min-height:0; padding:0 14px 20px; display:flex; flex-direction:column; gap:12px }
+
+  .row { display:flex; gap:8px; align-items:center }
+  .grow { flex:1; min-width:0 }
+  input[type=text], input[type=number], select { background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:7px 9px }
+  input[type=text] { width:100% }
+  input:focus, select:focus, button:focus-visible { outline:2px solid var(--accent); outline-offset:1px }
+  input[type=range] { width:100%; accent-color:var(--accent) }
+  .btn { border:1px solid var(--line); background:var(--raised); border-radius:8px; padding:7px 11px; cursor:pointer; white-space:nowrap; text-decoration:none; color:var(--ink) }
+  .btn:hover { border-color:var(--faint) }
+  .btn:disabled { opacity:.5; cursor:default }
+  .btn.small { padding:3px 8px; font-size:12px }
+  .btn.accent { background:var(--accent); border-color:var(--accent); color:var(--accent-ink); font-weight:700 }
+  .label { display:flex; justify-content:space-between; color:var(--muted); font-size:12px; margin-bottom:4px }
+  .label b { color:var(--ink) }
+  .note { color:var(--muted); font-size:12px; margin:0 }
+  .credits { margin-top:auto; padding-top:8px; border-top:1px solid var(--line); font-size:11px; color:var(--faint) }
+  .credits a { color:var(--muted) }
+  .err { color:var(--err); font-size:13px; margin:0 }
+
+  .chips { display:flex; flex-wrap:wrap; gap:6px }
+  .chip { border:1px solid var(--line); background:var(--raised); border-radius:999px; padding:3px 10px; font-size:12px; cursor:pointer; color:var(--muted) }
+  .chip.on { background:var(--ink); color:var(--bg); border-color:var(--ink) }
+  .checks { display:flex; gap:14px; font-size:13px; flex-wrap:wrap }
+  .checks label { display:flex; gap:6px; align-items:center; cursor:pointer }
+  .checks input { accent-color:var(--accent) }
+  .newbadge { border:1px solid var(--accent); color:var(--accent); background:transparent; border-radius:8px; padding:6px 10px; cursor:pointer; text-align:left }
+
+  .listhead { display:flex; justify-content:space-between; align-items:center; gap:8px; font-size:12px; color:var(--muted) }
+  .exports { display:flex; gap:4px }
+  ul.list { list-style:none; margin:0; padding:0; display:grid; gap:4px }
+  ul.list li { display:grid; grid-template-columns:38px 1fr; gap:8px; align-items:center; padding:7px 8px; border-radius:8px; cursor:pointer; border:1px solid transparent }
+  ul.list li:hover { background:var(--raised); border-color:var(--line) }
+  ul.list .name { font-weight:600; overflow-wrap:anywhere; line-height:1.25 }
+  ul.list .meta { font-size:12px; color:var(--muted) }
+  .score { font-weight:800; font-size:17px; text-align:center; line-height:1 }
+  .score small { display:block; font-size:9px; font-weight:600; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); margin-top:2px }
+  .t-prime { color:var(--prime) } .t-likely { color:var(--likely) } .t-maybe { color:var(--maybe) } .t-long-shot { color:var(--long) }
+  .new { font-size:10px; font-weight:700; color:var(--accent-ink); background:var(--accent); border-radius:4px; padding:0 4px; margin-left:4px; vertical-align:2px }
+  .src { font-size:11px; font-weight:600 } .src.osm { color:var(--osm) } .src.wiki { color:var(--wiki) }
+
+  /* detail */
+  .detail { display:grid; gap:10px }
+  .detail h2 { margin:0; font-size:18px; line-height:1.25; overflow-wrap:anywhere }
+  .detail .head { display:grid; grid-template-columns:1fr auto; gap:8px; align-items:start }
+  .detail .score { font-size:26px }
+  .detail ul.reasons { margin:0; padding-left:18px; display:grid; gap:4px }
+  .links { display:flex; flex-wrap:wrap; gap:6px }
+  .photos { display:grid; grid-template-columns:repeat(auto-fill, minmax(110px, 1fr)); gap:6px }
+  .photos a { display:block; position:relative; border-radius:6px; overflow:hidden; background:#000; aspect-ratio:4/3 }
+  .photos img { width:100%; height:100%; object-fit:cover; display:block }
+  .photos span { position:absolute; left:0; right:0; bottom:0; background:rgba(0,0,0,.7); color:#fff; font-size:10px; padding:2px 4px }
+  details.box { border:1px solid var(--line); border-radius:8px; background:var(--raised) }
+  details.box > summary { cursor:pointer; padding:7px 10px; color:var(--muted); font-size:12px }
+  details.box > div { padding:0 10px 10px }
+  table.tags { width:100%; border-collapse:collapse; font-size:12px }
+  table.tags td { padding:2px 4px; border-top:1px solid var(--line); vertical-align:top; overflow-wrap:anywhere }
+  table.tags td:first-child { color:var(--muted); white-space:nowrap }
+
+  /* data panel */
+  .source { border:1px solid var(--line); border-radius:10px; background:var(--raised); padding:10px; display:grid; gap:6px }
+  .source h3 { margin:0; font-size:14px; display:flex; justify-content:space-between; gap:8px }
+  pre.log { margin:0; max-height:200px; overflow:auto; font-size:11px; line-height:1.5; color:var(--muted); white-space:pre-wrap }
+
+  /* leaflet tweaks for the dark panel */
+  .leaflet-container { font:inherit }
+  .leaflet-tooltip { font-size:12px }
+</style>
+</head>
+<body>
+<div id="app">
+  <aside>
+    <header class="top">
+      <h1>bando<span>buddy</span></h1>
+      <button class="btn small" id="dataBtn" type="button">Data</button>
+    </header>
+    <button class="status" id="statusStrip" type="button"><span id="statusText">Loading…</span><div class="bar" id="statusBarWrap" hidden><i id="statusBar"></i></div></button>
+
+    <!-- Browse -->
+    <div class="scroll" id="view-browse">
+      <form class="row" id="searchForm">
+        <input type="text" id="searchInput" class="grow" placeholder="Go to a town, postcode or landmark" autocomplete="off">
+        <button class="btn" type="submit">Go</button>
+      </form>
+      <p class="err" id="searchErr" hidden></p>
+      <button class="newbadge" id="newBadge" type="button" hidden></button>
+
+      <div>
+        <div class="label"><span>Minimum score</span><b id="minScoreOut"></b></div>
+        <input type="range" id="minScore" min="0" max="100" step="5">
+      </div>
+      <div class="chips" id="catChips"></div>
+      <div class="checks">
+        <label><input type="checkbox" id="srcOsm" checked> OpenStreetMap</label>
+        <label><input type="checkbox" id="srcWiki" checked> Wikidata</label>
+        <select id="newMode" aria-label="Added">
+          <option value="">Any time</option>
+          <option value="visit">New since last visit</option>
+          <option value="30">Added in last 30 days</option>
+          <option value="90">Added in last 90 days</option>
+        </select>
+      </div>
+
+      <div class="listhead">
+        <span id="listHead">-</span>
+        <span class="exports" title="Download what's in view">
+          <a class="btn small" id="expCsv">CSV</a><a class="btn small" id="expKml">KML</a><a class="btn small" id="expGpx">GPX</a>
+        </span>
+      </div>
+      <ul class="list" id="list"></ul>
+      <p class="note credits">Places from <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors (ODbL),
+        <a href="https://www.wikidata.org" target="_blank" rel="noopener">Wikidata</a> (CC0) and
+        <a href="https://en.wikipedia.org" target="_blank" rel="noopener">Wikipedia</a> (CC BY-SA). A place being on this map
+        doesn't mean you can go in: check who owns it and stay off anything posted or secured.</p>
+    </div>
+
+    <!-- One place -->
+    <div class="scroll" id="view-site" hidden>
+      <div class="row"><button class="btn" id="backBtn" type="button">&larr; Back to list</button></div>
+      <div class="detail" id="detail"></div>
+    </div>
+
+    <!-- Data & updates -->
+    <div class="scroll" id="view-data" hidden>
+      <div class="row"><button class="btn" id="dataBack" type="button">&larr; Back to map</button></div>
+      <p class="note">bandobuddy keeps its own copy of the UK's likely-abandoned places, built from OpenStreetMap and Wikidata, and refreshes it in the background. Nothing here needs an account or costs anything.</p>
+      <div id="sources"></div>
+      <div class="source" id="settingsBox">
+        <h3>Automatic updates</h3>
+        <div class="checks">
+          <label><input type="checkbox" id="autoUpdate"> Keep the data up to date</label>
+        </div>
+        <div class="row"><span class="note">Refresh every</span><input type="number" id="updateDays" min="1" max="90" style="width:70px"><span class="note">days while bandobuddy is open</span></div>
+        <p class="note" id="dataDir"></p>
+      </div>
+      <details class="box" id="logBox"><summary>Log</summary><div><pre class="log" id="log"></pre></div></details>
+      <p class="note" id="publicNote" hidden>This public copy refreshes itself automatically. To run your own, with update controls,
+        see the project on <a href="https://github.com/aidenharwood/portfolio-python-bandobuddy" target="_blank" rel="noopener">GitHub</a>.</p>
+    </div>
+  </aside>
+  <div id="map"></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+"use strict";
+const BOOT = __BOOT__;
+const $ = id => document.getElementById(id);
+const TIER_COLOURS = { prime: "#ef4444", likely: "#f97316", maybe: "#eab308", "long shot": "#78716c" };
+const CAT_LABELS = Object.fromEntries(BOOT.categories);
+const LIST_LIMIT = 150;
+const S = {
+  map: null, layer: null, sites: [], total: 0, version: -1, selected: null, site: null, fetchSeq: 0,
+  status: null, prevVisit: null, view: "browse",
+};
+
+// ---------- helpers ----------
+const esc = v => String(v ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const safeUrl = u => (/^https?:\/\//.test(String(u || "")) ? esc(u) : "#");
+const tierClass = t => String(t || "long shot").replace(/\s+/g, "-");
+const fmtN = n => Number(n || 0).toLocaleString();
+
+async function api(path, body) {
+  const opts = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+  const res = await fetch(path, opts);
+  let data = null;
+  try { data = await res.json(); } catch (_) { /* non-JSON */ }
+  if (!res.ok) throw new Error((data && data.error) || `Request failed (${res.status})`);
+  return data;
+}
+
+const PREFS_KEY = "bandobuddy:v2";
+function loadPrefs() { try { return JSON.parse(localStorage.getItem(PREFS_KEY)) || {}; } catch (_) { return {}; } }
+function savePrefs(patch) { try { localStorage.setItem(PREFS_KEY, JSON.stringify({ ...loadPrefs(), ...patch })); } catch (_) { /* private mode */ } }
+
+function ago(iso) {
+  if (!iso) return "never";
+  const s = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (s < 90) return "just now";
+  if (s < 5400) return `${Math.round(s / 60)} min ago`;
+  if (s < 129600) return `${Math.round(s / 3600)} hours ago`;
+  return `${Math.round(s / 86400)} days ago`;
+}
+
+function show(view) {
+  S.view = view;
+  for (const v of ["browse", "site", "data"]) $(`view-${v}`).hidden = v !== view;
+}
+
+// ---------- map ----------
+function initMap() {
+  const prefs = loadPrefs();
+  S.map = L.map("map", { preferCanvas: true });
+  const base = {
+    "Map": L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' }),
+    "Topo": L.tileLayer("https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png", {
+      maxZoom: 17, attribution: 'Map data &copy; OpenStreetMap contributors, SRTM | Style &copy; <a href="https://opentopomap.org">OpenTopoMap</a> (CC-BY-SA)' }),
+    "Satellite": L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+      maxZoom: 19, attribution: "Imagery &copy; Esri, Maxar, Earthstar Geographics" }),
+  };
+  (base[prefs.baseLayer] || base.Map).addTo(S.map);
+  L.control.layers(base, null, { position: "topright" }).addTo(S.map);
+  L.control.scale({ imperial: false }).addTo(S.map);
+  S.map.on("baselayerchange", e => savePrefs({ baseLayer: e.name }));
+  const [s, w, n, e] = BOOT.uk_bbox;
+  if (prefs.view) S.map.setView(prefs.view.center, prefs.view.zoom);
+  else S.map.fitBounds([[s, w], [n, e]]);
+  S.layer = L.layerGroup().addTo(S.map);
+  S.map.on("moveend", () => {
+    savePrefs({ view: { center: S.map.getCenter(), zoom: S.map.getZoom() } });
+    scheduleFetch();
+  });
+}
+
+function renderMarkers() {
+  S.layer.clearLayers();
+  for (const site of [...S.sites].reverse()) {  // best drawn last, on top
+    const selected = site.key === S.selected;
+    const marker = L.circleMarker([site.lat, site.lng], {
+      radius: selected ? 10 : site.score >= 60 ? 7 : site.score >= 35 ? 6 : 5,
+      color: selected ? "#ffffff" : "#1b1b1b", weight: selected ? 3 : 1,
+      fillColor: TIER_COLOURS[site.tier] || TIER_COLOURS["long shot"], fillOpacity: 0.92,
+    });
+    marker.bindTooltip(`${esc(site.name)} · ${site.score}`);
+    marker.on("click", () => openSite(site.key, false));
+    marker.addTo(S.layer);
+  }
+}
+
+// ---------- fetching places ----------
+let fetchTimer = null;
+function scheduleFetch(delay = 250) {
+  clearTimeout(fetchTimer);
+  fetchTimer = setTimeout(fetchSites, delay);
+}
+
+function filterParams() {
+  const p = new URLSearchParams();
+  p.set("min_score", $("minScore").value);
+  const cats = [...document.querySelectorAll("#catChips .chip.on")].map(c => c.dataset.cat);
+  if (cats.length && cats.length < BOOT.categories.length) p.set("categories", cats.join(","));
+  const srcs = [$("srcOsm").checked && "osm", $("srcWiki").checked && "wikidata"].filter(Boolean);
+  if (srcs.length === 1) p.set("sources", srcs[0]);
+  const mode = $("newMode").value;
+  if (mode === "visit" && S.prevVisit) p.set("added_since", S.prevVisit);
+  else if (mode === "30" || mode === "90") p.set("added_since", new Date(Date.now() - Number(mode) * 864e5).toISOString());
+  return p;
+}
+
+async function fetchSites() {
+  if (!S.map) return;
+  const b = S.map.getBounds();
+  const p = filterParams();
+  p.set("bbox", [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].map(x => x.toFixed(5)).join(","));
+  const seq = ++S.fetchSeq;
+  let data;
+  try { data = await api(`/api/sites?${p}`); } catch (_) { return; }
+  if (seq !== S.fetchSeq) return;  // a newer request superseded this one
+  S.sites = data.sites;
+  S.total = data.total;
+  S.version = data.version;
+  for (const [id, fmt] of [["expCsv", "csv"], ["expKml", "kml"], ["expGpx", "gpx"]]) {
+    const q = new URLSearchParams(p);
+    q.set("format", fmt);
+    $(id).href = `/api/export?${q}`;
+  }
+  renderMarkers();
+  renderList();
+}
+
+function renderList() {
+  const shown = S.sites.slice(0, LIST_LIMIT);
+  $("listHead").textContent = S.total > shown.length
+    ? `Top ${shown.length} of ${fmtN(S.total)} in view` : `${fmtN(S.total)} in view`;
+  $("list").innerHTML = shown.length ? shown.map(site => `
+    <li data-key="${esc(site.key)}">
+      <div class="score t-${tierClass(site.tier)}">${esc(site.score)}<small>${esc(site.tier)}</small></div>
+      <div><div class="name">${esc(site.name)}${site.added ? '<span class="new">NEW</span>' : ""}</div>
+        <div class="meta">${esc(CAT_LABELS[site.category] || site.category)} · ${sourceTags(site.sources)}</div></div>
+    </li>`).join("")
+    : `<li class="note" style="cursor:default">${S.status && !S.status.sites.total ? "No places yet. The UK database is being built; they'll appear here as it fills in." : "Nothing matches here. Zoom out, move the map, or loosen the filters."}</li>`;
+}
+
+function sourceTags(sources) {
+  return String(sources || "").split("+").map(s => s === "osm"
+    ? '<span class="src osm">OSM</span>' : '<span class="src wiki">Wikidata</span>').join(" + ");
+}
+
+// ---------- one place ----------
+async function openSite(key, pan) {
+  S.selected = key;
+  renderMarkers();
+  show("site");
+  $("detail").innerHTML = `<p class="note">Loading…</p>`;
+  let site;
+  try { site = await api(`/api/site/${encodeURIComponent(key)}`); } catch (err) {
+    $("detail").innerHTML = `<p class="err">${esc(err.message)}</p>`;
+    return;
+  }
+  if (S.selected !== key) return;
+  S.site = site;
+  if (pan) S.map.setView([site.lat, site.lng], Math.max(S.map.getZoom(), 16));
+  const lk = site.links;
+  const links = [
+    ["OpenStreetMap", lk.osm_element || lk.openstreetmap], ["Wikipedia", lk.wikipedia], ["Wikidata", lk.wikidata],
+    ["Street View ↗", lk.streetview], ["Mapillary ↗", lk.mapillary],
+  ].filter(([, url]) => url).map(([label, url]) => `<a class="btn small" href="${safeUrl(url)}" target="_blank" rel="noopener">${esc(label)}</a>`);
+  const osm = (site.detail.osm || [])[0];
+  const tags = osm ? Object.entries(osm.tags).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join("") : "";
+  $("detail").innerHTML = `
+    <div class="head">
+      <div><h2>${esc(site.name)}${site.added ? '<span class="new">NEW</span>' : ""}</h2>
+        <p class="note">${esc(CAT_LABELS[site.category] || site.category)} · ${esc(site.kind)} · ${sourceTags(site.sources)}</p></div>
+      <div class="score t-${tierClass(site.tier)}">${esc(site.score)}<small>${esc(site.tier)}</small></div>
+    </div>
+    <ul class="reasons">${site.reasons.map(r => `<li>${esc(r)}</li>`).join("")}</ul>
+    <div class="links">${links.join("")}</div>
+    <p class="note">${site.lat.toFixed(5)}, ${site.lng.toFixed(5)} · first seen ${esc((site.first_seen || "").slice(0, 10))}</p>
+    <div><div class="label"><span>Street-level photos (Panoramax)</span></div><div id="photos" class="photos"><p class="note">Looking…</p></div></div>
+    ${tags ? `<details class="box"><summary>OpenStreetMap tags</summary><div><table class="tags">${tags}</table></div></details>` : ""}`;
+  loadPhotos(site);
+}
+
+async function loadPhotos(site) {
+  let data;
+  try { data = await api(`/api/photos?lat=${site.lat}&lng=${site.lng}`); } catch (err) {
+    if (S.selected === site.key) $("photos").innerHTML = `<p class="note">${esc(err.message)}</p>`;
+    return;
+  }
+  if (S.selected !== site.key) return;
+  $("photos").innerHTML = data.photos.length ? data.photos.map(p => `
+    <a href="${safeUrl(p.image)}" target="_blank" rel="noopener" title="${esc(p.producer)} · ${esc(p.license)}">
+      <img src="${safeUrl(p.thumb)}" alt="Photo near ${esc(site.name)}" loading="lazy">
+      <span>${esc(p.taken)} · ${esc(p.distance_m)} m${p.facing ? " · facing it" : ""}</span></a>`).join("")
+    + `<p class="note" style="grid-column:1/-1">Photos CC-BY-SA via <a href="https://panoramax.fr" target="_blank" rel="noopener">Panoramax</a>.</p>`
+    : `<p class="note" style="grid-column:1/-1">No open street-level photos here yet. Try the Street View or Mapillary links.</p>`;
+}
+
+// ---------- data & status ----------
+function renderStatus(st) {
+  S.status = st;
+  const running = Object.values(st.sources).filter(s => s.running);
+  const sourceLine = s => {
+    const pct = s.total ? ` ${Math.round(100 * s.done / s.total)}%` : "";
+    return `${esc(s.label)}: ${esc(s.stage || "working")}${pct}`;
+  };
+  if (running.length) {
+    $("statusText").innerHTML = `<b>Updating the UK map</b> · ${fmtN(st.sites.total)} places so far<br>${running.map(sourceLine).join("<br>")}`;
+    const fracs = running.filter(s => s.total).map(s => s.done / s.total);
+    $("statusBarWrap").hidden = !fracs.length;
+    if (fracs.length) $("statusBar").style.width = `${100 * Math.min(...fracs)}%`;
+  } else {
+    $("statusBarWrap").hidden = true;
+    const last = Object.values(st.sources).map(s => s.last_update).filter(Boolean).sort().pop();
+    const errors = Object.values(st.sources).filter(s => s.error);
+    $("statusText").innerHTML = st.sites.total
+      ? `<b>${fmtN(st.sites.total)} places</b> across the UK · updated ${ago(last)}${errors.length ? ' · <span style="color:var(--err)">update problem</span>' : ""}`
+      : `<b>No data yet.</b> ${st.auto_update || BOOT.read_only ? "Building starts automatically." : "Open Data to build it."}`;
+  }
+  // data panel
+  const controls = (key, s) => BOOT.read_only ? ""
+    : s.running ? `<button class="btn small" data-pause="${key}">Pause</button>` : `<button class="btn small accent" data-update="${key}">Update now</button>`;
+  $("sources").innerHTML = Object.entries(st.sources).map(([key, s]) => `
+    <div class="source">
+      <h3><span>${esc(s.label)}</span>${controls(key, s)}</h3>
+      <p class="note">${s.running ? `${esc(s.stage)} ${s.total ? `${fmtN(s.done)} / ${fmtN(s.total)}` : s.done ? fmtN(s.done) : ""}`
+        : `Last updated ${ago(s.last_update)}${s.next_due && st.auto_update ? ` · next ${new Date(s.next_due).toLocaleDateString()}` : ""}`}</p>
+      ${s.running && s.total ? `<div class="bar"><i style="width:${100 * s.done / s.total}%"></i></div>` : ""}
+      ${key === "osm" && s.data_as_of ? `<p class="note">Map data as of ${new Date(s.data_as_of).toLocaleString()}</p>` : ""}
+      ${key === "wikidata" && s.tiles && Object.keys(s.tiles).length ? `<p class="note">Areas: ${fmtN((s.tiles.done || 0) + (s.tiles.failed || 0))} done${s.tiles.pending ? `, ${fmtN(s.tiles.pending)} to go` : ""}${s.tiles.failed ? `, ${fmtN(s.tiles.failed)} failed` : ""}</p>` : ""}
+      <p class="note">${fmtN(st.items[key])} items</p>
+      ${s.error ? `<p class="err">${esc(s.error)}</p>` : ""}
+    </div>`).join("");
+  if (document.activeElement !== $("updateDays")) $("updateDays").value = st.update_days;
+  $("autoUpdate").checked = st.auto_update;
+  $("dataDir").textContent = st.data_dir ? `Stored in ${st.data_dir} (the UK map extract is about 2.3 GB).` : "";
+  const log = $("log");
+  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 30;
+  log.textContent = st.log.join("\n");
+  if (atBottom) log.scrollTop = log.scrollHeight;
+
+  if (st.sites_version !== S.version) scheduleFetch(0);
+}
+
+async function pollStatus() {
+  let running = false;
+  try {
+    const st = await api("/api/status");
+    renderStatus(st);
+    running = Object.values(st.sources).some(s => s.running);
+  } catch (_) { /* server restarting */ }
+  setTimeout(pollStatus, running ? 2500 : 10000);
+}
+
+async function checkNewSinceVisit() {
+  if (!S.prevVisit) return;
+  try {
+    const p = new URLSearchParams({ min_score: String(BOOT.min_score), added_since: S.prevVisit });
+    const data = await api(`/api/sites?${p}`);
+    if (data.total) {
+      $("newBadge").textContent = `${fmtN(data.total)} new place${data.total === 1 ? "" : "s"} since your last visit →`;
+      $("newBadge").hidden = false;
+    }
+  } catch (_) { /* not important */ }
+}
+
+// ---------- wiring ----------
+function initControls() {
+  const prefs = loadPrefs();
+  $("minScore").value = prefs.minScore ?? BOOT.min_score;
+  $("minScoreOut").textContent = $("minScore").value;
+  const onCats = new Set(prefs.categories || BOOT.categories.map(c => c[0]));
+  $("catChips").innerHTML = BOOT.categories.map(([k, label]) =>
+    `<button type="button" class="chip ${onCats.has(k) ? "on" : ""}" data-cat="${esc(k)}">${esc(label)}</button>`).join("");
+  $("srcOsm").checked = prefs.srcOsm ?? true;
+  $("srcWiki").checked = prefs.srcWiki ?? true;
+
+  const changed = () => {
+    savePrefs({
+      minScore: Number($("minScore").value),
+      categories: [...document.querySelectorAll("#catChips .chip.on")].map(c => c.dataset.cat),
+      srcOsm: $("srcOsm").checked, srcWiki: $("srcWiki").checked,
+    });
+    scheduleFetch(0);
+  };
+  $("minScore").addEventListener("input", () => { $("minScoreOut").textContent = $("minScore").value; scheduleFetch(); });
+  $("minScore").addEventListener("change", changed);
+  $("catChips").addEventListener("click", e => {
+    const chip = e.target.closest(".chip");
+    if (!chip) return;
+    chip.classList.toggle("on");
+    if (!document.querySelector("#catChips .chip.on")) chip.classList.add("on");  // never filter out everything
+    changed();
+  });
+  for (const id of ["srcOsm", "srcWiki"]) $(id).addEventListener("change", () => {
+    if (!$("srcOsm").checked && !$("srcWiki").checked) $(id).checked = true;
+    changed();
+  });
+  $("newMode").addEventListener("change", () => scheduleFetch(0));
+  $("newBadge").addEventListener("click", () => { $("newMode").value = "visit"; scheduleFetch(0); });
+
+  $("list").addEventListener("click", e => {
+    const li = e.target.closest("li[data-key]");
+    if (li) openSite(li.dataset.key, true);
+  });
+  $("backBtn").addEventListener("click", () => { S.selected = null; renderMarkers(); show("browse"); });
+  $("dataBtn").addEventListener("click", () => show("data"));
+  $("statusStrip").addEventListener("click", () => show("data"));
+  $("dataBack").addEventListener("click", () => show("browse"));
+
+  $("searchForm").addEventListener("submit", async e => {
+    e.preventDefault();
+    const q = $("searchInput").value.trim();
+    if (!q) return;
+    $("searchErr").hidden = true;
+    try {
+      const hit = await api(`/api/search?q=${encodeURIComponent(q)}`);
+      const [w, s, ea, n] = hit.bbox;
+      if (n - s > 0.001) S.map.fitBounds([[s, w], [n, ea]], { maxZoom: 15 });
+      else S.map.setView([hit.lat, hit.lng], 15);
+      show("browse");
+    } catch (err) {
+      $("searchErr").textContent = err.message;
+      $("searchErr").hidden = false;
+    }
+  });
+
+  $("sources").addEventListener("click", async e => {
+    const up = e.target.closest("[data-update]");
+    const pause = e.target.closest("[data-pause]");
+    if (!up && !pause) return;
+    e.target.disabled = true;
+    try {
+      if (up) await api("/api/update", { source: up.dataset.update });
+      else await api("/api/pause", { source: pause.dataset.pause });
+      renderStatus(await api("/api/status"));
+    } catch (err) { alert(err.message); }
+  });
+  const saveSettings = async () => {
+    try { renderStatus(await api("/api/settings", { auto_update: $("autoUpdate").checked, update_days: Number($("updateDays").value) })); }
+    catch (err) { alert(err.message); }
+  };
+  $("autoUpdate").addEventListener("change", saveSettings);
+  $("updateDays").addEventListener("change", saveSettings);
+}
+
+// "New since last visit" compares against the previous session's visit time.
+try {
+  S.prevVisit = sessionStorage.getItem("bandobuddy:prevVisit") || localStorage.getItem("bandobuddy:lastVisit");
+  if (S.prevVisit) sessionStorage.setItem("bandobuddy:prevVisit", S.prevVisit);
+  localStorage.setItem("bandobuddy:lastVisit", new Date().toISOString());
+} catch (_) { /* storage blocked */ }
+
+initControls();
+if (BOOT.read_only) {  // public copy: visitors can browse, but not drive updates
+  $("settingsBox").hidden = true;
+  $("logBox").hidden = true;
+  $("publicNote").hidden = false;
+}
+if (window.L) {
+  initMap();
+  scheduleFetch(0);
+} else {
+  $("map").innerHTML = '<p style="padding:20px;color:#333">Couldn’t load the map library. Check your internet connection and reload.</p>';
+}
+pollStatus();
+checkNewSinceVisit();
+</script>
+</body>
+</html>
