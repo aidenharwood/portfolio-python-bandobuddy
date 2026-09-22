@@ -61,35 +61,57 @@ class WebAppTests(unittest.TestCase):
         self.assertIn('"categories"', page)
         self.assertIn("leaflet", page)
         self.assertNotIn("googleapis", page)  # no Google anywhere
+        self.assertIn("watchPosition", page)  # "use my location"
+        self.assertNotIn("min_score", page)
         self.assertEqual(resp.getheader("Referrer-Policy"), "strict-origin-when-cross-origin")
 
-    def test_sites_in_view_with_filters(self):
-        status, data, _ = self.request("GET", "/api/sites?bbox=-0.2,51.4,0.0,51.6&min_score=0")
+    def test_list_nearest_first_with_filters(self):
+        view = "bbox=-0.2,51.4,0.0,51.6"
+        status, data, _ = self.request("GET", f"/api/list?{view}&weak=1&near=51.5,-0.12")
         self.assertEqual(status, 200)
-        names = {s["name"] for s in data["sites"]}
-        self.assertTrue({"Old Mill", "Hillside Quarry", "Hill Tunnel", "St Agnes Hospital"} <= names)
+        names = [s["name"] for s in data["sites"]]
+        self.assertTrue({"Old Mill", "Hillside Quarry", "Hill Tunnel", "St Agnes Hospital", "Corner Bakery"} <= set(names))
         self.assertEqual(data["total"], len(data["sites"]))
+        self.assertEqual(names[0], "Unnamed bunker")  # right on the spot
+        dists = [s["distance_m"] for s in data["sites"]]
+        self.assertEqual(dists, sorted(dists))
+        first = data["sites"][0]
+        self.assertTrue({"condition", "category", "strength", "summary"} <= set(first))
+        self.assertNotIn("tier", first)
+
+        # Weak leads (a closed shop unit here) only when asked for.
+        _, data, _ = self.request("GET", f"/api/list?{view}")
+        self.assertNotIn("Corner Bakery", {s["name"] for s in data["sites"]})
+        _, data, _ = self.request("GET", f"/api/list?{view}&weak=1&sort=evidence")
         scores = [s["score"] for s in data["sites"]]
         self.assertEqual(scores, sorted(scores, reverse=True))
+        self.assertNotIn("distance_m", data["sites"][0])
 
-        _, data, _ = self.request("GET", "/api/sites?bbox=-0.2,51.4,0.0,51.6&min_score=0&categories=military")
+        _, data, _ = self.request("GET", f"/api/list?{view}&weak=1&categories=military")
         self.assertEqual({s["category"] for s in data["sites"]}, {"military"})
-        _, data, _ = self.request("GET", "/api/sites?bbox=-0.2,51.4,0.0,51.6&min_score=0&sources=wikidata")
+        _, data, _ = self.request("GET", f"/api/list?{view}&weak=1&sources=wikidata")
         self.assertTrue(all("wikidata" in s["sources"] for s in data["sites"]))
-        _, data, _ = self.request("GET", "/api/sites?bbox=-0.2,51.4,0.0,51.6&min_score=90")
+        _, data, _ = self.request("GET", "/api/list?bbox=10,10,11,11&weak=1")
         self.assertEqual(data["total"], 0)
-        _, data, _ = self.request("GET", "/api/sites?bbox=10,10,11,11&min_score=0")
-        self.assertEqual(data["total"], 0)
-        _, data, _ = self.request("GET", "/api/sites?min_score=0&added_since=2000-01-01T00:00:00Z")
-        self.assertEqual(data["total"], 0)  # first build: nothing is "new"
-        status, _, _ = self.request("GET", "/api/sites?bbox=nonsense")
-        self.assertEqual(status, 400)
+        _, data, _ = self.request("GET", "/api/list?weak=1&added_since=2000-01-01T00:00:00Z&limit=0")
+        self.assertEqual((data["total"], data["sites"]), (0, []))  # first build: nothing is "new"
+        for bad in ("bbox=nonsense", "near=here", "limit=lots"):
+            self.assertEqual(self.request("GET", f"/api/list?{bad}")[0], 400, bad)
+
+    def test_map_view(self):
+        status, data, _ = self.request("GET", "/api/map?bbox=-0.2,51.4,0.0,51.6&zoom=12&weak=1")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["mode"], "sites")
+        self.assertEqual(len(data["sites"]), data["total"])
+        self.assertEqual(self.request("GET", "/api/map?zoom=12")[0], 400)  # needs a bbox
+        self.assertEqual(self.request("GET", "/api/map?bbox=-0.2,51.4,0.0,51.6&zoom=x")[0], 400)
 
     def test_site_detail(self):
-        _, data, _ = self.request("GET", "/api/sites?min_score=0&q=Old%20Mill")
+        _, data, _ = self.request("GET", "/api/list?weak=1&q=Old%20Mill")
         key = data["sites"][0]["key"]
         status, site, _ = self.request("GET", f"/api/site/{key}")
         self.assertEqual(status, 200)
+        self.assertEqual(site["condition"], "Ruin")
         self.assertEqual(site["detail"]["osm"][0]["osm_id"], "way/100")
         self.assertEqual(site["links"]["osm_element"], "https://www.openstreetmap.org/way/100")
         self.assertIn("streetview", site["links"])
@@ -104,8 +126,9 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(self.request("GET", "/api/search?q=nowhere")[0], 404)
 
     def test_exports(self):
-        for fmt, marker in (("csv", b"name,score"), ("kml", b"<Placemark>"), ("gpx", b"<wpt")):
-            status, body, resp = self.request("GET", f"/api/export?format={fmt}&bbox=-0.2,51.4,0.0,51.6&min_score=0")
+        for fmt, marker in (("csv", b"name,category,condition"), ("kml", b"(Ruin)</name>"),
+                            ("gpx", b"<type>Industrial</type>")):
+            status, body, resp = self.request("GET", f"/api/export?format={fmt}&bbox=-0.2,51.4,0.0,51.6&weak=1")
             self.assertEqual(status, 200, fmt)
             self.assertIn(marker, body)
             self.assertIn("attachment", resp.getheader("Content-Disposition"))
@@ -146,10 +169,13 @@ class CliTests(unittest.TestCase):
         up.run("osm")
         out = tmp / "spots.gpx"
         # The export reads the same database the updater wrote.
-        code = cli.main(["--data-dir", str(tmp), "export", "--near", "51.5,-0.12", "--radius", "5",
-                         "--min-score", "0", "--format", "gpx", "-o", str(out)])
-        self.assertEqual(code, 0)
-        self.assertIn("Hill Tunnel", out.read_text(encoding="utf-8"))
+        export = ["--data-dir", str(tmp), "export", "--near", "51.5,-0.12", "--radius", "5", "--format", "gpx", "-o", str(out)]
+        self.assertEqual(cli.main(export), 0)
+        gpx = out.read_text(encoding="utf-8")
+        self.assertIn("Hill Tunnel", gpx)
+        self.assertNotIn("Corner Bakery", gpx)  # a weak lead
+        self.assertEqual(cli.main(export + ["--include-weak"]), 0)
+        self.assertIn("Corner Bakery", out.read_text(encoding="utf-8"))
 
     def test_parser(self):
         args = cli.build_parser().parse_args(["--port", "9000", "update", "--source", "osm"])
@@ -224,7 +250,7 @@ class ServingModesTests(unittest.TestCase):
         _, st = call(port, "GET", "/api/status")
         self.assertIsNone(st["data_dir"])
         self.assertEqual(st["log"], [])
-        self.assertEqual(call(port, "GET", "/api/sites?min_score=0")[0], 200)  # browsing still works
+        self.assertEqual(call(port, "GET", "/api/list?weak=1")[0], 200)  # browsing still works
 
     def test_search_results_are_cached(self):
         port = self.start()

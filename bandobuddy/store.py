@@ -8,6 +8,7 @@ web server can share one database file safely.
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -33,15 +34,17 @@ CREATE TABLE IF NOT EXISTS tiles (
     PRIMARY KEY (source, tile)
 );
 CREATE TABLE IF NOT EXISTS sites (
-    key TEXT PRIMARY KEY, name TEXT, lat REAL, lng REAL, score INTEGER, tier TEXT, category TEXT,
-    kind TEXT, sources TEXT, reasons TEXT, detail TEXT, first_seen TEXT, added TEXT
+    key TEXT PRIMARY KEY, name TEXT, lat REAL, lng REAL, score INTEGER, strength TEXT, category TEXT,
+    condition TEXT, kind TEXT, sources TEXT, reasons TEXT, detail TEXT, first_seen TEXT, added TEXT
 );
 CREATE INDEX IF NOT EXISTS sites_lat ON sites(lat);
 CREATE INDEX IF NOT EXISTS sites_score ON sites(score);
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
 """
 
-SITE_LIST_FIELDS = "key, name, lat, lng, score, tier, category, kind, sources, added"
+SITE_LIST_FIELDS = "key, name, lat, lng, score, strength, category, condition, kind, sources, added"
+MAP_SITE_LIMIT = 400   # more matches than this in view and the map shows clusters instead
+CLUSTER_PX = 64        # roughly how wide a cluster cell is on screen
 
 
 def now_iso() -> str:
@@ -55,6 +58,9 @@ class Store:
         path.parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as db:
             db.execute("PRAGMA journal_mode=WAL")
+            columns = {r["name"] for r in db.execute("PRAGMA table_info(sites)")}
+            if columns and "condition" not in columns:
+                db.execute("DROP TABLE sites")  # derived data from an older version; rebuilt from raw items
             db.executescript(SCHEMA)
 
     @contextmanager
@@ -213,12 +219,12 @@ class Store:
 
     # -- sites ------------------------------------------------------------------------------------
     def replace_sites(self, sites: list[dict]) -> None:
-        rows = [(s["key"], s["name"], s["lat"], s["lng"], s["score"], s["tier"], s["category"], s["kind"],
-                 s["sources"], json.dumps(s["reasons"], ensure_ascii=False), json.dumps(s["detail"], ensure_ascii=False),
-                 s["first_seen"], s["added"]) for s in sites]
+        rows = [(s["key"], s["name"], s["lat"], s["lng"], s["score"], s["strength"], s["category"], s["condition"],
+                 s["kind"], s["sources"], json.dumps(s["reasons"], ensure_ascii=False),
+                 json.dumps(s["detail"], ensure_ascii=False), s["first_seen"], s["added"]) for s in sites]
         with self.connect() as db:
             db.execute("DELETE FROM sites")
-            db.executemany("INSERT INTO sites VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
+            db.executemany("INSERT INTO sites VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
 
     def _site_filter(self, bbox=None, min_score=0, categories=None, sources=None, added_since=None, q=None):
         where, args = ["score >= ?"], [min_score]
@@ -259,9 +265,65 @@ class Store:
             row = db.execute("SELECT * FROM sites WHERE key = ?", (key,)).fetchone()
         return _decode_site(row) if row else None
 
+    def map_view(self, bbox: tuple[float, float, float, float], zoom: int, **filters) -> dict:
+        """What to draw for a map view: every matching site if there are few enough (or we're zoomed
+        right in), otherwise grid clusters with counts and their most common category."""
+        where, args = self._site_filter(bbox=bbox, **filters)
+        with self.connect() as db:
+            total = db.execute(f"SELECT COUNT(*) FROM sites WHERE {where}", args).fetchone()[0]
+            if total <= MAP_SITE_LIMIT or zoom >= 15:
+                rows = db.execute(f"SELECT {SITE_LIST_FIELDS} FROM sites WHERE {where} "
+                                  "ORDER BY score DESC, key LIMIT 2000", args).fetchall()
+                return {"mode": "sites", "total": total, "sites": [dict(r) for r in rows], "clusters": []}
+
+            _, s, _, n = bbox
+            cell_lng = 360 / (256 * 2 ** zoom) * CLUSTER_PX
+            # A fixed grid, not one tied to the view's edges, so clusters stay put while the map pans.
+            cell_lat = cell_lng * math.cos(math.radians(round((s + n) / 2)))
+            cell = "CAST((lat + 90) / ? AS INTEGER) AS gy, CAST((lng + 180) / ? AS INTEGER) AS gx"
+            cell_args = [cell_lat, cell_lng]
+            groups = db.execute(
+                f"SELECT {cell}, COUNT(*) AS n, AVG(lat) AS lat, AVG(lng) AS lng, MIN(lat) AS s, MIN(lng) AS w, "
+                f"MAX(lat) AS nn, MAX(lng) AS e, MIN(key) AS key FROM sites WHERE {where} GROUP BY gy, gx",
+                [*cell_args, *args]).fetchall()
+            top: dict[tuple[int, int], tuple[int, str]] = {}
+            for r in db.execute(f"SELECT {cell}, category, COUNT(*) AS n FROM sites WHERE {where} "
+                                "GROUP BY gy, gx, category", [*cell_args, *args]):
+                k = (r["gy"], r["gx"])
+                if r["n"] > top.get(k, (0, ""))[0]:
+                    top[k] = (r["n"], r["category"])
+            singles = [g["key"] for g in groups if g["n"] == 1]
+            single_rows = {r["key"]: dict(r) for r in db.execute(
+                f"SELECT {SITE_LIST_FIELDS} FROM sites WHERE key IN ({','.join('?' * len(singles))})", singles)
+            } if singles else {}
+        clusters = [{"lat": g["lat"], "lng": g["lng"], "count": g["n"], "category": top[(g["gy"], g["gx"])][1],
+                     "bounds": [g["w"], g["s"], g["e"], g["nn"]]} for g in groups if g["n"] > 1]
+        return {"mode": "clusters", "total": total, "clusters": clusters, "sites": list(single_rows.values())}
+
+    def list_sites(self, near: tuple[float, float] | None = None, sort: str = "nearest", limit: int = 100,
+                   **filters) -> tuple[int, list[dict]]:
+        """Sites for the side list, nearest to `near` first (or strongest evidence first)."""
+        where, args = self._site_filter(**filters)
+        if sort == "nearest" and near:
+            lat, lng = near
+            k2 = math.cos(math.radians(lat)) ** 2  # longitude degrees shrink away from the equator
+            order, order_args = "(lat - ?) * (lat - ?) + (lng - ?) * (lng - ?) * ?", [lat, lat, lng, lng, k2]
+        else:
+            order, order_args = "score DESC, key", []
+        with self.connect() as db:
+            total = db.execute(f"SELECT COUNT(*) FROM sites WHERE {where}", args).fetchone()[0]
+            rows = db.execute(f"SELECT {SITE_LIST_FIELDS}, reasons FROM sites WHERE {where} ORDER BY {order} LIMIT ?",
+                              [*args, *order_args, limit]).fetchall()
+        out = []
+        for r in rows:
+            site = dict(r)
+            site["summary"] = (json.loads(site.pop("reasons")) or [""])[0]
+            out.append(site)
+        return total, out
+
     def site_stats(self) -> dict:
         with self.connect() as db:
-            rows = db.execute("SELECT category, COUNT(*) AS n FROM sites WHERE score >= 15 GROUP BY category")
+            rows = db.execute("SELECT category, COUNT(*) AS n FROM sites WHERE strength != 'weak' GROUP BY category")
             by_cat = {r["category"]: r["n"] for r in rows}
             total = db.execute("SELECT COUNT(*) FROM sites").fetchone()[0]
         return {"total": total, "by_category": by_cat}

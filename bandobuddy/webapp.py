@@ -25,14 +25,15 @@ from urllib.parse import parse_qs, unquote, urlparse
 import requests
 
 from . import __version__, export, geocode, imagery
-from .config import CATEGORIES, DB_NAME, DEFAULT_MIN_SCORE, OTHER_CATEGORY, UK_BBOX
+from .config import CATEGORIES, DB_NAME, OTHER_CATEGORY, UK_BBOX, WEAK_BELOW
+from .geo import haversine_m
 from .sites import build_sites
 from .store import Store
 from .updater import SOURCE_LABELS, SOURCES, Updater
 
 DEFAULT_PORT = 8642
 MAX_BODY_BYTES = 16_000
-MAP_LIMIT = 4000
+LIST_LIMIT = 100
 SCHEDULE_CHECK_S = 300
 CACHE_TTL_S = 24 * 3600
 LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "[::1]"})
@@ -78,10 +79,8 @@ def parse_filters(qs: dict[str, list[str]]) -> dict:
         except ValueError:
             raise ApiError(400, "bbox must be west,south,east,north")
         filters["bbox"] = (w, s, e, n)
-    try:
-        filters["min_score"] = max(0, min(100, int(one("min_score", str(DEFAULT_MIN_SCORE)))))
-    except ValueError:
-        raise ApiError(400, "min_score must be a number")
+    # Weak leads (closed shop units, heritage ruins, caves, brownfield...) only when asked for.
+    filters["min_score"] = 0 if one("weak") in ("1", "true", "yes") else WEAK_BELOW
     cats = [c for c in one("categories").split(",") if c in CATEGORY_KEYS]
     if cats:
         filters["categories"] = cats
@@ -114,7 +113,6 @@ class App:
             "version": __version__,
             "categories": [[k, label] for k, label, _ in CATEGORIES] + [list(OTHER_CATEGORY)],
             "sources": [[s, SOURCE_LABELS[s]] for s in SOURCES],
-            "min_score": DEFAULT_MIN_SCORE,
             "uk_bbox": UK_BBOX,
             "read_only": self.read_only,
         }
@@ -126,9 +124,36 @@ class App:
             sites = db.execute("SELECT COUNT(*) FROM sites").fetchone()[0]
         return {"ok": True, "version": __version__, "sites": sites}
 
-    def sites(self, qs: dict) -> dict:
+    def map(self, qs: dict) -> dict:
         filters = parse_filters(qs)
-        total, rows = self.store.query_sites(limit=MAP_LIMIT, **filters)
+        if "bbox" not in filters:
+            raise ApiError(400, "bbox required")
+        try:
+            zoom = max(0, min(22, int(float((qs.get("zoom") or ["10"])[0]))))
+        except ValueError:
+            raise ApiError(400, "zoom must be a number")
+        view = self.store.map_view(filters.pop("bbox"), zoom, **filters)
+        view["version"] = self.updater.sites_version
+        return view
+
+    def list(self, qs: dict) -> dict:
+        filters = parse_filters(qs)
+        near = None
+        if (qs.get("near") or [""])[0]:
+            try:
+                near = tuple(float(x) for x in qs["near"][0].split(","))
+                assert len(near) == 2
+            except (ValueError, AssertionError):
+                raise ApiError(400, "near must be lat,lng")
+        sort = (qs.get("sort") or ["nearest"])[0]
+        try:
+            limit = max(0, min(500, int((qs.get("limit") or [str(LIST_LIMIT)])[0])))
+        except ValueError:
+            raise ApiError(400, "limit must be a number")
+        total, rows = self.store.list_sites(near=near, sort=sort, limit=limit, **filters)
+        if near:
+            for r in rows:
+                r["distance_m"] = round(haversine_m(near[0], near[1], r["lat"], r["lng"]))
         return {"total": total, "sites": rows, "version": self.updater.sites_version}
 
     def site(self, key: str) -> dict:
@@ -302,8 +327,10 @@ def make_handler(app: App, allowed_hosts: Iterable[str] = ()) -> type[BaseHTTPRe
             path = url.path
             if path == "/":
                 self._send(200, app.page(), "text/html; charset=utf-8")
-            elif path == "/api/sites":
-                self._dispatch(lambda: app.sites(qs))
+            elif path == "/api/map":
+                self._dispatch(lambda: app.map(qs))
+            elif path == "/api/list":
+                self._dispatch(lambda: app.list(qs))
             elif path.startswith("/api/site/"):
                 self._dispatch(lambda: app.site(unquote(path[len("/api/site/"):])))
             elif path == "/api/photos":

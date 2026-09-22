@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 from . import __version__, export
-from .config import DATA_DIR, DB_NAME, DEFAULT_MIN_SCORE
+from .config import DATA_DIR, DB_NAME, WEAK_BELOW
 from .store import Store
 from .updater import SOURCES, Updater
 
@@ -56,7 +56,8 @@ def build_parser() -> argparse.ArgumentParser:
     ex.add_argument("--near", metavar="LAT,LNG", help="centre point")
     ex.add_argument("--radius", type=float, default=5, help="km around --near (default: %(default)s)")
     ex.add_argument("--bbox", metavar="W,S,E,N", help="or a bounding box instead of --near")
-    ex.add_argument("--min-score", type=int, default=DEFAULT_MIN_SCORE)
+    ex.add_argument("--include-weak", action="store_true",
+                    help="also export weak leads (closed shop units, heritage ruins, caves, brownfield)")
     ex.add_argument("--format", choices=sorted(export.FORMATS), default="gpx")
     ex.add_argument("-o", "--output", type=Path, required=True)
     return p
@@ -91,7 +92,7 @@ def run_export(args: argparse.Namespace) -> int:
         print("Give --near LAT,LNG or --bbox W,S,E,N", file=sys.stderr)
         return 2
     store = Store(args.data_dir / DB_NAME)
-    sites = store.full_sites(bbox=bbox, min_score=args.min_score)
+    sites = store.full_sites(bbox=bbox, min_score=0 if args.include_weak else WEAK_BELOW)
     render, _ = export.FORMATS[args.format]
     args.output.write_text(render(sites), encoding="utf-8")
     print(f"Wrote {len(sites)} places to {args.output}")

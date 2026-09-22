@@ -1,11 +1,14 @@
+import sqlite3
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
 
 from bandobuddy import extract
 from bandobuddy.config import DB_NAME
 from bandobuddy.geo import grid_boxes
+from bandobuddy.scoring import category_for, condition_for, describe_osm, describe_wikidata, strength_for
 from bandobuddy.sites import build_sites
 from bandobuddy.store import Store
 from bandobuddy.updater import Updater
@@ -79,6 +82,18 @@ class UpdaterTests(unittest.TestCase):
         self.assertEqual(sites["Hill Tunnel"]["category"], "underground")
         self.assertEqual(sites["Unnamed bunker"]["category"], "military")
         self.assertEqual(sites["Derelict Barn"]["score"], 40)  # name says derelict: 25 + 15
+        self.assertEqual(sites["Derelict Barn"]["reasons"], ["Its name says 'derelict'"])  # said once
+        # What state each place is in, in words rather than a number.
+        conditions = {name: s["condition"] for name, s in sites.items()}
+        self.assertEqual(conditions["Old Mill"], "Ruin")
+        self.assertEqual(conditions["St Agnes Hospital"], "Abandoned")
+        self.assertEqual(conditions["Hillside Quarry"], "Disused")
+        self.assertEqual(conditions["Parkside Tunnel"], "Reused")  # Wikipedia: now a cycle path
+        self.assertEqual(conditions["Corner Bakery"], "Closed")
+        self.assertEqual(sites["Old Mill"]["category"], "industrial")
+        self.assertEqual(sites["St Agnes Hospital"]["category"], "institutional")
+        self.assertEqual(sites["Corner Bakery"]["strength"], "weak")  # a single shop unit
+        self.assertEqual(sites["Old Mill"]["strength"], "strong")
         self.assertNotIn("Busy Cafe", sites)
         # Wikidata: joins the OSM mill rather than duplicating it; stands alone for the quarry.
         mill = sites["Old Mill"]
@@ -183,6 +198,90 @@ class SitesTests(unittest.TestCase):
         sites = {s["name"]: s for s in store.full_sites(min_score=0)}
         self.assertEqual(len(sites["Chapel"]["detail"]["osm"]), 2)
         self.assertIn("Shop", sites)
+
+
+    def test_map_clusters_when_crowded_and_list_sorts_by_distance(self):
+        store = Store(Path(tempfile.mkdtemp()) / "t.db")
+        now = "2026-01-01T00:00:00+00:00"
+        store.upsert_osm([
+            {"osm_id": f"node/{i}", "lat": 51.5 + i * 0.001, "lng": -0.12,
+             "tags": {"building": "ruins", "name": f"Ruin {i}"}}
+            for i in range(6)
+        ] + [{"osm_id": "node/99", "lat": 52.5, "lng": 1.0, "tags": {"building": "ruins", "name": "Far Ruin"}}], now)
+        build_sites(store)
+        bbox = (-1.0, 51.0, 1.5, 53.0)
+        with mock.patch("bandobuddy.store.MAP_SITE_LIMIT", 3):
+            view = store.map_view(bbox, 9, min_score=0)
+            self.assertEqual(view["mode"], "clusters")
+            self.assertEqual(view["total"], 7)
+            self.assertEqual([c["count"] for c in view["clusters"]], [6])
+            self.assertEqual(view["clusters"][0]["category"], "historic")
+            self.assertEqual([s["name"] for s in view["sites"]], ["Far Ruin"])  # alone, so drawn as itself
+            w, s, e, n = view["clusters"][0]["bounds"]
+            self.assertTrue(s <= 51.5 and n >= 51.505 and w <= -0.12 <= e)
+            self.assertEqual(store.map_view(bbox, 15, min_score=0)["mode"], "sites")  # close in: always sites
+        total, rows = store.list_sites(near=(52.5, 1.0), bbox=bbox, limit=3)
+        self.assertEqual(total, 7)
+        self.assertEqual([r["name"] for r in rows], ["Far Ruin", "Ruin 5", "Ruin 4"])
+        self.assertEqual(rows[0]["summary"], "OpenStreetMap maps it as a ruined building")
+
+    def test_old_sites_table_is_rebuilt(self):
+        path = Path(tempfile.mkdtemp()) / "t.db"
+        db = sqlite3.connect(path)
+        db.execute("CREATE TABLE sites (key TEXT PRIMARY KEY, name TEXT, score INTEGER, tier TEXT)")
+        db.execute("INSERT INTO sites VALUES ('k', 'n', 50, 'prime')")
+        db.commit()
+        db.close()
+        store = Store(path)
+        with store.connect() as conn:
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(sites)")}
+        self.assertIn("condition", cols)
+        self.assertNotIn("tier", cols)
+
+
+class ScoringTests(unittest.TestCase):
+    def test_osm_evidence_in_plain_english(self):
+        self.assertEqual(describe_osm("OSM: disused:amenity=hospital"), "OpenStreetMap lists it as a disused hospital")
+        self.assertEqual(describe_osm("OSM: abandoned:shop=bakery (a single shop unit)"),
+                         "OpenStreetMap lists it as an abandoned bakery shop (a single shop unit)")
+        self.assertEqual(describe_osm("OSM: disused:railway=yes"), "OpenStreetMap lists it as a disused railway")
+        self.assertEqual(describe_osm("OSM: building=ruins (heritage site open to visitors)"),
+                         "OpenStreetMap maps it as a ruined building (heritage site open to visitors)")
+        self.assertEqual(describe_osm("OSM: description says 'derelict'"),
+                         "Its OpenStreetMap description says 'derelict'")
+        self.assertEqual(describe_osm("OSM: military bunker (pillbox)"),
+                         "OpenStreetMap maps a military bunker here (pillbox)")
+        self.assertEqual(describe_osm("OSM: something=odd"), "OpenStreetMap: something=odd")
+
+    def test_wikidata_evidence_in_plain_english(self):
+        self.assertEqual(describe_wikidata("Wikidata: old quarry; Wikipedia describes it as disused"),
+                         ["Wikidata lists it as an old quarry", "Wikipedia describes it as disused"])
+        self.assertEqual(describe_wikidata("Wikidata: closed in 1980"), ["Wikidata says it closed in 1980"])
+        self.assertEqual(describe_wikidata("Wikidata: state of use is 'disused'"),
+                         ["Wikidata records its state of use as 'disused'"])
+        self.assertEqual(describe_wikidata("Wikidata: listed as a former building"),
+                         ["Wikidata lists it as a former building"])
+        self.assertEqual(describe_wikidata("Wikidata: tunnel"), ["Wikidata lists it as a tunnel"])
+
+    def test_condition_comes_from_the_strongest_evidence(self):
+        def site(*evidence):
+            return {"osm": [{"evidence": e, "weight": w} for e, w in evidence]}
+        self.assertEqual(condition_for(site(("OSM: landuse=brownfield", 5), ("OSM: building=ruins", 25))), "Ruin")
+        self.assertEqual(condition_for(site(("OSM: building=ruins (heritage site open to visitors)", 5))),
+                         "Heritage site")
+        self.assertEqual(condition_for(site(("Wikidata: closed in 1950", 20))), "Closed 1950")
+        self.assertEqual(condition_for(site(("OSM: military bunker (pillbox)", 15))), "Old military")
+        self.assertEqual(condition_for(site(("OSM: cave entrance", 5))), "Cave")
+        self.assertEqual(condition_for(site(("Wikidata: listed building", 5))), "Historic")
+        self.assertEqual(condition_for({}), "Historic")
+
+    def test_strength_and_category(self):
+        self.assertEqual([strength_for(n) for n in (0, 19, 20, 34, 35, 100)],
+                         ["weak", "weak", "good", "good", "strong", "strong"])
+        self.assertEqual(category_for({"name": "Old Chapel", "osm": [{"kind": "ruins", "evidence": "OSM: building=ruins"}]}),
+                         "religious")
+        self.assertEqual(category_for({"name": "Box Tunnel", "osm": [{"kind": "railway", "evidence": ""}]}), "underground")
+        self.assertEqual(category_for({"name": "Mystery"}), "other")
 
 
 if __name__ == "__main__":

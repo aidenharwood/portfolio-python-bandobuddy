@@ -4,15 +4,16 @@
 
 An open-data map of likely-abandoned places across the UK, for urban explorers.
 
-bandobuddy builds its own database of the whole country from **OpenStreetMap** and **Wikidata/Wikipedia**. It scores every candidate on how likely it is to be derelict and keeps the data current in the background. The results appear on a map with filters, the evidence behind each score, open street-level photos, and GPS exports. It uses no proprietary APIs, needs no keys, and costs nothing to run.
+bandobuddy builds its own database of the whole country from **OpenStreetMap** and **Wikidata/Wikipedia**. It works out what each place was and what state it's in, and keeps the data current in the background. The results appear on a phone-friendly map with category icons, the evidence in plain English, open street-level photos, directions, and GPS exports. It uses no proprietary APIs, needs no keys, and costs nothing to run.
 
 ## Features
 
 - **Whole-UK coverage.** Reads the full Geofabrik UK extract (~2.3 GB) locally with pyosmium, plus the UK's Wikidata entries.
-- **Scored evidence.** Uses OpenStreetMap lifecycle tags (`abandoned:*`, `disused:*`, ruins, old mines, bunkers, dead railway tunnels), Wikidata state-of-use and closure dates, and wording in Wikipedia intros ("disused", "demolished", "converted to flats").
+- **Evidence, not scores.** Uses OpenStreetMap lifecycle tags (`abandoned:*`, `disused:*`, ruins, old mines, bunkers, dead railway tunnels), Wikidata state-of-use and closure dates, and wording in Wikipedia intros ("disused", "demolished", "converted to flats").
 - **Stays up to date.** Scheduled refreshes apply OpenStreetMap's daily change files instead of downloading the country again. Places are flagged **NEW** when they appear and dropped when they disappear from the data.
 - **Resumable.** Crawls survive restarts: downloads resume, and the Wikidata crawl remembers which areas are finished.
-- **Live map.** Built with Leaflet and OpenStreetMap tiles, with pins filling in while an update runs. It also has category, score and source filters, place search (via Nominatim), [Panoramax](https://panoramax.fr) photos, and CSV/KML/GPX exports.
+- **Made for phones.** A full-screen map with a draggable bottom sheet (a side panel on wider screens). Tap the locate button to see where you are and list places nearest first, then get directions or share a link to a place.
+- **Live map.** Built with Leaflet and OpenStreetMap tiles, with category icons that group into counts when zoomed out and fill in while an update runs. It also has category and source filters, place search (via Nominatim), [Panoramax](https://panoramax.fr) photos, and CSV/KML/GPX exports.
 - **Two modes.** A personal mode with full update controls, and a read-only public mode for hosting.
 
 ## Architecture
@@ -26,7 +27,7 @@ flowchart LR
   end
   subgraph App["bandobuddy container"]
     UP["Updater<br/>one thread per source,<br/>scheduled + resumable"]
-    DB[("SQLite (WAL)<br/>raw items · crawls · tiles<br/>merged, scored sites")]
+    DB[("SQLite (WAL)<br/>raw items · crawls · tiles<br/>merged sites")]
     WEB["HTTP server<br/>(Python stdlib)"]
   end
   UI["Browser<br/>Leaflet map"]
@@ -110,19 +111,29 @@ pip install -r requirements.txt
 python -m bandobuddy          # opens http://127.0.0.1:8642 in your browser
 ```
 
-## How places are scored
+## How places are described
 
-| Signal | Source | Points |
+Each place gets an **icon for what it was** (military, mines and tunnels, railways, industrial, churches, hospitals
+and schools, shops and leisure, ruins and castles, houses) and a **condition** taken from its strongest evidence:
+*Abandoned*, *Ruin*, *Disused*, *Closed 1987*, *Old workings*, *Old military*, *Former*, *Reused*, and so on. The
+evidence itself is shown in plain English, e.g. "OpenStreetMap lists it as a disused hospital" or "Wikipedia
+describes it as disused".
+
+Behind the scenes the evidence is weighed to decide which places are worth showing:
+
+| Evidence | Source | Weight |
 |---|---|---|
-| Tagged abandoned, a ruined building, or an abandoned railway tunnel | OpenStreetMap | +35 |
-| Tagged disused, an old mine entrance/shaft/quarry, a bunker or pillbox, a former station, or described as "derelict" | OpenStreetMap | +25 |
-| A closed shop or pub mapped as a single point, or a cave entrance | OpenStreetMap | +15 |
-| Heritage ruins open to visitors, or brownfield land | OpenStreetMap | +10 |
-| Marked abandoned/disused/decommissioned, an old mine/quarry/tunnel, or closed on a known date | Wikidata | +10 to +30 (half if OSM already has it) |
-| The Wikipedia intro says disused (+15), has a new use (−15), still in use (−20), or demolished (removed) | Wikipedia | ± |
-| "Former", "derelict"… in the name / an explorable building type | Name, type | +15 / +10 |
+| Tagged abandoned, a ruined building, or an abandoned railway tunnel | OpenStreetMap | strong |
+| Tagged disused, an old mine entrance/shaft/quarry, a bunker or pillbox, a former station, or described as "derelict" | OpenStreetMap | medium |
+| A closed shop or pub mapped as a single point, or a cave entrance | OpenStreetMap | weak |
+| Heritage ruins open to visitors, or brownfield land | OpenStreetMap | weak |
+| Marked abandoned/disused/decommissioned, an old mine/quarry/tunnel, or closed on a known date | Wikidata | medium (less if OSM already has it) |
+| The Wikipedia intro says disused (up), has a new use or is still in use (down), or was demolished (removed) | Wikipedia | adjusts |
+| "Former", "derelict"… in the name, or an explorable building type | Name, type | small boost |
 
-Scores are capped at 0 to 100 and grouped into tiers: **prime** (60+), **likely** (35+), **maybe** (15+) and **long shot**.
+Places with only weak evidence are **weaker leads**: hidden unless you turn on *Show weaker leads* in the filters
+(or pass `--include-weak` to `bandobuddy export`). Stronger places win when the map is zoomed out, and are marked
+*Strong evidence*.
 
 ## Data and credits
 
@@ -134,7 +145,7 @@ Scores are capped at 0 to 100 and grouped into tiers: **prime** (60+), **likely*
 ## Limitations
 
 - **Only as good as the open data.** A site nobody has tagged or described won't appear. Local registries and urbex forums know far more, but aren't open data.
-- **Closed high-street units** from OpenStreetMap can be noise. Filter by category or raise the minimum score.
+- **Closed high-street units** from OpenStreetMap can be noise, so they're hidden as weaker leads unless you turn them on.
 - **Busy upstream services.** Wikidata can be busy; the crawl pauses and resumes rather than failing.
 
 ## Development
