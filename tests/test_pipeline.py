@@ -18,7 +18,7 @@ from tests.fakes import EXTRACT_URL, OSM_XML, FakeSession
 try:
     import osmium  # noqa: F401
     HAVE_OSMIUM = True
-except ImportError:
+except ModuleNotFoundError:
     HAVE_OSMIUM = False
 
 AREA = (51.3, -0.4, 51.8, 0.1)  # a small "UK" for the tests: one 0.5 degree box, too big for one query

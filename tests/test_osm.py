@@ -10,7 +10,7 @@ from tests.fakes import write_osm
 try:
     import osmium  # noqa: F401
     HAVE_OSMIUM = True
-except ImportError:
+except ModuleNotFoundError:
     HAVE_OSMIUM = False
 
 
