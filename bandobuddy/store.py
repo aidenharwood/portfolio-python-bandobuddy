@@ -134,6 +134,18 @@ class Store:
                               (dataset,) if dataset else ())
             return [dict(r) for r in rows]
 
+    def import_labels(self) -> dict[str, int]:
+        """The imported sets in the database, and how many places each holds."""
+        with self.connect() as db:
+            rows = db.execute("SELECT substr(ref, 1, instr(ref, ':') - 1) AS label, COUNT(*) AS n "
+                              "FROM od_items WHERE dataset = 'imported' AND gone_at IS NULL GROUP BY label")
+            return {r["label"]: r["n"] for r in rows}
+
+    def forget_imports(self, label: str) -> int:
+        with self.connect() as db:
+            cur = db.execute("DELETE FROM od_items WHERE dataset = 'imported' AND ref LIKE ?", (f"{label}:%",))
+            return cur.rowcount
+
     def mark_gone(self, source: str, before: str) -> int:
         """Items not seen by a complete crawl that started at `before` have left the source."""
         table = {"osm": "osm_items", "wikidata": "wd_items"}.get(source)

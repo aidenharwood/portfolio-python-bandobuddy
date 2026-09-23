@@ -149,6 +149,26 @@ rather than doubling it up, and each place links back to the register that liste
 Every register is fetched with its own updater, so one being slow or down never blocks the others, and
 each can be refreshed or paused on its own from the **Data** panel.
 
+### Bring your own records
+
+Not everything worth knowing is open data. The [Defence of Britain archive](https://archaeologydataservice.ac.uk/archives/view/dob/download.cfm)
+(about 20,000 20th-century military sites, Royal Observer Corps monitoring posts among them) is a one-off
+download rather than a service, and your own notes are your own. Import a file and those places join the map
+like any other source:
+
+```bash
+bandobuddy import defence-of-britain.kmz          # CSV, GPX, GeoJSON, KML or KMZ
+bandobuddy import my-spots.csv --label scouting   # name the set yourself
+bandobuddy import --list                          # what's loaded
+bandobuddy import --forget scouting               # take a set back out
+```
+
+CSV columns are matched by the usual names (`name`/`title`, `lat`/`latitude`, `lng`/`lon`/`longitude`, plus
+optional `type`, `notes` and `url`). Records are read the same way as a register: an entry that says
+"ROC monitoring post" is military, one that says "colliery" is underground. Imported places stay in your
+copy of the database - bandobuddy never fetches or publishes them - so whatever licence came with them is
+between you and whoever compiled it.
+
 ## How places are described
 
 Each place gets an **icon for what it was** (military, mines and tunnels, railways, industrial, churches, hospitals

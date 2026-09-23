@@ -15,15 +15,17 @@ from typing import Callable
 
 import requests
 
-from . import extract, opendata, osm, wikidata
+from . import extract, importer, opendata, osm, wikidata
 from .config import DEFAULT_UPDATE_DAYS, GEOFABRIK_UK_URL, UK_BBOX
 from .geo import grid_boxes
 from .sites import build_sites
 from .store import Store
 
-SOURCES = ("osm", "wikidata", *opendata.DATASETS)
+SOURCES = ("osm", "wikidata", *opendata.DATASETS)          # everything that updates itself
+ALL_SOURCES = (*SOURCES, importer.SOURCE)                  # ...plus places you imported yourself
 SOURCE_LABELS = {"osm": "OpenStreetMap", "wikidata": "Wikidata & Wikipedia",
-                 **{key: d.label for key, d in opendata.DATASETS.items()}}
+                 **{key: d.label for key, d in opendata.DATASETS.items()},
+                 importer.SOURCE: "Your own imports"}
 OD_BATCH = 2000               # records held before writing them to the database
 WIKIDATA_BOX_DEG = 0.5
 MAX_TILE_DEPTH = 5            # 0.5 deg -> ~1.7 km boxes at most

@@ -33,7 +33,7 @@ from .config import CATEGORIES, DB_NAME, OTHER_CATEGORY, UK_BBOX, WEAK_BELOW
 from .geo import haversine_m
 from .sites import build_sites
 from .store import Store
-from .updater import SOURCE_LABELS, SOURCES, Updater
+from .updater import ALL_SOURCES, SOURCE_LABELS, SOURCES, Updater
 
 DEFAULT_PORT = 8642
 MAX_BODY_BYTES = 16_000
@@ -89,7 +89,7 @@ def parse_filters(qs: dict[str, list[str]]) -> dict:
     cats = [c for c in one("categories").split(",") if c in CATEGORY_KEYS]
     if cats:
         filters["categories"] = cats
-    srcs = [s for s in one("sources").split(",") if s in SOURCES]
+    srcs = [s for s in one("sources").split(",") if s in ALL_SOURCES]
     if srcs:
         filters["sources"] = srcs
     if one("added_since"):
@@ -117,7 +117,7 @@ class App:
         boot = {
             "version": __version__,
             "categories": [[k, label] for k, label, _ in CATEGORIES] + [list(OTHER_CATEGORY)],
-            "sources": [[s, SOURCE_LABELS[s]] for s in SOURCES],
+            "sources": [[s, SOURCE_LABELS[s]] for s in ALL_SOURCES],
             "credits": [[d.label, d.home, d.attribution] for d in opendata.DATASETS.values()],
             "uk_bbox": UK_BBOX,
             "read_only": self.read_only,

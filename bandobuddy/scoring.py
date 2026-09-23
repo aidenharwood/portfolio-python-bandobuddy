@@ -87,7 +87,7 @@ def _condition_from(evidence: str) -> str | None:
         return "Cave"
     if re.search(r"old (mine|quarry|colliery)|adit|mineshaft|mine_shaft", text):
         return "Old workings"
-    if re.search(r"bunker|pillbox|observation post|observer corps", text):
+    if re.search(r"bunker|pillbox|observation post|observer corps|monitoring post|roc post", text):
         return "Old military"
     if "former" in text:
         return "Former"
