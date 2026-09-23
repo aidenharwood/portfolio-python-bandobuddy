@@ -285,6 +285,12 @@
         <h3>Map style</h3>
         <div class="seg" id="baseSeg"></div>
       </div>
+      <div class="block">
+        <h3>Mining overlays</h3>
+        <div class="checks" id="overlayChecks"></div>
+        <p class="note" style="margin-top:8px">Coal mining data &copy; Mining Remediation Authority, under the
+          Open Government Licence. Drawn straight from their map service, so it isn't searchable or listed.</p>
+      </div>
       <div class="sticky"><button type="button" class="btn accent block" id="applyFilters" data-close>Show places</button></div>
     </div>
 
@@ -370,7 +376,7 @@ const CAT_LABEL = Object.fromEntries(BOOT.categories);
 const catLabel = k => CAT_LABEL[k] || k;
 
 const S = {
-  map: null, bases: null, base: "Map", zoomCtl: null, markers: new Map(), version: -1, mapSeq: 0, listSeq: 0,
+  map: null, bases: null, overlays: {}, base: "Map", zoomCtl: null, markers: new Map(), version: -1, mapSeq: 0, listSeq: 0,
   list: null, listNear: null, selected: null, site: null, status: null, prevVisit: null,
   view: "list", listSnap: "peek",
   loc: { wanted: false, watch: null, pos: null, follow: false, first: false, quiet: false, auto: false, paused: false, warned: false },
@@ -560,6 +566,19 @@ function initMap() {
     Satellite: L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
       maxZoom: 19, attribution: "Imagery &copy; Esri, Maxar, Earthstar Geographics" }),
   };
+  const mining = "https://services-eu1.arcgis.com/Qn4lKcPDVHNivEyr/arcgis/rest/services";
+  const credit = 'Coal mining data &copy; <a href="https://www.gov.uk/guidance/access-coal-mining-information-and-data">Mining Remediation Authority</a>';
+  S.overlays = {
+    mine_entries: { label: "Mine entries (shafts & adits)",
+                    layer: L.tileLayer(`${mining}/Mine_Entries/MapServer/tile/{z}/{y}/{x}`,
+                                       { maxZoom: 19, opacity: 0.9, attribution: credit }) },
+    shallow_workings: { label: "Past shallow coal workings",
+                        layer: L.tileLayer(`${mining}/Past_Shallow_Coal_Mine_Workings/MapServer/tile/{z}/{y}/{x}`,
+                                           { maxZoom: 19, opacity: 0.55, attribution: credit }) },
+    surface_mining: { label: "Surface mining, past and present",
+                      layer: L.tileLayer(`${mining}/Surface_Mining_Past_and_Current/MapServer/tile/{z}/{y}/{x}`,
+                                         { maxZoom: 19, opacity: 0.55, attribution: credit }) },
+  };
   S.base = S.bases[prefs.base] ? prefs.base : "Map";
   S.bases[S.base].addTo(S.map);
   L.control.scale({ imperial: false }).addTo(S.map);
@@ -584,6 +603,21 @@ function initMap() {
     else if (!wide() && S.view === "list" && Sheet.snap !== "peek") Sheet.set("peek");
   });
   renderBaseSeg();
+  renderOverlays(new Set(prefs.overlays || []));
+}
+
+function renderOverlays(on) {
+  $("overlayChecks").innerHTML = Object.entries(S.overlays).map(([key, o]) =>
+    `<label><input type="checkbox" data-overlay="${esc(key)}"${on.has(key) ? " checked" : ""}> ${esc(o.label)}</label>`).join("");
+  for (const key of on) S.overlays[key]?.layer.addTo(S.map);
+}
+
+function toggleOverlay(key, wanted) {
+  const overlay = S.overlays[key];
+  if (!overlay) return;
+  if (wanted) overlay.layer.addTo(S.map);
+  else S.map.removeLayer(overlay.layer);
+  savePrefs({ overlays: [...document.querySelectorAll("#overlayChecks input:checked")].map(i => i.dataset.overlay) });
 }
 
 function syncZoomControl() {
@@ -1108,6 +1142,9 @@ function initFilters() {
   $("baseSeg").addEventListener("click", e => {
     const b = e.target.closest("[data-base]");
     if (b) setBase(b.dataset.base);
+  });
+  $("overlayChecks").addEventListener("change", e => {
+    if (e.target.dataset.overlay) toggleOverlay(e.target.dataset.overlay, e.target.checked);
   });
   renderFilterCount();
 }

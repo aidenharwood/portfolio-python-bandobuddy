@@ -149,6 +149,16 @@ rather than doubling it up, and each place links back to the register that liste
 Every register is fetched with its own updater, so one being slow or down never blocks the others, and
 each can be refreshed or paused on its own from the **Data** panel.
 
+### Mining overlays
+
+The Mining Remediation Authority's record of **175,000 mine entries** (shafts and adits), past shallow coal
+workings and surface mining is published as a map service rather than as data, so those can't be listed or
+searched as places. They can be drawn on the map instead: switch them on under *Mining overlays* in the
+filters. Coal mining data © Mining Remediation Authority, under the Open Government Licence.
+
+Actual mine and quarry *places* still come from OpenStreetMap, Canmore and Coflein, which do publish
+their records as data.
+
 ### Bring your own records
 
 Not everything worth knowing is open data. The [Defence of Britain archive](https://archaeologydataservice.ac.uk/archives/view/dob/download.cfm)
