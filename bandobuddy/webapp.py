@@ -28,7 +28,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 import requests
 
-from . import __version__, export, geocode, imagery
+from . import __version__, export, geocode, imagery, opendata
 from .config import CATEGORIES, DB_NAME, OTHER_CATEGORY, UK_BBOX, WEAK_BELOW
 from .geo import haversine_m
 from .sites import build_sites
@@ -118,6 +118,7 @@ class App:
             "version": __version__,
             "categories": [[k, label] for k, label, _ in CATEGORIES] + [list(OTHER_CATEGORY)],
             "sources": [[s, SOURCE_LABELS[s]] for s in SOURCES],
+            "credits": [[d.label, d.home, d.attribution] for d in opendata.DATASETS.values()],
             "uk_bbox": UK_BBOX,
             "read_only": self.read_only,
         }

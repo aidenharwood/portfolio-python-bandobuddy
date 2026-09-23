@@ -4,11 +4,11 @@
 
 An open-data map of likely-abandoned places across the UK, for urban explorers.
 
-bandobuddy builds its own database of the whole country from **OpenStreetMap** and **Wikidata/Wikipedia**. It works out what each place was and what state it's in, and keeps the data current in the background. The results appear on a phone-friendly map with category icons, the evidence in plain English, open street-level photos, directions, and GPS exports. It uses no proprietary APIs, needs no keys, and costs nothing to run.
+bandobuddy builds its own database of the whole country from **OpenStreetMap**, **Wikidata/Wikipedia** and the UK's **open national registers**. It works out what each place was and what state it's in, and keeps the data current in the background. The results appear on a phone-friendly map with category icons, the evidence in plain English, open street-level photos, directions, and GPS exports. It uses no proprietary APIs, needs no keys, and costs nothing to run.
 
 ## Features
 
-- **Whole-UK coverage.** Reads the full Geofabrik UK extract (~2.3 GB) locally with pyosmium, plus the UK's Wikidata entries.
+- **Whole-UK coverage.** Reads the full Geofabrik UK extract (~2.3 GB) locally with pyosmium, the UK's Wikidata entries, and the open registers below.
 - **Evidence, not scores.** Uses OpenStreetMap lifecycle tags (`abandoned:*`, `disused:*`, ruins, old mines, bunkers, dead railway tunnels), Wikidata state-of-use and closure dates, and wording in Wikipedia intros ("disused", "demolished", "converted to flats").
 - **Stays up to date.** Scheduled refreshes apply OpenStreetMap's daily change files instead of downloading the country again. Places are flagged **NEW** when they appear and dropped when they disappear from the data.
 - **Resumable.** Crawls survive restarts: downloads resume, and the Wikidata crawl remembers which areas are finished.
@@ -24,6 +24,7 @@ flowchart LR
     GF["Geofabrik UK extract<br/>+ daily change files"]
     WD["Wikidata SPARQL<br/>(0.5° boxes, split on timeout)"]
     WP["Wikipedia intros"]
+    OD["Open registers<br/>(Historic England, Canmore,<br/>Coflein, brownfield)"]
   end
   subgraph App["bandobuddy container"]
     UP["Updater<br/>one thread per source,<br/>scheduled + resumable"]
@@ -128,6 +129,25 @@ address. To try location locally, use Chrome's USB port forwarding (`chrome://in
 
 On Windows, if other devices can't connect, allow Python through Windows Firewall for private networks and check the
 Wi-Fi is set to a *Private* network.
+
+## Where the places come from
+
+| Source | Covers | Licence | What it brings |
+|---|---|---|---|
+| [OpenStreetMap](https://www.openstreetmap.org/copyright) | UK | ODbL | Lifecycle tags (`abandoned:*`, `disused:*`, ruins), old mines, bunkers, dead railway tunnels |
+| [Wikidata / Wikipedia](https://www.wikidata.org) | UK | CC0 / CC BY-SA | State of use, closure dates, and what the article says about a place |
+| [Heritage at Risk](https://opendata-historicengland.hub.arcgis.com/) (Historic England) | England | OGL v3 | Listed buildings and scheduled monuments recorded as at risk |
+| [Canmore](https://canmore.org.uk/) (Historic Environment Scotland) | Scotland | OGL v3 | Observation posts, pillboxes, collieries, quarries, mills and the rest of the national record |
+| [Coflein](https://coflein.gov.uk/) (RCAHMW) | Wales | OGL v2 | The same for the National Monuments Record of Wales |
+| [Brownfield registers](https://www.planning.data.gov.uk/dataset/brownfield-land) | England | OGL v3 | Vacant and derelict land councils have registered |
+
+A national register saying a place exists isn't the same as saying it's abandoned, so most register
+entries are weak leads. Military and underground records are the exception: an observation post or a
+colliery shaft is disused by definition. Entries that land on top of a place already on the map join it
+rather than doubling it up, and each place links back to the register that listed it.
+
+Every register is fetched with its own updater, so one being slow or down never blocks the others, and
+each can be refreshed or paused on its own from the **Data** panel.
 
 ## How places are described
 

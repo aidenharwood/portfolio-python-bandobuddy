@@ -15,14 +15,16 @@ from typing import Callable
 
 import requests
 
-from . import extract, osm, wikidata
+from . import extract, opendata, osm, wikidata
 from .config import DEFAULT_UPDATE_DAYS, GEOFABRIK_UK_URL, UK_BBOX
 from .geo import grid_boxes
 from .sites import build_sites
 from .store import Store
 
-SOURCES = ("osm", "wikidata")
-SOURCE_LABELS = {"osm": "OpenStreetMap", "wikidata": "Wikidata & Wikipedia"}
+SOURCES = ("osm", "wikidata", *opendata.DATASETS)
+SOURCE_LABELS = {"osm": "OpenStreetMap", "wikidata": "Wikidata & Wikipedia",
+                 **{key: d.label for key, d in opendata.DATASETS.items()}}
+OD_BATCH = 2000               # records held before writing them to the database
 WIKIDATA_BOX_DEG = 0.5
 MAX_TILE_DEPTH = 5            # 0.5 deg -> ~1.7 km boxes at most
 MAX_BUSY_RETRIES = 8
@@ -41,6 +43,7 @@ class Updater:
         log: Callable[[str], None] = print,
         extract_url: str = GEOFABRIK_UK_URL,
         uk_bbox: tuple[float, float, float, float] = UK_BBOX,
+        sources: tuple[str, ...] = SOURCES,
     ):
         self.store = store
         self.data_dir = data_dir
@@ -54,10 +57,11 @@ class Updater:
         self._last_rebuild = 0.0
         self.sites_version = 0
         self.lines: list[str] = []
+        self.sources = sources
         self.state = {src: {"running": False, "stage": "", "done": 0, "total": None, "error": None,
-                            "paused_by_user": False, "last_attempt": 0.0} for src in SOURCES}
+                            "paused_by_user": False, "last_attempt": 0.0} for src in sources}
         self._threads: dict[str, threading.Thread] = {}
-        self._cancel = {src: threading.Event() for src in SOURCES}
+        self._cancel = {src: threading.Event() for src in sources}
         self.polite_delay = POLITE_DELAY_S
         self.intro_delay = 0.2
 
@@ -109,7 +113,12 @@ class Updater:
 
     def _run_safely(self, source: str) -> None:
         try:
-            (self._run_osm if source == "osm" else self._run_wikidata)()
+            if source == "osm":
+                self._run_osm()
+            elif source == "wikidata":
+                self._run_wikidata()
+            else:
+                self._run_opendata(source)
         except osm.Cancelled:
             self.log(f"{SOURCE_LABELS[source]}: paused")
         except Exception as exc:  # keep the app alive; show the problem in the UI
@@ -129,7 +138,7 @@ class Updater:
         days = self.store.get_setting("update_days", DEFAULT_UPDATE_DAYS)
         due = []
         now = datetime.now(timezone.utc)
-        for src in SOURCES:
+        for src in self.sources:
             st = self.state[src]
             if st["running"] or st["paused_by_user"]:
                 continue
@@ -144,7 +153,7 @@ class Updater:
     def status(self) -> dict:
         days = self.store.get_setting("update_days", DEFAULT_UPDATE_DAYS)
         sources = {}
-        for src in SOURCES:
+        for src in self.sources:
             with self._lock:
                 st = {k: v for k, v in self.state[src].items() if k != "last_attempt"}
             last = self.store.last_finished(src)
@@ -218,6 +227,35 @@ class Updater:
             self.store.upsert_osm(items, seen_at)
             self.log(f"OpenStreetMap: {len(items):,} tagged places")
             self._finish("osm", crawl, complete=True)
+        except osm.Cancelled:
+            self.store.set_crawl_status(crawl["id"], "paused")
+            raise
+
+    # -- open registers ----------------------------------------------------------------------------------
+    def _run_opendata(self, key: str) -> None:
+        """Historic England, Canmore, Coflein, brownfield registers: fetch the lot, keep what counts."""
+        dataset = opendata.DATASETS[key]
+        cancel = self._cancel[key]
+        progress = self._progress(key)
+        session = self.session_factory()
+        crawl = self.store.unfinished_crawl(key) or self.store.start_crawl(key)
+        self.store.set_crawl_status(crawl["id"], "running")
+        seen_at = crawl["started_at"]
+        batch: list[dict] = []
+        kept = 0
+        try:
+            for item in opendata.collect(dataset, session, progress, cancel):
+                batch.append(item)
+                if len(batch) >= OD_BATCH:
+                    self.store.upsert_od(batch, seen_at)
+                    kept += len(batch)
+                    batch = []
+                    self.rebuild()
+            if batch:
+                self.store.upsert_od(batch, seen_at)
+                kept += len(batch)
+            self.log(f"{dataset.label}: {kept:,} records worth keeping")
+            self._finish(key, crawl, complete=True)
         except osm.Cancelled:
             self.store.set_crawl_status(crawl["id"], "paused")
             raise

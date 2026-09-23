@@ -6,6 +6,7 @@ import io
 from html import escape
 
 from .config import CATEGORIES, OTHER_CATEGORY
+from .opendata import DATASETS
 
 _LABELS = {k: label for k, label, _ in CATEGORIES} | {OTHER_CATEGORY[0]: OTHER_CATEGORY[1]}
 
@@ -31,6 +32,10 @@ def links(site: dict) -> dict[str, str]:
         out["wikipedia"] = wiki
     if wd:
         out["wikidata"] = wd[0]["url"]
+    registers = [{"label": DATASETS[e["source"]].label if e["source"] in DATASETS else e["source"], "url": e["url"]}
+                 for e in (detail.get("open") or []) if e.get("url")]
+    if registers:
+        out["registers"] = registers
     return out
 
 

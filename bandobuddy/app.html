@@ -270,10 +270,7 @@
       </div>
       <div class="block">
         <h3>Found in</h3>
-        <div class="checks">
-          <label><input type="checkbox" id="srcOsm" checked> OpenStreetMap</label>
-          <label><input type="checkbox" id="srcWiki" checked> Wikidata</label>
-        </div>
+        <div class="checks" id="srcChecks"></div>
       </div>
       <div class="block">
         <h3>Added</h3>
@@ -308,6 +305,7 @@
       </div>
       <details class="box" id="logBox"><summary>Log</summary><div><pre class="log" id="log"></pre></div></details>
       <p class="note" id="publicNote" style="margin-top:12px" hidden>This public copy refreshes itself automatically.</p>
+      <p class="credits" id="registerCredits" style="margin-top:12px"></p>
       <p class="credits" style="margin-top:12px">Map tiles &copy; OpenStreetMap contributors, OpenTopoMap and Esri. Photos from
         <a href="https://panoramax.fr" target="_blank" rel="noopener">Panoramax</a>. Search by
         <a href="https://nominatim.org" target="_blank" rel="noopener">Nominatim</a>. Source code on
@@ -687,17 +685,21 @@ function filterParams() {
   const cats = selectedCats();
   if (cats.length && cats.length < BOOT.categories.length) p.set("categories", cats.join(","));
   if ($("weak").checked) p.set("weak", "1");
-  const srcs = [$("srcOsm").checked && "osm", $("srcWiki").checked && "wikidata"].filter(Boolean);
-  if (srcs.length === 1) p.set("sources", srcs[0]);
+  const srcs = pickedSources();
+  if (srcs.length && srcs.length < BOOT.sources.length) p.set("sources", srcs.join(","));
   const mode = $("newMode").value;
   if (mode === "visit" && S.prevVisit) p.set("added_since", S.prevVisit);
   else if (mode === "30" || mode === "90") p.set("added_since", new Date(Date.now() - Number(mode) * 864e5).toISOString());
   return p;
 }
 
+function pickedSources() {
+  return [...document.querySelectorAll("#srcChecks input:checked")].map(i => i.value);
+}
+
 function renderFilterCount() {
   const n = (selectedCats().length < BOOT.categories.length) + $("weak").checked
-    + ($("srcOsm").checked !== $("srcWiki").checked) + !!$("newMode").value;
+    + (pickedSources().length < BOOT.sources.length) + !!$("newMode").value;
   $("filterCount").textContent = n;
   $("filterCount").hidden = !n;
 }
@@ -821,7 +823,7 @@ function directions(site) {
   return { href: `https://www.openstreetmap.org/directions?route=${encodeURIComponent(`${from};${to}`)}`, external: true };
 }
 
-const SOURCE_NAMES = { osm: "OpenStreetMap", wikidata: "Wikidata" };
+const SOURCE_NAMES = Object.fromEntries(BOOT.sources);
 
 function renderSite(site) {
   const lk = site.links;
@@ -830,7 +832,7 @@ function renderSite(site) {
   const strength = site.strength === "strong" ? '<span class="tag strong">Strong evidence</span>'
     : site.strength === "weak" ? '<span class="tag">Weak lead</span>' : "";
   const more = [["OpenStreetMap", lk.osm_element || lk.openstreetmap], ["Wikipedia", lk.wikipedia], ["Wikidata", lk.wikidata],
-                ["Mapillary", lk.mapillary]]
+                ...(lk.registers || []).map(r => [r.label, r.url]), ["Mapillary", lk.mapillary]]
     .filter(([, url]) => url)
     .map(([label, url]) => `<a class="btn small" href="${safeUrl(url)}" target="_blank" rel="noopener">${esc(label)} ↗</a>`).join("");
   const osm = (site.detail.osm || [])[0];
@@ -1070,11 +1072,12 @@ function initFilters() {
   $("catChips").innerHTML = BOOT.categories.map(([k, label]) =>
     `<button type="button" class="cat" data-cat="${esc(k)}" style="--c:${colour(k)}" aria-pressed="${on.has(k)}">${badge(k, "sm")}<span>${esc(label)}</span></button>`).join("");
   $("weak").checked = !!prefs.weak;
-  $("srcOsm").checked = prefs.srcOsm ?? true;
-  $("srcWiki").checked = prefs.srcWiki ?? true;
+  const onSources = new Set(prefs.sources || BOOT.sources.map(s => s[0]));
+  $("srcChecks").innerHTML = BOOT.sources.map(([key, label]) =>
+    `<label><input type="checkbox" value="${esc(key)}"${onSources.has(key) ? " checked" : ""}> ${esc(label)}</label>`).join("");
 
   const changed = () => {
-    savePrefs({ categories: selectedCats(), weak: $("weak").checked, srcOsm: $("srcOsm").checked, srcWiki: $("srcWiki").checked });
+    savePrefs({ categories: selectedCats(), weak: $("weak").checked, sources: pickedSources() });
     renderFilterCount();
     scheduleFetch(0);
   };
@@ -1090,15 +1093,15 @@ function initFilters() {
     changed();
   });
   $("weak").addEventListener("change", changed);
-  for (const id of ["srcOsm", "srcWiki"]) $(id).addEventListener("change", () => {
-    if (!$("srcOsm").checked && !$("srcWiki").checked) $(id).checked = true;
+  $("srcChecks").addEventListener("change", e => {
+    if (!pickedSources().length) e.target.checked = true;  // never filter out everything
     changed();
   });
   $("newMode").addEventListener("change", changed);
   $("resetFilters").addEventListener("click", () => {
     for (const c of document.querySelectorAll("#catChips .cat")) c.setAttribute("aria-pressed", "true");
     $("weak").checked = false;
-    $("srcOsm").checked = $("srcWiki").checked = true;
+    for (const box of document.querySelectorAll("#srcChecks input")) box.checked = true;
     $("newMode").value = "";
     changed();
   });
@@ -1116,6 +1119,10 @@ function initControls() {
   $("locBtn").innerHTML = svg(UI.locate);
   for (const b of document.querySelectorAll("[data-close]:empty")) b.innerHTML = svg(UI.close);
   $("versionText").textContent = `Version ${BOOT.version}.`;
+  $("registerCredits").innerHTML = "Places also come from open national registers: "
+    + (BOOT.credits || []).map(([label, home, attribution]) =>
+        `<a href="${safeUrl(home)}" target="_blank" rel="noopener" title="${esc(attribution)}">${esc(label)}</a>`).join(", ")
+    + ". Each is used under the Open Government Licence.";
 
   $("menuBtn").addEventListener("click", () => (S.view === "data" ? backToList() : show("data", "full")));
   $("filterBtn").addEventListener("click", () => (S.view === "filters" ? backToList() : show("filters", "full")));

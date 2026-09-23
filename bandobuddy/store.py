@@ -24,6 +24,11 @@ CREATE TABLE IF NOT EXISTS wd_items (
     qid TEXT PRIMARY KEY, label TEXT, lat REAL, lng REAL, types TEXT, states TEXT, ended TEXT, wiki TEXT,
     first_seen TEXT, last_seen TEXT, gone_at TEXT
 );
+CREATE TABLE IF NOT EXISTS od_items (
+    dataset TEXT, ref TEXT, name TEXT, lat REAL, lng REAL, kind TEXT, evidence TEXT, weight INTEGER, url TEXT,
+    first_seen TEXT, last_seen TEXT, gone_at TEXT,
+    PRIMARY KEY (dataset, ref)
+);
 CREATE TABLE IF NOT EXISTS intros (title TEXT PRIMARY KEY, extract TEXT, fetched_at TEXT);
 CREATE TABLE IF NOT EXISTS crawls (
     id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT, started_at TEXT, finished_at TEXT, status TEXT, note TEXT
@@ -108,12 +113,37 @@ class Store:
                 rows,
             )
 
+    def upsert_od(self, items: Iterable[dict], seen_at: str) -> None:
+        """Records from an open register (Historic England, Canmore, Coflein, brownfield...)."""
+        rows = [(i["dataset"], i["ref"], i["name"], i["lat"], i["lng"], i["kind"], i["evidence"], i["weight"],
+                 i.get("url"), seen_at, seen_at) for i in items]
+        with self.connect() as db:
+            db.executemany(
+                """INSERT INTO od_items (dataset, ref, name, lat, lng, kind, evidence, weight, url,
+                   first_seen, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(dataset, ref) DO UPDATE SET name = excluded.name, lat = excluded.lat,
+                   lng = excluded.lng, kind = excluded.kind, evidence = excluded.evidence,
+                   weight = excluded.weight, url = excluded.url, last_seen = excluded.last_seen, gone_at = NULL""",
+                rows,
+            )
+
+    def active_od(self, dataset: str | None = None) -> list[dict]:
+        where = "gone_at IS NULL" + (" AND dataset = ?" if dataset else "")
+        with self.connect() as db:
+            rows = db.execute(f"SELECT * FROM od_items WHERE {where} ORDER BY dataset, ref",
+                              (dataset,) if dataset else ())
+            return [dict(r) for r in rows]
+
     def mark_gone(self, source: str, before: str) -> int:
         """Items not seen by a complete crawl that started at `before` have left the source."""
-        table = {"osm": "osm_items", "wikidata": "wd_items"}[source]
+        table = {"osm": "osm_items", "wikidata": "wd_items"}.get(source)
         with self.connect() as db:
-            cur = db.execute(f"UPDATE {table} SET gone_at = ? WHERE last_seen < ? AND gone_at IS NULL",
-                             (now_iso(), before))
+            if table:
+                cur = db.execute(f"UPDATE {table} SET gone_at = ? WHERE last_seen < ? AND gone_at IS NULL",
+                                 (now_iso(), before))
+            else:  # one of the open registers
+                cur = db.execute("UPDATE od_items SET gone_at = ? WHERE dataset = ? AND last_seen < ? "
+                                 "AND gone_at IS NULL", (now_iso(), source, before))
             return cur.rowcount
 
     def active_osm(self) -> list[dict]:
@@ -131,10 +161,14 @@ class Store:
 
     def count_items(self) -> dict:
         with self.connect() as db:
-            return {
+            counts = {
                 "osm": db.execute("SELECT COUNT(*) FROM osm_items WHERE gone_at IS NULL").fetchone()[0],
                 "wikidata": db.execute("SELECT COUNT(*) FROM wd_items WHERE gone_at IS NULL").fetchone()[0],
             }
+            for row in db.execute("SELECT dataset, COUNT(*) AS n FROM od_items WHERE gone_at IS NULL "
+                                  "GROUP BY dataset"):
+                counts[row["dataset"]] = row["n"]
+        return counts
 
     # -- Wikipedia intro cache -------------------------------------------------------------
     def intros(self) -> dict[str, str]:
