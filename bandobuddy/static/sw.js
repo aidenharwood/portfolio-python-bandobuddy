@@ -26,7 +26,7 @@ const SHELL_URLS = [
 const TILE_HOSTS = ["tile.openstreetmap.org", "tile.opentopomap.org", "server.arcgisonline.com",
                     "services-eu1.arcgis.com"];
 // Worth keeping offline; anything else (status, search, photos, exports) is live-only.
-const KEEPABLE = /^\/api\/(map|list|site\/)/;
+const KEEPABLE = /^\/api\/(map|list|site\/|access)/;
 
 self.addEventListener("install", event => {
   event.waitUntil((async () => {

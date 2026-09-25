@@ -133,6 +133,11 @@
   .mark.want { color:#ca8a04 } .mark.want .ico { fill:currentColor } .mark.been { color:#15803d }
   .act[aria-pressed="true"] { background:var(--raised); border-color:var(--accent) }
   .act.want[aria-pressed="true"] .ico { fill:currentColor }
+  .way { display:grid; grid-template-columns:22px 1fr auto; gap:10px; align-items:center; width:100%; min-height:44px;
+    padding:6px 0; border:0; border-bottom:1px solid var(--line); background:transparent; color:var(--ink); text-align:left }
+  .way .ico { color:var(--muted) } .way small { color:var(--muted) }
+  .way-private { display:flex; gap:6px; align-items:center; margin-top:8px !important } .way-private .ico { width:16px; height:16px }
+  #getThere > p.note:last-child { margin-top:8px }
   textarea.notes { width:100%; min-height:84px; padding:10px; border:1px solid var(--line); border-radius:10px;
     background:var(--raised); color:var(--ink); font:inherit; resize:vertical }
   .headbtn { flex:none; display:inline-flex; align-items:center; gap:4px; padding:6px 10px; border:1px solid var(--line);
@@ -440,6 +445,10 @@ const UI = {
   copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/>',
   new: '<path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/>',
   star: '<path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.5 9.7l5.9-.9z"/>',
+  walk: '<circle cx="13" cy="4.5" r="1.8"/><path d="M9 21l2.5-6.5L14 17v4M11.5 14.5l.8-5.5 3.2 3 2.5.5M12.3 9L9 10.5 7.5 13.5"/>',
+  trail: '<path d="M6 21c1.5-3 4.5-4 6-7s3.5-5 6.5-7.5" stroke-dasharray="2.5 2.5"/><circle cx="18.5" cy="6" r="1.5"/>',
+  parking: '<rect x="4" y="3" width="16" height="18" rx="3"/><path d="M10 17V7h3.2a3 3 0 0 1 0 6H10"/>',
+  lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
   check: '<path d="M4.5 12.5l4.5 4.5L19.5 7"/>',
   refresh: '<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/>',
 };
@@ -941,6 +950,7 @@ async function openSite(key, { pan = false, push = true } = {}) {
   else ensureVisible([site.lat, site.lng]);
   renderSite(site);
   loadPhotos(site);
+  loadAccess(site);
 }
 
 function closeSite(popping = false) {
@@ -1000,6 +1010,7 @@ function renderSite(site) {
     <div class="block"><h3>Why it's on the map${strength}</h3>
       <ul class="reasons">${site.reasons.map(r => `<li>${esc(r)}</li>`).join("")}</ul></div>
     <div class="block"><h3>Street-level photos</h3><div class="photos" id="photos"><p class="note">Looking…</p></div></div>
+    <div class="block"><h3>Getting there</h3><div id="getThere"><p class="note">Looking at the paths around it…</p></div></div>
     <div class="block"><h3>Your notes</h3>
       <textarea class="notes" id="noteBox" placeholder="Access, what's inside, when you went… Only kept on this device.">${esc((S.saved[site.key] || {}).note || "")}</textarea></div>
     <div class="block"><h3>More about it</h3>
@@ -1008,6 +1019,38 @@ function renderSite(site) {
       ${tags ? `<details class="box"><summary>OpenStreetMap tags</summary><div><table class="tags">${tags}</table></div></details>` : ""}
     </div>
     <p class="note">Being on this map doesn't mean you can go in. Check who owns it, and stay off anything posted or secured.</p>`;
+}
+
+async function loadAccess(site) {
+  let data;
+  try { data = await api(`/api/access?lat=${site.lat}&lng=${site.lng}`); } catch (err) {
+    if (S.selected === site.key && $("getThere")) $("getThere").innerHTML = `<p class="note">${esc(err.message)}</p>`;
+    return;
+  }
+  if (S.selected !== site.key || !$("getThere")) return;
+  const row = (icon, title, extra, point) => `
+    <button type="button" class="way" data-point="${point.lat},${point.lng}" data-label="${esc(title)}">
+      ${svg(icon)}<span><b>${esc(title)}</b>${extra ? ` <small>${esc(extra)}</small>` : ""}</span>
+      <span class="dist">${fmtDist(point.distance_m)} ${esc(point.direction)}</span></button>`;
+  const rows = [];
+  const r = data.right_of_way;
+  if (r) rows.push(row(UI.walk, r.kind, r.ref || "", r));
+  const p = data.path;
+  if (p) rows.push(row(UI.trail, p.kind, p.permissive ? "permissive" : p.foot_allowed ? "on foot" : "access not stated", p));
+  const car = data.parking;
+  if (car) rows.push(row(UI.parking, car.name || "Parking", car.fee ? "pay" : "", car));
+  const closed = data.private.length
+    ? `<p class="note way-private">${svg(UI.lock)} Mapped as private right beside it: ${esc(data.private.join(", "))}.</p>` : "";
+  $("getThere").innerHTML = (rows.length ? rows.join("") : `<p class="note">No paths or parking mapped within 400 m.</p>`)
+    + closed + `<p class="note">From OpenStreetMap. Check rights of way on the council's definitive map before you rely on them.</p>`;
+}
+
+function showPoint(lat, lng, label) {
+  const at = L.latLng(lat, lng);
+  const dot = L.circleMarker(at, { radius: 9, color: "#fff", weight: 3, fillColor: "#0f172a", fillOpacity: 0.9 })
+    .bindTooltip(label, { permanent: true, direction: "top", offset: [0, -8] }).addTo(S.selLayer);
+  if (S.site) S.map.fitBounds(L.latLngBounds([at, [S.site.lat, S.site.lng]]), { ...mapPadding(), maxZoom: 17 });
+  setTimeout(() => S.selLayer.removeLayer(dot), 8000);
 }
 
 async function loadPhotos(site) {
@@ -1347,6 +1390,8 @@ function initControls() {
     if (e.target.closest("[data-share]") && S.site) { shareSite(S.site); return; }
     const save = e.target.closest("[data-save]");
     if (save && S.site) { toggleSaved(S.site, save.dataset.save); return; }
+    const way = e.target.closest("[data-point]");
+    if (way) { const [lat, lng] = way.dataset.point.split(",").map(Number); showPoint(lat, lng, way.dataset.label); return; }
     const savedRow = e.target.closest("[data-saved-key]");
     if (savedRow) { openSite(savedRow.dataset.savedKey, { pan: true }); return; }
     const tab = e.target.closest("[data-tab]");

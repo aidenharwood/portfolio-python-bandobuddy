@@ -228,6 +228,9 @@ Places with only weak evidence are **weaker leads**: hidden unless you turn on *
 
 - Places come from © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors (ODbL), [Wikidata](https://www.wikidata.org) (CC0) and [Wikipedia](https://en.wikipedia.org) (CC BY-SA).
 - Photos come from [Panoramax](https://panoramax.fr) (CC BY-SA). Search uses [Nominatim](https://nominatim.org).
+- *Getting there* (the nearest public right of way, other paths, parking, and anything mapped as private right
+  beside a place) is asked of OpenStreetMap's [Overpass API](https://overpass-api.de) for a few hundred metres
+  around a place when someone opens it, one request at a time and cached for a week.
 - Map tiles come from OpenStreetMap and OpenTopoMap, plus Esri imagery (free to use, not open data).
 - The app queries these community services politely: one Wikidata query at a time with pauses, Nominatim at most once a second, and repeat look-ups cached.
 
