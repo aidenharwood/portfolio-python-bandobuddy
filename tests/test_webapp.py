@@ -70,6 +70,7 @@ class WebAppTests(unittest.TestCase):
         page = page.decode()
         self.assertIn('rel="manifest"', page)
         self.assertIn('navigator.serviceWorker.register("/sw.js")', page)
+        self.assertIn('id="view-saved"', page)            # saved places, kept on the device
 
         status, raw, resp = self.request("GET", "/manifest.webmanifest")
         self.assertEqual(status, 200)
@@ -129,7 +130,9 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(data["total"], 0)
         _, data, _ = self.request("GET", "/api/list?weak=1&added_since=2000-01-01T00:00:00Z&limit=0")
         self.assertEqual((data["total"], data["sites"]), (0, []))  # first build: nothing is "new"
-        for bad in ("bbox=nonsense", "near=here", "limit=lots"):
+        _, data, _ = self.request("GET", f"/api/list?{view}&weak=1&sort=newest&near=51.5,-0.12")
+        self.assertEqual(data["total"], len(data["sites"]))            # every place, newest first
+        for bad in ("bbox=nonsense", "near=here", "limit=lots", "sort=sideways"):
             self.assertEqual(self.request("GET", f"/api/list?{bad}")[0], 400, bad)
 
     def test_map_view(self):

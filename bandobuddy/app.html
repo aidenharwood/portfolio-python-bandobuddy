@@ -123,6 +123,21 @@
   .pin .ico { width:64%; height:64% }
   .pin.weak { inset:6px; opacity:.85; border-width:1.5px }
   .pin.weak .ico { stroke-width:2.4 }
+  .pin.been { opacity:.55; filter:saturate(.6) }
+  .pin-mark { position:absolute; bottom:-4px; right:-4px; width:16px; height:16px; border-radius:50%; background:#fff;
+    color:#1c1917; display:grid; place-items:center; box-shadow:0 1px 3px rgba(0,0,0,.45) }
+  .pin-mark .ico { width:11px; height:11px; stroke-width:3 }
+  .pin-mark.want { color:#ca8a04 } .pin-mark.want .ico { fill:currentColor }
+  .pin-mark.been { color:#15803d }
+  .mark { display:inline-flex; vertical-align:-2px; margin-left:6px } .mark .ico { width:15px; height:15px }
+  .mark.want { color:#ca8a04 } .mark.want .ico { fill:currentColor } .mark.been { color:#15803d }
+  .act[aria-pressed="true"] { background:var(--raised); border-color:var(--accent) }
+  .act.want[aria-pressed="true"] .ico { fill:currentColor }
+  textarea.notes { width:100%; min-height:84px; padding:10px; border:1px solid var(--line); border-radius:10px;
+    background:var(--raised); color:var(--ink); font:inherit; resize:vertical }
+  .headbtn { flex:none; display:inline-flex; align-items:center; gap:4px; padding:6px 10px; border:1px solid var(--line);
+    border-radius:999px; background:var(--panel); color:var(--ink); font-size:13px; font-weight:600 }
+  .headbtn .ico { width:15px; height:15px; color:#ca8a04; fill:#ca8a04 }
   .pin-new { position:absolute; top:-3px; right:-3px; width:10px; height:10px; border-radius:50%; background:#f97316; border:2px solid #fff }
   .sel { width:46px; height:46px; border-radius:50% 50% 50% 0; transform:rotate(-45deg); background:var(--c); border:3px solid #fff;
     box-shadow:-2px 3px 8px rgba(0,0,0,.45); display:grid; place-items:center }
@@ -212,6 +227,8 @@
   .seg button { flex:1; padding:9px; border:0; background:transparent; font-size:14px }
   .seg button + button { border-left:1px solid var(--line) }
   .seg button[aria-pressed="true"] { background:var(--ink); color:var(--panel) }
+  .seg.sorts { margin:0 0 10px }
+  .seg.sorts button { padding:7px; font-size:13px }
   .sticky { position:sticky; bottom:0; padding:12px 0 4px; background:linear-gradient(transparent, var(--panel) 30%) }
 
   /* data & updates */
@@ -250,6 +267,12 @@
     <div id="view-list">
       <div class="head" data-drag>
         <div class="grow"><h2 id="listTitle">Loading places…</h2><p id="listSub"></p></div>
+        <button type="button" class="headbtn" id="savedBtn" aria-label="Your saved places"></button>
+      </div>
+      <div class="seg sorts" id="sortSeg" role="group" aria-label="Order the list">
+        <button type="button" data-sort="nearest">Nearest</button>
+        <button type="button" data-sort="evidence">Strongest</button>
+        <button type="button" data-sort="newest">Newest</button>
       </div>
       <button type="button" class="card" id="statusCard" hidden></button>
       <button type="button" class="card loc" id="locCard" hidden></button>
@@ -268,6 +291,25 @@
 
     <!-- One place -->
     <div id="view-site" hidden><div id="detail"></div></div>
+
+    <!-- Your saved places: kept on this device -->
+    <div id="view-saved" hidden>
+      <div class="head" data-drag>
+        <div class="grow"><h2>Saved places</h2><p id="savedSub"></p></div>
+        <button type="button" class="icon-btn" data-close aria-label="Close saved places"></button>
+      </div>
+      <div class="seg sorts" id="savedSeg" role="group" aria-label="Which saved places">
+        <button type="button" data-tab="want">To visit</button>
+        <button type="button" data-tab="been">Been</button>
+      </div>
+      <ul class="list" id="savedList"></ul>
+      <p class="note" id="savedNote" hidden></p>
+      <div class="foot">
+        <div class="exports"><button type="button" class="btn small" id="savedGpx">Download as GPX</button>
+          <span class="note">for OsmAnd, Organic Maps or any GPS app</span></div>
+        <p class="credits">Saved places and notes stay on this device. Clearing the browser's site data removes them.</p>
+      </div>
+    </div>
 
     <!-- Filters -->
     <div id="view-filters" hidden>
@@ -390,6 +432,8 @@ const UI = {
   person: '<circle cx="12" cy="5" r="2.5"/><path d="M9 21v-6H7.5v-4a2 2 0 0 1 2-2h5a2 2 0 0 1 2 2v4H15v6"/>',
   copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/>',
   new: '<path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/>',
+  star: '<path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.5 9.7l5.9-.9z"/>',
+  check: '<path d="M4.5 12.5l4.5 4.5L19.5 7"/>',
   refresh: '<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/>',
 };
 const svg = (paths, cls = "") => `<svg class="ico ${cls}" viewBox="0 0 24 24" aria-hidden="true">${paths}</svg>`;
@@ -402,8 +446,8 @@ const catLabel = k => CAT_LABEL[k] || k;
 const S = {
   map: null, bases: null, overlays: {}, base: "Map", zoomCtl: null, markers: new Map(), version: -1, mapSeq: 0, listSeq: 0,
   list: null, listNear: null, selected: null, site: null, status: null, prevVisit: null,
-  view: "list", listSnap: "peek",
-  wakeLock: null, installPrompt: null,
+  view: "list", listSnap: "peek", sort: "nearest",
+  wakeLock: null, installPrompt: null, saved: {}, savedTab: "want", lastMap: null,
   loc: { wanted: false, watch: null, pos: null, follow: false, first: false, quiet: false, auto: false, paused: false, warned: false },
   me: { dot: null, acc: null },
 };
@@ -537,7 +581,7 @@ function show(view, snap) {
     if (location.hash) history.replaceState(null, "", location.pathname + location.search);
   }
   S.view = view;
-  for (const v of ["list", "site", "filters", "data"]) $(`view-${v}`).hidden = v !== view;
+  for (const v of ["list", "site", "saved", "filters", "data"]) $(`view-${v}`).hidden = v !== view;
   $("sheetBody").scrollTop = 0;
   if (snap && !wide()) Sheet.set(snap);
 }
@@ -659,21 +703,26 @@ function setBase(name) {
   renderBaseSeg();
 }
 
+function renderSortSeg() {
+  for (const b of document.querySelectorAll("#sortSeg [data-sort]")) b.setAttribute("aria-pressed", String(b.dataset.sort === S.sort));
+}
+
 function renderBaseSeg() {
   $("baseSeg").innerHTML = Object.keys(S.bases).map(n =>
     `<button type="button" data-base="${n}" aria-pressed="${n === S.base}">${n}</button>`).join("");
 }
 
 const Z_BY_STRENGTH = { strong: 300, good: 200, weak: 0 };
-const sigOf = s => `${s.category}|${s.strength}|${s.added ? 1 : 0}|${s.name}`;
+const sigOf = s => `${s.category}|${s.strength}|${s.added ? 1 : 0}|${s.name}|${savedState(s.key)}`;
 
 function siteIcon(s) {
   const size = s.strength === "weak" ? 32 : 40;  // the pin is drawn smaller; the rest is a bigger tap target
   return L.divIcon({ className: "bb-icon", iconSize: [size, size],
-    html: `<div class="pin ${esc(s.strength)}" style="--c:${colour(s.category)}">${catIcon(s.category)}${s.added ? '<i class="pin-new"></i>' : ""}</div>` });
+    html: `<div class="pin ${esc(s.strength)} ${savedState(s.key)}" style="--c:${colour(s.category)}">${catIcon(s.category)}${s.added ? '<i class="pin-new"></i>' : ""}${pinMark(s.key)}</div>` });
 }
 
 function renderMap(data) {
+  S.lastMap = data;
   S.clusterLayer.clearLayers();
   for (const c of data.clusters) {
     const size = c.count < 10 ? 36 : c.count < 100 ? 42 : c.count < 1000 ? 48 : 54;
@@ -813,6 +862,7 @@ async function fetchList() {
   const near = S.loc.pos || area.centre;
   p.set("bbox", bboxOf(b));
   p.set("near", nearOf(near));
+  p.set("sort", S.sort);
   p.set("limit", String(LIST_LIMIT));
   const seq = ++S.listSeq;
   let view;
@@ -831,17 +881,19 @@ function renderList() {
   const n = d.total;
   const noData = S.status && !S.status.sites.total;
   $("listTitle").textContent = n ? `${fmtN(n)} place${n === 1 ? "" : "s"} in view` : "No places in view";
-  $("listSub").textContent = n ? (S.listNear === "you" ? "Nearest to you first" : "Nearest to the middle of the map first")
+  const order = { evidence: "Strongest evidence first", newest: "Most recently added first" }[S.sort];
+  $("listSub").textContent = n ? (order || (S.listNear === "you" ? "Nearest to you first" : "Nearest to the middle of the map first"))
     : noData ? "The UK database is still being built" : "Zoom out, move the map or loosen the filters";
   $("applyFilters").textContent = n ? `Show ${fmtN(n)} place${n === 1 ? "" : "s"}` : "No places match here";
   renderLocCard();
   $("list").innerHTML = d.sites.map(s => `
     <li><button type="button" class="item ${esc(s.strength)}" data-key="${esc(s.key)}">
       ${badge(s.category)}
-      <span><span class="name">${esc(s.name)}${s.added ? '<span class="new">NEW</span>' : ""}</span>
+      <span><span class="name">${esc(s.name)}${s.added ? '<span class="new">NEW</span>' : ""}${listMark(s.key)}</span>
         <span class="meta">${esc(s.condition)} · ${esc(catLabel(s.category))}</span></span>
       <span class="dist">${fmtDist(s.distance_m)}</span>
     </button></li>`).join("");
+  renderSavedBtn();
   const note = $("listNote");
   note.hidden = !(n > d.sites.length || (!n && noData));
   note.textContent = n > d.sites.length ? `Showing the nearest ${d.sites.length} of ${fmtN(n)}. Zoom in to see the rest.`
@@ -932,6 +984,8 @@ function renderSite(site) {
     </div>
     <div class="actions">
       <a class="act primary" href="${esc(nav.href)}"${nav.external ? ' target="_blank" rel="noopener"' : ""}>${svg(UI.nav)}Directions</a>
+      <button type="button" class="act want" data-save="want" aria-pressed="${savedState(site.key) === "want"}">${svg(UI.star)}${savedState(site.key) === "want" ? "Saved" : "Save"}</button>
+      <button type="button" class="act" data-save="been" aria-pressed="${savedState(site.key) === "been"}">${svg(UI.check)}Been here</button>
       <button type="button" class="act" data-share>${svg(UI.share)}Share</button>
       <a class="act" href="${safeUrl(lk.streetview)}" target="_blank" rel="noopener">${svg(UI.person)}Street View</a>
       <button type="button" class="act" data-copy="${coords}">${svg(UI.copy)}Copy location</button>
@@ -939,6 +993,8 @@ function renderSite(site) {
     <div class="block"><h3>Why it's on the map${strength}</h3>
       <ul class="reasons">${site.reasons.map(r => `<li>${esc(r)}</li>`).join("")}</ul></div>
     <div class="block"><h3>Street-level photos</h3><div class="photos" id="photos"><p class="note">Looking…</p></div></div>
+    <div class="block"><h3>Your notes</h3>
+      <textarea class="notes" id="noteBox" placeholder="Access, what's inside, when you went… Only kept on this device.">${esc((S.saved[site.key] || {}).note || "")}</textarea></div>
     <div class="block"><h3>More about it</h3>
       <div class="links">${more}</div>
       <p class="note">${coords} · found in ${esc(sources)} · first seen ${esc((site.first_seen || "").slice(0, 10))}</p>
@@ -1224,6 +1280,17 @@ function initFilters() {
     $("newMode").value = "";
     changed();
   });
+  S.sort = ["nearest", "evidence", "newest"].includes(prefs.sort) ? prefs.sort : "nearest";
+  renderSortSeg();
+  $("sortSeg").addEventListener("click", e => {
+    const b = e.target.closest("[data-sort]");
+    if (!b || b.dataset.sort === S.sort) return;
+    S.sort = b.dataset.sort;
+    savePrefs({ sort: S.sort });
+    renderSortSeg();
+    $("sheetBody").scrollTop = 0;
+    fetchList();
+  });
   $("baseSeg").addEventListener("click", e => {
     const b = e.target.closest("[data-base]");
     if (b) setBase(b.dataset.base);
@@ -1249,6 +1316,14 @@ function initControls() {
   $("menuBtn").addEventListener("click", () => (S.view === "data" ? backToList() : show("data", "full")));
   $("filterBtn").addEventListener("click", () => (S.view === "filters" ? backToList() : show("filters", "full")));
   $("statusCard").addEventListener("click", () => show("data", "full"));
+  S.saved = loadSaved();
+  renderSavedBtn();
+  $("savedBtn").addEventListener("click", () => { show("saved", "full"); renderSaved(); });
+  $("savedGpx").addEventListener("click", savedGpx);
+  $("sheet").addEventListener("input", e => { if (e.target.id === "noteBox") onNoteInput(); });
+  window.addEventListener("storage", e => {   // another tab changed them
+    if (e.key === SAVED_KEY) { S.saved = loadSaved(); refreshSavedMarks(); renderSavedBtn(); }
+  });
   $("locCard").addEventListener("click", () => startLocate());
   $("newCard").addEventListener("click", () => {
     $("newMode").value = "visit";
@@ -1262,6 +1337,12 @@ function initControls() {
     if (item) { openSite(item.dataset.key, { pan: true }); return; }
     if (e.target.closest("[data-close]")) { S.view === "site" ? closeSite() : backToList(); return; }
     if (e.target.closest("[data-share]") && S.site) { shareSite(S.site); return; }
+    const save = e.target.closest("[data-save]");
+    if (save && S.site) { toggleSaved(S.site, save.dataset.save); return; }
+    const savedRow = e.target.closest("[data-saved-key]");
+    if (savedRow) { openSite(savedRow.dataset.savedKey, { pan: true }); return; }
+    const tab = e.target.closest("[data-tab]");
+    if (tab) { S.savedTab = tab.dataset.tab; renderSaved(); return; }
     const copy = e.target.closest("[data-copy]");
     if (copy) copyText(copy.dataset.copy, "Location copied");
   });
@@ -1365,6 +1446,110 @@ function initInstall() {
   if ("serviceWorker" in navigator && window.isSecureContext) {
     navigator.serviceWorker.register("/sw.js").catch(() => { /* fine: the app just won't work offline */ });
   }
+}
+
+// ---------- places you've saved: on this device only ----------
+const SAVED_KEY = "bandobuddy:saved";
+
+function loadSaved() {
+  try { return JSON.parse(localStorage.getItem(SAVED_KEY)) || {}; } catch (_) { return {}; }
+}
+
+function storeSaved() {
+  try { localStorage.setItem(SAVED_KEY, JSON.stringify(S.saved)); }
+  catch (_) { toast("Couldn't save that: this browser's storage is full or blocked."); }
+}
+
+const savedState = key => (S.saved[key] || {}).state || "";
+
+function pinMark(key) {
+  const state = savedState(key);
+  return state ? `<i class="pin-mark ${state}">${svg(state === "been" ? UI.check : UI.star)}</i>` : "";
+}
+
+function listMark(key) {
+  const state = savedState(key);
+  return state ? `<span class="mark ${state}" title="${state === "been" ? "Been here" : "Saved"}">${svg(state === "been" ? UI.check : UI.star)}</span>` : "";
+}
+
+function remember(site, patch) {
+  const entry = { ...(S.saved[site.key] || {}), ...patch, name: site.name, lat: site.lat, lng: site.lng,
+                  category: site.category, condition: site.condition, updated: new Date().toISOString() };
+  if (!entry.state && !entry.note) delete S.saved[site.key];   // nothing left worth keeping
+  else S.saved[site.key] = entry;
+  storeSaved();
+}
+
+function toggleSaved(site, state) {
+  remember(site, { state: savedState(site.key) === state ? "" : state });
+  for (const b of document.querySelectorAll("[data-save]")) {
+    const on = savedState(site.key) === b.dataset.save;
+    b.setAttribute("aria-pressed", String(on));
+    if (b.dataset.save === "want") b.lastChild.textContent = on ? "Saved" : "Save";
+  }
+  refreshSavedMarks();
+  const now = savedState(site.key);
+  toast(now === "want" ? "Saved. Find it under Saved on the list." : now === "been" ? "Marked as been." : "Removed from saved.");
+}
+
+function refreshSavedMarks() {
+  if (S.lastMap) renderMap(S.lastMap);
+  renderList();
+  if (S.view === "saved") renderSaved();
+}
+
+let noteTimer = null;
+function onNoteInput() {
+  clearTimeout(noteTimer);
+  const site = S.site;
+  const text = $("noteBox").value;
+  noteTimer = setTimeout(() => { if (site) { remember(site, { note: text.trim() }); renderSavedBtn(); } }, 400);
+}
+
+function renderSavedBtn() {
+  const n = Object.keys(S.saved).length;
+  $("savedBtn").innerHTML = `${svg(UI.star)}${n ? `Saved · ${n}` : "Saved"}`;
+}
+
+function renderSaved() {
+  for (const b of document.querySelectorAll("#savedSeg [data-tab]")) b.setAttribute("aria-pressed", String(b.dataset.tab === S.savedTab));
+  const from = S.loc.pos || S.map.getCenter();
+  const rows = Object.entries(S.saved)
+    .filter(([, e]) => (S.savedTab === "been") === (e.state === "been"))
+    .map(([key, e]) => ({ key, ...e, away: metres(from, e) }))
+    .sort((a, b) => a.away - b.away);
+  const all = Object.keys(S.saved).length;
+  $("savedSub").textContent = all ? `${all} place${all === 1 ? "" : "s"} · nearest ${S.loc.pos ? "to you" : "to the map"} first` : "";
+  $("savedList").innerHTML = rows.map(e => `
+    <li><button type="button" class="item" data-saved-key="${esc(e.key)}">
+      ${badge(e.category)}
+      <span><span class="name">${esc(e.name)}${listMark(e.key)}</span>
+        <span class="meta">${esc(e.condition || "")}${e.note ? ` · ${esc(e.note.slice(0, 60))}` : ""}</span></span>
+      <span class="dist">${fmtDist(e.away)}</span>
+    </button></li>`).join("");
+  const note = $("savedNote");
+  note.hidden = rows.length > 0;
+  note.textContent = S.savedTab === "been"
+    ? "Places you mark as \"Been here\" collect here, so you can see where you've been."
+    : "Tap Save on a place to plan a trip. Saved places, and their notes, work offline too.";
+  $("savedGpx").disabled = !all;
+}
+
+function savedGpx() {
+  const entries = Object.values(S.saved);
+  const wpts = entries.map(e => {
+    const desc = [e.condition, catLabel(e.category), e.state === "been" ? "been" : "to visit", e.note].filter(Boolean).join(" · ");
+    return `<wpt lat="${Number(e.lat).toFixed(6)}" lon="${Number(e.lng).toFixed(6)}"><name>${esc(e.name)}</name>`
+      + `<desc>${esc(desc)}</desc><type>${esc(catLabel(e.category))}</type></wpt>`;
+  }).join("");
+  const gpx = '<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="bandobuddy" '
+    + `xmlns="http://www.topografix.com/GPX/1/1"><metadata><name>bandobuddy saved places</name></metadata>${wpts}</gpx>\n`;
+  const url = URL.createObjectURL(new Blob([gpx], { type: "application/gpx+xml" }));
+  const a = Object.assign(document.createElement("a"), { href: url, download: `bandobuddy-saved-${new Date().toISOString().slice(0, 10)}.gpx` });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
 // ---------- search: places in the database as you type; towns when you ask ----------

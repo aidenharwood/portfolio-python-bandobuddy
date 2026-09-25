@@ -169,6 +169,8 @@ class App:
             except (ValueError, AssertionError):
                 raise ApiError(400, "near must be lat,lng")
         sort = (qs.get("sort") or ["nearest"])[0]
+        if sort not in ("nearest", "evidence", "newest"):
+            raise ApiError(400, "sort must be nearest, evidence or newest")
         try:
             limit = max(0, min(500, int((qs.get("limit") or [str(LIST_LIMIT)])[0])))
         except ValueError:
