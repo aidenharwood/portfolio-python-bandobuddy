@@ -135,6 +135,10 @@ Once installed it keeps working where the signal doesn't:
 - map tiles you've already looked at are kept (capped at 600, and only ever tiles you actually viewed)
 - places you've looked at are kept, so the nearby list and a shared link still open offline; move somewhere
   you haven't loaded and it shows the nearest view it does have, and says so
+- **Keep these places for offline** (under the list) saves every place in view and its details before a trip.
+  It fetches bandobuddy's own data only: OpenStreetMap's tile policy rules out bulk-downloading map tiles for
+  offline use, so map pictures are the ones you've scrolled past. For a full offline map, download your saved
+  places as GPX and open them in OsmAnd or Organic Maps
 - the screen stays awake while you're following your location, and sleeps as soon as you stop
 
 Updates and settings still need a connection, and the app tells you when you're offline. A new release retires the

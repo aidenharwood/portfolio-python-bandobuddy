@@ -77,15 +77,23 @@ def classify(tags: dict[str, str], element: str | None = None) -> tuple[str, int
     return evidence, weight
 
 
+# What a place *is*, most telling first. A lifecycle prefix only means something on one of these:
+# "disused:amenity=pub" is a shut pub, but "disused:website" is only a lapsed website.
+FEATURE_KEYS = ("amenity", "shop", "railway", "aeroway", "military", "healthcare", "office", "craft", "tourism",
+                "leisure", "club", "industrial", "man_made", "power", "public_transport", "emergency", "historic",
+                "landuse", "building", "highway", "waterway")
+
+
 def _classify(tags: dict[str, str]) -> tuple[str, int] | None:
-    lifecycle = {k: v for k, v in tags.items() if k.startswith(("abandoned:", "disused:"))}
     tunnel = tags.get("tunnel") not in (None, "no")
-    meaningful = {
-        k: v for k, v in lifecycle.items()
-        if not (k.split(":", 1)[1] in ("railway", "highway", "power", "waterway", "man_made")
-                and v in LINEAR_VALUES and not tunnel)
-        and k.split(":", 1)[1] not in ("name", "operator", "ref", "wikidata", "wikipedia")
-    }
+    meaningful = {}
+    for base in FEATURE_KEYS:
+        for state in ("abandoned", "disused"):
+            v = tags.get(f"{state}:{base}")
+            if v is None or (base in ("railway", "highway", "power", "waterway", "man_made")
+                             and v in LINEAR_VALUES and not tunnel):
+                continue
+            meaningful[f"{state}:{base}"] = v
 
     if tags.get("building") in ("ruins", "abandoned") or tags.get("ruins") == "yes":
         return f"OSM: building={tags.get('building', 'ruins')}", STRONG
@@ -148,7 +156,8 @@ def is_candidate(tags) -> bool:
     for tag in tags:
         k = tag.k
         if k.startswith(("abandoned", "disused")):
-            if ":" in k or tag.v == "yes":
+            base = k.split(":", 1)[1] if ":" in k else ""
+            if base in FEATURE_KEYS or (not base and tag.v == "yes"):
                 return True
             continue
         values = _INTERESTING.get(k)
