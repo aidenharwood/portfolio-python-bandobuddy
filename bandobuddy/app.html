@@ -9,6 +9,7 @@
 <title>bandobuddy</title>
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="bandobuddy">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -1633,7 +1634,21 @@ function initControls() {
   });
 }
 
-// Installing, and working without a signal.
+// Working without a signal. This has to happen in the installed app too, not just the browser: an
+// app on the iPhone home screen keeps its own storage, so it never sees a worker set up in Safari.
+function initOffline() {
+  window.addEventListener("offline", () => toast("You're offline. The map shows what you looked at last.", 5000));
+  if (!navigator.onLine) setTimeout(() => toast("You're offline. Showing the places kept on this phone.", 5000), 800);
+  window.addEventListener("online", () => { toast("Back online."); scheduleFetch(0); });
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) keepInView(); });
+  navigator.serviceWorker?.addEventListener("controllerchange", keepInView);   // first visit: once the worker's in charge
+
+  if ("serviceWorker" in navigator && window.isSecureContext) {
+    navigator.serviceWorker.register("/sw.js").catch(() => { /* fine: the app just won't work offline */ });
+  }
+}
+
+// Offering to install, unless this already is the installed app.
 function initInstall() {
   const standalone = window.matchMedia("(display-mode: standalone)").matches || navigator.standalone;
   const apple = /iPhone|iPad|iPod/.test(navigator.userAgent);
@@ -1659,16 +1674,6 @@ function initInstall() {
     await prompt.userChoice;
   });
   window.addEventListener("appinstalled", () => { $("installBox").hidden = true; });
-
-  window.addEventListener("offline", () => toast("You're offline. The map shows what you looked at last.", 5000));
-  if (!navigator.onLine) setTimeout(() => toast("You're offline. Showing the places kept on this phone.", 5000), 800);
-  window.addEventListener("online", () => { toast("Back online."); scheduleFetch(0); });
-  document.addEventListener("visibilitychange", () => { if (!document.hidden) keepInView(); });
-  navigator.serviceWorker?.addEventListener("controllerchange", keepInView);   // first visit: once the worker's in charge
-
-  if ("serviceWorker" in navigator && window.isSecureContext) {
-    navigator.serviceWorker.register("/sw.js").catch(() => { /* fine: the app just won't work offline */ });
-  }
 }
 
 // ---------- the places in view are kept for offline, by themselves ----------
@@ -1952,6 +1957,7 @@ try {
 } catch (_) { /* storage blocked */ }
 
 initControls();
+initOffline();
 initInstall();
 initFilters();
 initSheetDrag();
@@ -1968,7 +1974,7 @@ if (window.L) {
   if (linked) openSite(linked, { pan: true, push: false });
   locateOnOpen(!!linked);  // a shared link keeps its place in view
 } else {
-  $("map").innerHTML = '<p style="padding:90px 20px;color:#333">Couldn’t load the map library. Check your internet connection and reload.</p>';
+  $("map").innerHTML = '<p style="padding:90px 20px;color:var(--muted)">Couldn’t load the map library. Check your internet connection and reload.</p>';
 }
 renderLocBtn();
 pollStatus();

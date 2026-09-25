@@ -129,7 +129,9 @@ bandobuddy is a progressive web app, so it installs from the browser without a s
 **Install** (there's a button in the menu too); on iPhone it's **Share → Add to Home Screen**. It then opens full
 screen with its own icon.
 
-Once installed it keeps working where the signal doesn't:
+Open the installed app once with a signal. (On iPhone that has to be the home-screen app itself: it keeps its own
+storage, separate from Safari's, so what Safari kept doesn't carry over.) From then on it keeps working where the
+signal doesn't:
 
 - the page, its icons and Leaflet are cached, so it opens with no connection at all
 - map tiles you've already looked at are kept (capped at 600, and only ever tiles you actually viewed)
