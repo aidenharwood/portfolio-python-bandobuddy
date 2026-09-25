@@ -13,6 +13,7 @@ const SHELL = `bandobuddy-shell-${VERSION}`;
 const TILES = "bandobuddy-tiles";
 const DATA = "bandobuddy-data";
 const TILE_LIMIT = 600;          // roughly a town at a few zoom levels
+const DATA_LIMIT = 3000;         // places and views: a few MB at most
 
 const SHELL_URLS = [
   "/",
@@ -100,7 +101,10 @@ async function networkFirst(request, cacheName) {
   const cache = await caches.open(cacheName);
   try {
     const response = await fetch(request);
-    if (response.ok) await cache.put(request, response.clone());
+    if (response.ok) {
+      await cache.put(request, response.clone());
+      trim(cacheName, DATA_LIMIT);
+    }
     return response;
   } catch (err) {
     const hit = await cache.match(request);
