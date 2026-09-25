@@ -206,27 +206,38 @@ RECORD_TYPES = [
     (r"country house|mansion|castle|tower house|\bfolly\b", 10, "big house"),
 ]
 _RECORD_TYPES = [(re.compile(rx, re.I), weight, kind) for rx, weight, kind in RECORD_TYPES]
-# Words in a record that say it's already a wreck, wherever the register puts them.
-_DEAD = re.compile(r"site of|remains of|\bruin|derelict|disused|abandoned|former|demolished|\(site\)", re.I)
+# Something still stands, and it's a wreck: worth a little more.
+_WRECK = re.compile(r"remains of|\bruin|derelict|disused|abandoned|former", re.I)
+# Nothing left to see. "Site" on its own isn't enough: a "decoy site" or "mine site" is a place, not
+# an absence.
+_GONE = re.compile(r"\bsite of\b|\(site\)|demolish|destroyed|\bremoved\b|no longer extant|nothing (now )?remains"
+                   r"|\blevelled\b|built over|\bobliterated\b", re.I)
+
+
+def sounds_gone(text: str) -> bool:
+    """Does a record say the place isn't there any more?"""
+    return bool(_GONE.search(text))
 
 
 def judge_segments(site_type: str, name: str = "") -> tuple[int, str, str] | None:
     """Registers often list everything ever recorded on a spot ("FARMSTEAD (18TH CENTURY),
     OBSERVATION POST (20TH CENTURY)"). Take the first part that interests us, without its dates."""
-    for part in re.split(r"[,;]", site_type):
-        part = re.sub(r"\([^)]*\)", "", part).strip()
-        verdict = judge_record(part, name)
+    for raw in re.split(r"[,;]", site_type):
+        verdict = judge_record(raw, name)      # with its brackets: "(SITE OF)" matters
         if verdict:
-            return verdict[0], verdict[1], part.lower()
+            return verdict[0], verdict[1], re.sub(r"\([^)]*\)", "", raw).strip().lower()
     return None
 
 
 def judge_record(site_type: str, name: str = "") -> tuple[int, str] | None:
     """(weight, kind) for a register's own description of a place, or None if it isn't our sort of
-    thing. The name only decides whether it sounds like a wreck already."""
+    thing or isn't there any more. The name only says whether it's a wreck, or gone."""
+    said = f"{site_type} {name}"
+    if sounds_gone(said):
+        return None
     for rx, weight, kind in _RECORD_TYPES:
         if rx.search(site_type):
-            return (weight + 8 if _DEAD.search(f"{site_type} {name}") else weight), kind
+            return (weight + 8 if _WRECK.search(said) else weight), kind
     return None
 
 

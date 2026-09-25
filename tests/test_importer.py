@@ -81,6 +81,9 @@ class ReadingTests(unittest.TestCase):
         self.assertEqual(roc["url"], "https://example.org/1")
         self.assertEqual(pillbox["kind"], "military structure")
         self.assertTrue(all(i["dataset"] == "imported" for i in items))
+        # Your notes saying it's gone keep the place, but only as a weak lead.
+        gone = importer.to_items([importer._place("Old Mill", 51.0, -1.0, "mill", "demolished in 2003")], "notes")
+        self.assertEqual(gone[0]["weight"], importer.GONE_WEIGHT)
         # Importing the same file again updates the same places rather than doubling them up.
         again = importer.to_items(importer.read_file(self.tmp / "sites.csv"), "defence-of-britain")
         self.assertEqual([i["ref"] for i in items], [i["ref"] for i in again])
