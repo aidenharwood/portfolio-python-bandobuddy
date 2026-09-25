@@ -10,6 +10,7 @@ can't use DNS-rebinding tricks to talk to it. POSTs must also be same-origin JSO
 """
 from __future__ import annotations
 
+import gzip
 import ipaddress
 import json
 import os
@@ -32,12 +33,15 @@ from . import __version__, access, export, geocode, imagery, opendata
 from .config import CATEGORIES, DB_NAME, OTHER_CATEGORY, UK_BBOX, WEAK_BELOW
 from .geo import haversine_m
 from .sites import build_sites
-from .store import Store
+from .store import INDEX_COLUMNS, Store
 from .updater import ALL_SOURCES, SOURCE_LABELS, SOURCES, Updater
 
 DEFAULT_PORT = 8642
 MAX_BODY_BYTES = 16_000
 LIST_LIMIT = 100
+DETAILS_LIMIT = 500        # places per page of /api/details: about 650 KB, 100 KB compressed
+GZIP_MIN_BYTES = 1400      # smaller than a packet: not worth compressing
+COMPRESSIBLE = ("application/json", "text/html", "text/javascript")
 SCHEDULE_CHECK_S = 300
 CACHE_TTL_S = 24 * 3600
 LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "[::1]"})
@@ -50,6 +54,8 @@ STATIC = {
     "/static/icon-512.png": ("icon-512.png", "image/png", "public, max-age=604800"),
     "/static/icon-maskable-512.png": ("icon-maskable-512.png", "image/png", "public, max-age=604800"),
     "/static/apple-touch-icon.png": ("apple-touch-icon.png", "image/png", "public, max-age=604800"),
+    # Asked for with ?v=<version>, so a release never meets an old copy.
+    "/static/localdb.js": ("localdb.js", "text/javascript; charset=utf-8", "public, max-age=604800"),
 }
 
 
@@ -121,6 +127,8 @@ class App:
         self._search_cache = TTLCache()
         self._photo_cache = TTLCache()
         self._access_cache = TTLCache(ttl=7 * 24 * 3600)  # paths and car parks rarely move
+        self._index: tuple[str, bytes] | None = None   # (built, gzipped JSON): 3 MB rather than 25
+        self._index_lock = threading.Lock()
 
     def static(self, path: str) -> tuple[bytes, str, str]:
         name, ctype, cache = STATIC[path]
@@ -141,7 +149,8 @@ class App:
             "read_only": self.read_only,
         }
         template = resources.files("bandobuddy").joinpath("app.html").read_text(encoding="utf-8")
-        return template.replace("__BOOT__", json.dumps(boot).replace("<", "\\u003c")).encode("utf-8")
+        return (template.replace("__BOOT__", json.dumps(boot).replace("<", "\\u003c"))
+                .replace("__ASSET_VERSION__", __version__).encode("utf-8"))
 
     def health(self) -> dict:
         with self.store.connect() as db:
@@ -188,6 +197,34 @@ class App:
             raise ApiError(404, "Place not found")
         site["links"] = export.links(site)
         return site
+
+    def index(self, qs: dict) -> bytes:
+        """Every place in brief, for a phone to keep so the map, list and search work with no signal.
+        About 3 MB for the whole UK. Returns gzipped JSON."""
+        built = self.store.sites_built()
+        if (qs.get("have") or [""])[0] == built:
+            return gzip.compress(json.dumps({"built": built, "unchanged": True}).encode("utf-8"))
+        with self._index_lock:   # built once per rebuild, however many phones ask
+            if not self._index or self._index[0] != built:
+                body = json.dumps({"built": built, "weak_below": WEAK_BELOW, "columns": INDEX_COLUMNS,
+                                   "rows": self.store.index_rows()}, ensure_ascii=False,
+                                  separators=(",", ":")).encode("utf-8")
+                self._index = (built, gzip.compress(body, 6))
+            return self._index[1]
+
+    def details(self, qs: dict) -> dict:
+        """Everything about the places in an area, a page at a time: what a phone keeps for offline."""
+        bbox = parse_filters(qs).get("bbox")
+        after = (qs.get("after") or [""])[0]
+        try:
+            limit = max(1, min(1000, int((qs.get("limit") or [str(DETAILS_LIMIT)])[0])))
+        except ValueError:
+            raise ApiError(400, "limit must be a number")
+        sites = self.store.details_page(bbox=bbox, after=after, limit=limit)
+        for site in sites:
+            site["links"] = export.links(site)
+        return {"built": self.store.sites_built(), "sites": sites,
+                "next": sites[-1]["key"] if len(sites) == limit else None}
 
     def photos(self, qs: dict) -> dict:
         try:
@@ -313,7 +350,13 @@ def make_handler(app: App, allowed_hosts: Iterable[str] = ()) -> type[BaseHTTPRe
             pass
 
         def _send(self, status: int, body: bytes, ctype: str, extra: dict | None = None,
-                  cache: str = "no-store") -> None:
+                  cache: str = "no-store", gzipped: bytes | None = None) -> None:
+            extra = dict(extra or {})
+            if ctype.startswith(COMPRESSIBLE):
+                extra["Vary"] = "Accept-Encoding"
+                if "gzip" in (self.headers.get("Accept-Encoding") or "") and (gzipped or len(body) >= GZIP_MIN_BYTES):
+                    body = gzipped or gzip.compress(body, 6)
+                    extra["Content-Encoding"] = "gzip"
             self.send_response(status)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
@@ -321,7 +364,7 @@ def make_handler(app: App, allowed_hosts: Iterable[str] = ()) -> type[BaseHTTPRe
             self.send_header("X-Content-Type-Options", "nosniff")
             # Map tile servers (OpenStreetMap's included) require a Referer, so don't strip it.
             self.send_header("Referrer-Policy", "strict-origin-when-cross-origin")
-            for k, v in (extra or {}).items():
+            for k, v in extra.items():
                 self.send_header(k, v)
             self.end_headers()
             self.wfile.write(body)
@@ -397,6 +440,17 @@ def make_handler(app: App, allowed_hosts: Iterable[str] = ()) -> type[BaseHTTPRe
                 self._dispatch(lambda: app.list(qs))
             elif path.startswith("/api/site/"):
                 self._dispatch(lambda: app.site(unquote(path[len("/api/site/"):])))
+            elif path == "/api/index":
+                try:
+                    packed = app.index(qs)
+                except Exception as exc:
+                    traceback.print_exc()
+                    self._json(500, {"error": f"{type(exc).__name__}: {exc}"})
+                    return
+                plain = b"" if "gzip" in (self.headers.get("Accept-Encoding") or "") else gzip.decompress(packed)
+                self._send(200, plain, "application/json", gzipped=packed)
+            elif path == "/api/details":
+                self._dispatch(lambda: app.details(qs))
             elif path == "/api/photos":
                 self._dispatch(lambda: app.photos(qs))
             elif path == "/api/access":

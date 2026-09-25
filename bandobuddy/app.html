@@ -253,6 +253,10 @@
 
   /* Leaflet: keep bottom controls above the sheet; top ones below the search bar */
   .leaflet-container { font:inherit }
+  /* A map tile, or with no signal a piece of a zoomed-out one you have seen, stretched to fit. */
+  .kept-tile { overflow:hidden }
+  .leaflet-container .leaflet-tile-pane .kept-tile img { position:absolute; left:0; top:0; width:100%; height:100%;
+    user-select:none; -webkit-user-drag:none }
   .leaflet-bottom { bottom:var(--sheet-h); transition:bottom .25s ease }
   .leaflet-top { top:calc(66px + env(safe-area-inset-top)) }
   .leaflet-control-attribution { font-size:10px }
@@ -382,6 +386,15 @@
         <div class="row"><span class="note">Refresh every</span><input type="number" id="updateDays" min="1" max="90" style="width:72px"><span class="note">days</span></div>
         <p class="note" id="dataDir"></p>
       </div>
+      <div class="source" id="offlineBox" hidden>
+        <h3><span>Kept on this phone</span><button type="button" class="btn small" id="keepAll">Keep everything</button></h3>
+        <p class="note" id="offlineNote"></p>
+        <p class="note">Every place is kept in brief by itself, and everything about the places wherever you zoom
+          in. Map tiles are kept as you look at them, and fill in from further out where you haven't.
+          <b>Keep everything</b> adds the full details of every place in the UK: about 25 MB to
+          download, best on Wi-Fi, and about 130 MB on the phone.
+          <button type="button" class="linkbtn" id="clearKept">Clear</button></p>
+      </div>
       <div class="source" id="installBox" hidden>
         <h3><span>Install bandobuddy</span><button type="button" class="btn small accent" id="installBtn">Install</button></h3>
         <p class="note" id="installNote">Adds it to your home screen and opens it full screen, with the places and
@@ -406,6 +419,7 @@
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
         integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script src="/static/localdb.js?v=__ASSET_VERSION__"></script>
 <script>
 "use strict";
 const BOOT = __BOOT__;
@@ -603,6 +617,7 @@ function show(view, snap) {
   }
   S.view = view;
   for (const v of ["list", "site", "saved", "filters", "data"]) $(`view-${v}`).hidden = v !== view;
+  if (view === "data") renderOffline();
   $("sheetBody").scrollTop = 0;
   if (snap && !wide()) Sheet.set(snap);
 }
@@ -645,15 +660,56 @@ function ensureVisible(latlng) {
   if (p.x < r.x0 + 30 || p.x > r.x1 - 30 || p.y < r.y0 + 70 || p.y > r.y1 - 20) centerOn(latlng);
 }
 
+// Map tiles that, when one can't be fetched (no signal), show the matching piece of the nearest
+// zoomed-out tile that was kept instead: blurrier, but the map is still there at any zoom. Fetched with
+// CORS (every tile server here allows it), so the phone's storage counts them at their real size.
+const KeptTiles = window.L && L.TileLayer.extend({
+  createTile(coords, done) {
+    const tile = document.createElement("div");
+    tile.className = "kept-tile";
+    const img = document.createElement("img");
+    img.alt = "";
+    img.setAttribute("role", "presentation");
+    img.crossOrigin = "";
+    img.onload = () => done(null, tile);
+    img.onerror = () => this._fromFurtherOut(coords, img, tile, done);
+    img.src = this.getTileUrl(coords);
+    tile.appendChild(img);
+    return tile;
+  },
+
+  async _fromFurtherOut(coords, img, tile, done) {
+    const z = this._getZoomForUrl();
+    const size = this.getTileSize();
+    for (let up = 1; up <= 8 && z - up >= 0 && typeof caches !== "undefined"; up++) {
+      const at = { x: coords.x >> up, y: coords.y >> up, z: z - up };
+      const url = L.Util.template(this._url, L.Util.extend({ s: this._getSubdomain(at), r: "", ...at }, this.options));
+      let kept = null;
+      try { kept = await caches.match(url); } catch (_) { break; }
+      if (!kept) continue;
+      const scale = 2 ** up;
+      Object.assign(img.style, { width: `${size.x * scale}px`, height: `${size.y * scale}px`,
+                                 left: `${-(coords.x - at.x * scale) * size.x}px`,
+                                 top: `${-(coords.y - at.y * scale) * size.y}px` });
+      img.onload = () => done(null, tile);
+      img.onerror = () => done(new Error("Map tile unavailable"), tile);
+      img.src = url;
+      return;
+    }
+    done(new Error("Map tile unavailable"), tile);
+  },
+});
+const keptTiles = (url, options) => new KeptTiles(url, options);
+
 function initMap() {
   const prefs = loadPrefs();
   S.map = L.map("map", { zoomControl: false, minZoom: 5, worldCopyJump: true });
   S.bases = {
-    Map: L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    Map: keptTiles("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
       maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' }),
-    Topo: L.tileLayer("https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png", {
+    Topo: keptTiles("https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png", {
       maxZoom: 17, attribution: '&copy; OpenStreetMap, SRTM | <a href="https://opentopomap.org">OpenTopoMap</a> (CC-BY-SA)' }),
-    Satellite: L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+    Satellite: keptTiles("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
       maxZoom: 19, attribution: "Imagery &copy; Esri, Maxar, Earthstar Geographics" }),
   };
   const mining = "https://services-eu1.arcgis.com/Qn4lKcPDVHNivEyr/arcgis/rest/services";
@@ -664,13 +720,13 @@ function initMap() {
   const drawn = { maxZoom: 19, maxNativeZoom: 14, attribution: credit };
   S.overlays = {
     mine_entries: { label: "Mine entries (shafts & adits)", from: 13,
-                    layer: L.tileLayer(`${mining}/Mine_Entries/MapServer/tile/{z}/{y}/{x}`,
+                    layer: keptTiles(`${mining}/Mine_Entries/MapServer/tile/{z}/{y}/{x}`,
                                        { ...drawn, minZoom: 13, opacity: 0.9 }) },
     shallow_workings: { label: "Past shallow coal workings", from: 9,
-                        layer: L.tileLayer(`${mining}/Past_Shallow_Coal_Mine_Workings/MapServer/tile/{z}/{y}/{x}`,
+                        layer: keptTiles(`${mining}/Past_Shallow_Coal_Mine_Workings/MapServer/tile/{z}/{y}/{x}`,
                                            { ...drawn, minZoom: 9, opacity: 0.55 }) },
     surface_mining: { label: "Surface mining, past and present", from: 13,
-                      layer: L.tileLayer(`${mining}/Surface_Mining_Past_and_Current/MapServer/tile/{z}/{y}/{x}`,
+                      layer: keptTiles(`${mining}/Surface_Mining_Past_and_Current/MapServer/tile/{z}/{y}/{x}`,
                                          { ...drawn, minZoom: 13, opacity: 0.55 }) },
   };
   S.base = S.bases[prefs.base] ? prefs.base : "Map";
@@ -872,12 +928,20 @@ const nearOf = point => `${point.lat.toFixed(3)},${point.lng.toFixed(3)}`;  // ~
 async function apiView(path) {
   const res = await fetch(path);
   if (!res.ok) throw new Error(`Request failed (${res.status})`);
-  return { data: await res.json(), stale: res.headers.get("X-Bandobuddy-Stale") === "1" };
+  return { data: await res.json(), stale: res.headers.get("X-Bandobuddy-Stale") === "1",
+           local: res.headers.get("X-Bandobuddy-Local") === "1" };
 }
 
 let staleSaid = 0;
-function sayIfStale(stale) {
-  if (!stale || Date.now() - staleSaid < 60000) return;
+let localSaid = 0;
+function sayWhere(view) {
+  if (view.local) {   // offline already says so; a weak signal doesn't
+    if (!navigator.onLine || Date.now() - localSaid < 300000) return;
+    localSaid = Date.now();
+    toast("The signal's weak, so these are the places kept on this phone.", 5000);
+    return;
+  }
+  if (!view.stale || Date.now() - staleSaid < 60000) return;
   staleSaid = Date.now();
   toast("Offline. These are the nearest places you looked at before.", 5000);
 }
@@ -919,7 +983,7 @@ async function fetchMap() {
   let view;
   try { view = await apiView(`/api/map?${p}`); } catch (_) { return; }
   if (seq !== S.mapSeq) return;
-  sayIfStale(view.stale);
+  sayWhere(view);
   S.version = view.data.version;
   renderMap(view.data);
 }
@@ -944,10 +1008,10 @@ async function fetchList() {
   let view;
   try { view = await apiView(`/api/list?${p}`); } catch (_) { return; }
   if (seq !== S.listSeq) return;
-  sayIfStale(view.stale);
+  sayWhere(view);
   const data = view.data;
   S.list = data;
-  if (!view.stale) keepInView();
+  if (!view.stale && !view.local) keepInView();
   S.listNear = S.loc.pos ? "you" : "centre";
   renderList();
 }
@@ -1535,6 +1599,8 @@ function initControls() {
   $("statusCard").addEventListener("click", () => show("data", "full"));
   S.saved = loadSaved();
   S.kept = loadKept();
+  $("keepAll").addEventListener("click", keepEverything);
+  $("clearKept").addEventListener("click", clearKept);
   renderSavedBtn();
   $("savedBtn").addEventListener("click", () => { show("saved", "full"); renderSaved(); });
   $("savedGpx").addEventListener("click", savedGpx);
@@ -1641,7 +1707,13 @@ function initOffline() {
   if (!navigator.onLine) setTimeout(() => toast("You're offline. Showing the places kept on this phone.", 5000), 800);
   window.addEventListener("online", () => { toast("Back online."); scheduleFetch(0); });
   document.addEventListener("visibilitychange", () => { if (!document.hidden) keepInView(); });
-  navigator.serviceWorker?.addEventListener("controllerchange", keepInView);   // first visit: once the worker's in charge
+  const firstVisit = !navigator.serviceWorker?.controller;
+  navigator.serviceWorker?.addEventListener("controllerchange", () => {   // first visit: once the worker's in charge
+    keepInView();
+    // The map on screen was drawn before the worker could keep it, and those zoomed-out tiles are what
+    // fills in offline where you never zoomed in. Draw it again (from the browser's cache) so they're kept.
+    if (firstVisit && S.map) S.bases[S.base].redraw();
+  });
 
   if ("serviceWorker" in navigator && window.isSecureContext) {
     navigator.serviceWorker.register("/sw.js").catch(() => { /* fine: the app just won't work offline */ });
@@ -1676,81 +1748,203 @@ function initInstall() {
   window.addEventListener("appinstalled", () => { $("installBox").hidden = true; });
 }
 
-// ---------- the places in view are kept for offline, by themselves ----------
-// Once the map settles, the details of the places in the list are fetched quietly, so they open with
-// no signal. Gentle on the server: only zoomed in, two at a time, and each place once a week.
-// Our own data only: OpenStreetMap's tile policy rules out bulk-downloading map tiles.
-const KEPT_KEY = "bandobuddy:kept";
-const KEEP_FOR_MS = 7 * 864e5;   // after a week, fetch again so details stay fresh
-const KEEP_MIN_ZOOM = 12;        // roughly a town: not half a county
-const KEEP_SETTLE_MS = 1500;     // wait for the map to stop moving
+// ---------- keeping the map on the phone, by itself ----------
+// Every place in brief (about 3 MB for the whole UK), fetched again when the map changes, so the map,
+// the list and search work anywhere with no signal. And once the map settles, zoomed in to about town
+// level, everything about the places in view is fetched quietly, a square at a time: two at a time, and
+// each square once a week. Gentle on the server: a few requests per square, not one per place.
+// Map tiles are kept by the service worker as you look at them: OpenStreetMap's tile policy rules out
+// bulk-downloading them.
+const AREAS_KEY = "bandobuddy:keptAreas";
+const KEEP_FOR_MS = 7 * 864e5;        // after a week, fetch again so details stay fresh
+const INDEX_CHECK_MS = 6 * 3600e3;    // ask whether the map has changed at most every six hours
+const KEEP_MIN_ZOOM = 11;             // roughly a town and the country around it
+const KEEP_SETTLE_MS = 1500;          // wait for the map to stop moving
+const AREA_DEG = 0.25;                // details are kept in squares this size (about 28 x 17 km)
+const MAX_AREAS = 24;                 // per settle: a big desktop window at zoom 11
 let keepQueue = [];
 let keepBusy = 0;
 let keepTimer = null;
 let keptWrite = null;
+let indexBusy = false;
+let keepingAll = false;
 
 function loadKept() {
   let kept = {};
-  try { kept = JSON.parse(localStorage.getItem(KEPT_KEY)) || {}; } catch (_) { /* storage blocked */ }
+  try {
+    localStorage.removeItem("bandobuddy:kept");   // one place at a time, from before
+    kept = JSON.parse(localStorage.getItem(AREAS_KEY)) || {};
+  } catch (_) { /* storage blocked */ }
   const now = Date.now();
-  for (const [key, at] of Object.entries(kept)) if (now - at > KEEP_FOR_MS) delete kept[key];
+  for (const [area, at] of Object.entries(kept)) if (now - at > KEEP_FOR_MS) delete kept[area];
   return kept;
 }
 
 function saveKeptSoon() {
   clearTimeout(keptWrite);
-  keptWrite = setTimeout(() => { try { localStorage.setItem(KEPT_KEY, JSON.stringify(S.kept)); } catch (_) { /* full */ } }, 2000);
+  keptWrite = setTimeout(() => { try { localStorage.setItem(AREAS_KEY, JSON.stringify(S.kept)); } catch (_) { /* full */ } }, 2000);
 }
 
+const canKeep = () => typeof LocalDB !== "undefined" && "indexedDB" in window && "serviceWorker" in navigator;
+
 function keepingBlocked() {
-  if (!("serviceWorker" in navigator) || !navigator.serviceWorker.controller) return "no worker";
+  if (!canKeep() || !navigator.serviceWorker.controller) return "no worker";
   const c = navigator.connection;
   if (c && c.saveData) return "Not keeping places for offline while data saver is on.";
   if (c && /2g/.test(c.effectiveType || "")) return "Not keeping places for offline on a slow connection.";
   if (!navigator.onLine || document.hidden) return "paused";
-  if (S.map.getZoom() < KEEP_MIN_ZOOM) return "Zoom in and the places here are kept for offline by themselves.";
   return "";
 }
 
-const isKept = key => S.kept[key] && Date.now() - S.kept[key] < KEEP_FOR_MS;
+const isKept = area => S.kept[area] && Date.now() - S.kept[area] < KEEP_FOR_MS;
+
+// The squares the view covers, the middle first.
+function areasInView() {
+  const b = S.map.getBounds(), c = S.map.getCenter();
+  const areas = [];
+  for (let y = Math.floor(b.getSouth() / AREA_DEG); y <= Math.floor(b.getNorth() / AREA_DEG); y++) {
+    for (let x = Math.floor(b.getWest() / AREA_DEG); x <= Math.floor(b.getEast() / AREA_DEG); x++) areas.push([y, x]);
+  }
+  const away = ([y, x]) => (y + 0.5 - c.lat / AREA_DEG) ** 2 + (x + 0.5 - c.lng / AREA_DEG) ** 2;
+  return areas.sort((a, b) => away(a) - away(b)).slice(0, MAX_AREAS).map(a => a.join(","));
+}
 
 function renderKept() {
   const note = $("keptNote");
-  const sites = (S.list && S.list.sites) || [];
   const blocked = keepingBlocked();
-  if (blocked === "no worker" || blocked === "paused" || !sites.length) { note.hidden = true; return; }
+  if (blocked === "no worker" || blocked === "paused" || !S.list || !S.list.total) { note.hidden = true; return; }
   note.hidden = false;
-  const kept = sites.filter(s => isKept(s.key)).length;
-  note.textContent = blocked
-    || (kept === sites.length ? `The ${sites.length} place${sites.length === 1 ? " here is" : "s here are"} kept for offline.`
-                              : `Keeping the places here for offline… ${kept} of ${sites.length}`);
+  if (blocked) { note.textContent = blocked; return; }
+  if (S.map.getZoom() < KEEP_MIN_ZOOM) {
+    note.textContent = "Zoom in and everything about the places here is kept for offline by itself.";
+    return;
+  }
+  const areas = areasInView();
+  const kept = areas.filter(isKept).length;
+  note.textContent = kept === areas.length ? "Everything about the places here is kept for offline."
+    : `Keeping the places here for offline… ${Math.round(kept / areas.length * 100)}%`;
 }
 
 function keepInView() {
   clearTimeout(keepTimer);
   keepTimer = setTimeout(() => {
+    keepIndex();
     renderKept();
-    if (keepingBlocked()) return;
+    if (keepingBlocked() || S.map.getZoom() < KEEP_MIN_ZOOM) return;
     // Only what's in view now: moving on drops whatever was still waiting from before.
-    keepQueue = ((S.list && S.list.sites) || []).map(s => s.key).filter(key => !isKept(key));
+    keepQueue = areasInView().filter(area => !isKept(area));
     while (keepBusy < 2 && keepQueue.length) keepNext();
   }, KEEP_SETTLE_MS);
 }
 
+// Every page of /api/details for an area (or everywhere), into the phone's copy. Returns where it got to.
+async function keepDetails(params, after = "", onPage = null) {
+  do {
+    const page = await api(`/api/details?${new URLSearchParams({ ...params, after })}`);
+    await LocalDB.putDetails(page.sites);
+    after = page.next || "";
+    if (onPage) onPage(page, after);
+  } while (after && !keepingBlocked());
+  return after;
+}
+
 async function keepNext() {
-  const key = keepQueue.shift();
-  if (!key || keepingBlocked()) return;
+  const area = keepQueue.shift();
+  if (!area || keepingBlocked()) return;
   keepBusy++;
   try {
-    const res = await fetch(`/api/site/${encodeURIComponent(key)}`);
-    if (res.ok && !res.headers.get("X-Bandobuddy-Stale")) {
-      S.kept[key] = Date.now();
+    const [y, x] = area.split(",").map(Number);
+    const bbox = [x * AREA_DEG, y * AREA_DEG, (x + 1) * AREA_DEG, (y + 1) * AREA_DEG].map(v => v.toFixed(4)).join(",");
+    if (!(await keepDetails({ bbox }))) {
+      S.kept[area] = Date.now();
       saveKeptSoon();
     }
-  } catch (_) { /* lost signal part-way: keep what we got */ }
+  } catch (_) { /* lost signal part-way: what arrived is kept, the rest next time */ }
   keepBusy--;
   renderKept();
   if (keepQueue.length) keepNext();
+}
+
+// The brief copy of every place: fetched once, then only when the server's map has changed.
+async function keepIndex(force = false) {
+  if (indexBusy || keepingBlocked()) return;
+  indexBusy = true;
+  try {
+    const kept = await LocalDB.index();
+    if (force || !kept || Date.now() - kept.at > INDEX_CHECK_MS) {
+      const data = await api(`/api/index?${new URLSearchParams({ have: kept ? kept.built : "" })}`);
+      if (data.unchanged) await LocalDB.touchIndex();
+      else {
+        await LocalDB.putIndex(data);
+        holdOnToStorage();
+      }
+    }
+  } catch (_) { /* try again when the map next settles */ }
+  indexBusy = false;
+  if (S.view === "data") renderOffline();
+}
+
+// Ask the browser not to clear what's kept when the phone runs low on space (it may decide for itself).
+let storageAsked = false;
+function holdOnToStorage() {
+  if (storageAsked || !navigator.storage || !navigator.storage.persist) return;
+  storageAsked = true;
+  navigator.storage.persist().catch(() => { /* fine: kept unless the phone needs the space */ });
+}
+
+// Everything about every place in the UK, when asked: carries on from where it stopped if the signal drops.
+async function keepEverything() {
+  const blocked = keepingBlocked();
+  if (blocked) { toast(blocked === "paused" ? "That needs a signal." : blocked === "no worker" ? "This browser can't keep places for offline." : blocked); return; }
+  if (keepingAll) return;
+  keepingAll = true;
+  $("keepAll").disabled = true;
+  try {
+    await keepIndex();
+    const total = ((await LocalDB.index()) || {}).count || 0;
+    let done = 0;
+    const left = await keepDetails({ limit: "1000" }, loadPrefs().keepAllAfter || "", (page, after) => {
+      done += page.sites.length;
+      savePrefs({ keepAllAfter: after });
+      $("offlineNote").textContent = `Keeping everything… ${total ? Math.min(99, Math.round(done / total * 100)) + "%" : fmtN(done)}`;
+    });
+    if (left) toast("Stopped for now. It'll carry on from there when you tap Keep everything again.");
+    else toast("Everything is kept on this phone.");
+  } catch (err) {
+    toast(`Stopped: ${err.message}. It'll carry on from there next time.`);
+  }
+  keepingAll = false;
+  $("keepAll").disabled = false;
+  renderOffline();
+}
+
+async function renderOffline() {
+  if (!canKeep() || !window.isSecureContext) return;
+  $("offlineBox").hidden = false;
+  if (keepingAll) return;
+  let counts = { places: 0, details: 0, checked: null }, tiles = 0, used = 0;
+  try { counts = await LocalDB.counts(); } catch (_) { /* storage blocked */ }
+  try { tiles = (await (await caches.open("bandobuddy-tiles")).keys()).length; } catch (_) { /* none yet */ }
+  try { used = (await navigator.storage.estimate()).usage || 0; } catch (_) { /* no estimate */ }
+  const mb = used ? `, ${fmtN(Math.round(used / 1e6))} MB in all` : "";
+  $("offlineNote").textContent = counts.places
+    ? `${fmtN(counts.places)} places in brief (checked ${ago(new Date(counts.checked).toISOString())}), everything `
+      + `about ${fmtN(counts.details)} of them, and ${fmtN(tiles)} map tiles${mb}.`
+    : "Nothing yet. It fills in by itself as you use the map with a signal.";
+}
+
+async function clearKept() {
+  if (!confirm("Remove the map and places kept on this phone for offline? Your saved places and notes stay.")) return;
+  try {
+    await LocalDB.clear();
+    await Promise.all(["bandobuddy-tiles", "bandobuddy-data", "bandobuddy-photos"].map(name => caches.delete(name)));
+  } catch (_) { /* partly cleared: the rest goes as it's replaced */ }
+  S.kept = {};
+  saveKeptSoon();
+  savePrefs({ keepAllAfter: "" });
+  renderOffline();
+  renderKept();
+  toast("Cleared. It'll fill in again as you use the map.");
 }
 
 // ---------- places you've saved: on this device only ----------

@@ -134,21 +134,33 @@ storage, separate from Safari's, so what Safari kept doesn't carry over.) From t
 signal doesn't:
 
 - the page, its icons and Leaflet are cached, so it opens with no connection at all
-- map tiles you've already looked at are kept (capped at 600, and only ever tiles you actually viewed)
-- places you've looked at are kept, so the nearby list and a shared link still open offline; move somewhere
-  you haven't loaded and it shows the nearest view it does have, and says so
-- the places in view are kept for offline by themselves: once the map settles, zoomed in to about town level,
-  their details are fetched quietly, two at a time and each place once a week, and it holds off on data saver
-  or a slow connection. It's bandobuddy's own data only: OpenStreetMap's tile policy rules out bulk-downloading
-  map tiles for offline use, so map pictures are the ones you've scrolled past. For a full offline map, download
-  your saved places as GPX and open them in OsmAnd or Organic Maps
+- **every place, in brief** (name, where, what it was, how strong the evidence is): about 3 MB for the whole UK,
+  fetched once and again only when the map has changed. So the map, the list, filters and search work offline
+  anywhere, including places you've never looked at. With no signal the service worker answers the app's own
+  requests from this copy the same way the server would (same filters, clusters and order), and it does the
+  same after six seconds on a signal too weak to answer
+- **everything about the places where you zoom in** (the evidence, what each source says, the ways in, the
+  links): once the map settles at about town level, the details are fetched quietly in squares of a quarter of
+  a degree, two at a time and each square once a week, holding off on data saver or a slow connection. A place
+  you open is kept in full too. **Keep everything** in the menu adds the full details of every place in the UK
+  (about 25 MB to download, about 130 MB on the phone) and carries on where it stopped if the signal drops
+- **every map tile you look at** (up to 40,000, about 1 GB), in each map style and the mining overlays. Zoom in
+  further than you ever looked and the map fills in from the nearest zoomed-out tile you did see, blurrier but
+  still there. Only tiles you've actually viewed: OpenStreetMap's tile policy rules out bulk-downloading them.
+  For a full offline map, download your saved places as GPX and open them in OsmAnd or Organic Maps
+- "Getting there" and street photos you've opened
 - the screen stays awake while you're following your location, and sleeps as soon as you stop
 
+Tiles and photos are fetched with CORS, so the phone's storage counts them at their real size (browsers count
+each "opaque" response as several megabytes). The menu shows what's kept and how much space it takes, and
+**Clear** removes it (saved places and notes stay). The app asks the browser to keep this storage when the
+phone runs low on space; whether it agrees is up to the browser.
+
 Updates and settings still need a connection, and the app tells you when you're offline. A place whose details
-weren't kept still opens with what the map knows (its name, what it was, Directions), and search still finds
-places the phone has seen. A new version only takes over once it has everything the app needs to open, so an
-update that half-downloads on a weak signal can't leave you with nothing offline. A new release retires the
-old caches automatically, because the service worker is stamped with the version.
+weren't kept still opens with what the brief copy knows (its name, what it was, the main reason, Directions).
+A new version only takes over once it has everything the app needs to open, so an update that half-downloads
+on a weak signal can't leave you with nothing offline. A new release retires the old caches automatically,
+because the service worker is stamped with the version.
 
 Phones only share their location with HTTPS sites, so the locate button won't work at a plain `http://192.168…`
 address. To try location locally, use Chrome's USB port forwarding (`chrome://inspect/#devices` → *Port forwarding*,

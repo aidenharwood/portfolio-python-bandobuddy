@@ -50,6 +50,9 @@ CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
 
 SITE_LIST_FIELDS = ("key, name, lat, lng, score, strength, category, condition, kind, sources, added, aliases, "
                     "json_array_length(entrances) AS entrance_count")
+# Every place in brief, for phones to keep: enough to draw the map, fill the list and search offline.
+INDEX_COLUMNS = ["key", "name", "lat", "lng", "score", "strength", "category", "condition", "kind", "sources",
+                 "added", "first_seen", "aliases", "entrance_count", "summary"]
 MAP_SITE_LIMIT = 400   # more matches than this in view and the map shows clusters instead
 CLUSTER_PX = 64        # roughly how wide a cluster cell is on screen
 
@@ -284,6 +287,33 @@ class Store:
         with self.connect() as db:
             db.execute("DELETE FROM sites")
             db.executemany("INSERT INTO sites VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
+            # Phones keep a copy of the map; this says whether theirs is out of date.
+            db.execute("INSERT OR REPLACE INTO settings VALUES ('sites_built', ?)", (json.dumps(now_iso()),))
+
+    def sites_built(self) -> str:
+        """When the map was last rebuilt (or, from before that was recorded, something that changes with it)."""
+        built = self.get_setting("sites_built")
+        if built:
+            return built
+        with self.connect() as db:
+            n, latest = db.execute("SELECT COUNT(*), MAX(COALESCE(added, first_seen)) FROM sites").fetchone()
+        return f"{n}@{latest or ''}"
+
+    def index_rows(self) -> list[list]:
+        """Every place in brief, as rows in INDEX_COLUMNS order. Positions to about a metre."""
+        with self.connect() as db:
+            rows = db.execute("SELECT key, name, ROUND(lat, 5), ROUND(lng, 5), score, strength, category, condition, "
+                              "kind, sources, added, first_seen, aliases, "
+                              "json_array_length(entrances), json_extract(reasons, '$[0]') FROM sites ORDER BY key")
+            return [[*r[:12], json.loads(r[12] or "[]"), r[13] or 0, r[14] or ""] for r in rows]
+
+    def details_page(self, bbox=None, after: str = "", limit: int = 500) -> list[dict]:
+        """Everything about the places in an area (or everywhere), a page at a time in key order."""
+        where, args = self._site_filter(bbox=bbox)
+        with self.connect() as db:
+            rows = db.execute(f"SELECT * FROM sites WHERE {where} AND key > ? ORDER BY key LIMIT ?",
+                              [*args, after, limit])
+            return [_decode_site(r) for r in rows]
 
     def _site_filter(self, bbox=None, min_score=0, categories=None, sources=None, added_since=None, q=None):
         where, args = ["score >= ?"], [min_score]
