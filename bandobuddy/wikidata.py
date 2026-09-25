@@ -159,6 +159,7 @@ SELECT ?item ?label ?coord
        (GROUP_CONCAT(DISTINCT ?typeLabel; separator="|") AS ?types)
        (GROUP_CONCAT(DISTINCT ?stateLabel; separator="|") AS ?states)
        (SAMPLE(?end) AS ?ended) (SAMPLE(?article) AS ?wiki)
+       (GROUP_CONCAT(DISTINCT ?alias; separator="|") AS ?aliases)
 WHERE {{
   SERVICE wikibase:box {{
     ?item wdt:P625 ?coord .
@@ -171,6 +172,7 @@ WHERE {{
   OPTIONAL {{ ?item wdt:P5817 ?state . ?state rdfs:label ?stateLabel . FILTER(LANG(?stateLabel) = "en") }}
   OPTIONAL {{ ?item wdt:P576|wdt:P3999 ?end . }}
   OPTIONAL {{ ?article schema:about ?item ; schema:isPartOf <https://en.wikipedia.org/> . }}
+  OPTIONAL {{ ?item skos:altLabel ?alias . FILTER(LANG(?alias) = "en") }}
   FILTER(REGEX(?label, {_sparql_literal(NAME_RX)}, "i") || BOUND(?state) || BOUND(?end)
          || EXISTS {{ ?item wdt:P31/rdfs:label ?tl . FILTER(LANG(?tl) = "en" && REGEX(?tl, {_sparql_literal(TYPE_RX)}, "i")) }})
 }}
@@ -223,6 +225,7 @@ def fetch_tile(s: float, w: float, n: float, e: float, session: requests.Session
             "states": [x for x in b.get("states", {}).get("value", "").split("|") if x],
             "ended": b.get("ended", {}).get("value") or None,
             "wiki": b.get("wiki", {}).get("value") or None,
+            "aliases": [a for a in b.get("aliases", {}).get("value", "").split("|") if a],
         })
     return list(rows.values())
 
@@ -267,6 +270,7 @@ def evaluate(row: dict, intro: str | None) -> dict | None:
         "qid": row["qid"],
         "name": row["label"],
         "in_use": in_use_as(row["types"]),
+        "aliases": row.get("aliases") or [],
         "kind": kind,
         "lat": row["lat"],
         "lng": row["lng"],

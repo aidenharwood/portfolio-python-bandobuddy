@@ -137,6 +137,8 @@
     border:1px solid var(--line); border-radius:999px; background:var(--raised); color:var(--ink); font-size:14px; font-weight:600 }
   .bearing .ico { width:18px; height:18px; fill:var(--me); stroke:var(--me); transition:transform .3s ease }
   .bearing small { color:var(--muted); font-weight:400; font-size:12px }
+  .aka { margin:2px 0 0 !important; font-size:13px !important; font-style:italic }
+  .badge.xs { width:22px; height:22px } .badge.xs .ico { width:13px; height:13px }
   .way { display:grid; grid-template-columns:22px 1fr auto; gap:10px; align-items:center; width:100%; min-height:44px;
     padding:6px 0; border:0; border-bottom:1px solid var(--line); background:transparent; color:var(--ink); text-align:left }
   .way .ico { color:var(--muted) } .way small { color:var(--muted) }
@@ -771,6 +773,44 @@ function renderMap(data) {
   }
 }
 
+const ENTRANCE_ICON = {
+  "Cave entrance": "tunnels", Entrance: "tunnels", Adit: "tunnels", Shaft: "mines", "Air shaft": "mines",
+};
+
+// "Gripwood Quarry Main Entrance", under Gripwood Quarry, is just "Main Entrance".
+function entranceLabel(w, site) {
+  if (!w.name) return w.kind;
+  if (w.name.toLowerCase().startsWith(site.name.toLowerCase())) {
+    const rest = w.name.slice(site.name.length).replace(/^[\s:,–-]+/, "");
+    if (rest) return rest;
+  }
+  return w.name;
+}
+
+function renderEntrances() {
+  const box = $("entrances");
+  const site = S.site;
+  if (!box || !site) return;
+  const from = S.loc.pos || site;
+  const ways = [...site.entrances].sort((a, b) => metres(from, a) - metres(from, b));
+  box.innerHTML = ways.map(w => {
+    const label = entranceLabel(w, site);
+    const deg = bearingTo(from, w);
+    return `<button type="button" class="way" data-point="${w.lat},${w.lng}" data-label="${esc(label)}">
+      ${badge(ENTRANCE_ICON[w.kind] || "tunnels", "xs")}<span><b>${esc(label)}</b>${w.name && !label.toLowerCase().includes(w.kind.toLowerCase().split(" ").pop()) ? ` <small>${esc(w.kind.toLowerCase())}</small>` : ""}</span>
+      <span class="dist">${fmtDist(metres(from, w))} ${COMPASS_POINTS[Math.round(deg / 45) % 8]}</span></button>`;
+  }).join("") + `<p class="note">${S.loc.pos ? "Nearest to you first. Directions go to the nearest one." : "Measured from the middle of the place."}</p>`;
+}
+
+function drawEntrances(site) {
+  for (const w of site.entrances || []) {
+    L.circleMarker([w.lat, w.lng], { radius: 6, color: "#fff", weight: 2, fillColor: colour(site.category), fillOpacity: 1 })
+      .bindTooltip(w.name || w.kind, { direction: "top", offset: [0, -6] })
+      .on("click", () => showPoint(w.lat, w.lng, w.name || w.kind))
+      .addTo(S.selLayer);
+  }
+}
+
 function drawSelected(site) {
   clearSelected();
   S.markers.get(site.key)?.setOpacity(0);  // the big pin stands in for it
@@ -907,7 +947,7 @@ function renderList() {
     <li><button type="button" class="item ${esc(s.strength)}" data-key="${esc(s.key)}">
       ${badge(s.category)}
       <span><span class="name">${esc(s.name)}${s.added ? '<span class="new">NEW</span>' : ""}${listMark(s.key)}</span>
-        <span class="meta">${esc(s.condition)} · ${esc(catLabel(s.category))}</span></span>
+        <span class="meta">${esc(s.condition)} · ${esc(catLabel(s.category))}${s.entrance_count ? ` · ${s.entrance_count} ways in` : ""}</span></span>
       <span class="dist">${fmtDist(s.distance_m)}</span>
     </button></li>`).join("");
   renderSavedBtn();
@@ -950,6 +990,8 @@ async function openSite(key, { pan = false, push = true } = {}) {
   if (pan) centerOn([site.lat, site.lng], Math.max(S.map.getZoom(), 16));
   else ensureVisible([site.lat, site.lng]);
   renderSite(site);
+  renderEntrances();
+  drawEntrances(site);
   renderBearing();
   loadPhotos(site);
   loadAccess(site);
@@ -971,8 +1013,15 @@ function isApple() {
   return /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 }
 
+function nearestEntrance(site) {
+  const ways = site.entrances || [];
+  if (!ways.length || !S.loc.pos) return null;
+  return ways.reduce((a, b) => (metres(S.loc.pos, a) <= metres(S.loc.pos, b) ? a : b));
+}
+
 function directions(site) {
-  const to = `${site.lat.toFixed(6)},${site.lng.toFixed(6)}`;
+  const target = nearestEntrance(site) || site;
+  const to = `${target.lat.toFixed(6)},${target.lng.toFixed(6)}`;
   if (isApple()) return { href: `https://maps.apple.com/?daddr=${to}&q=${encodeURIComponent(site.name)}`, external: true };
   if (/Android/.test(navigator.userAgent)) return { href: `geo:${to}?q=${to}(${encodeURIComponent(site.name)})`, external: false };
   const from = S.loc.pos ? `${S.loc.pos.lat.toFixed(5)},${S.loc.pos.lng.toFixed(5)}` : "";
@@ -999,11 +1048,13 @@ function renderSite(site) {
       ${badge(site.category, "big")}
       <div class="grow"><h2>${esc(site.name)}${site.added ? '<span class="new">NEW</span>' : ""}</h2>
         <p>${esc(site.condition)} · ${esc(catLabel(site.category))}</p>
+        ${(site.aliases || []).length ? `<p class="aka">Also known as ${esc(site.aliases.join(", "))}</p>` : ""}
         <button type="button" class="bearing" id="bearing" hidden>${svg(UI.arrow)}<span class="bearing-text"></span><small></small></button></div>
       ${closeButton()}
     </div>
     <div class="actions">
-      <a class="act primary" href="${esc(nav.href)}"${nav.external ? ' target="_blank" rel="noopener"' : ""}>${svg(UI.nav)}Directions</a>
+      <a class="act primary" href="${esc(nav.href)}"${nav.external ? ' target="_blank" rel="noopener"' : ""}
+         title="${nearestEntrance(site) ? "To the nearest entrance" : ""}">${svg(UI.nav)}Directions</a>
       <button type="button" class="act want" data-save="want" aria-pressed="${savedState(site.key) === "want"}">${svg(UI.star)}${savedState(site.key) === "want" ? "Saved" : "Save"}</button>
       <button type="button" class="act" data-save="been" aria-pressed="${savedState(site.key) === "been"}">${svg(UI.check)}Been here</button>
       <button type="button" class="act" data-share>${svg(UI.share)}Share</button>
@@ -1013,6 +1064,7 @@ function renderSite(site) {
     <div class="block"><h3>Why it's on the map${strength}</h3>
       <ul class="reasons">${site.reasons.map(r => `<li>${esc(r)}</li>`).join("")}</ul></div>
     <div class="block"><h3>Street-level photos</h3><div class="photos" id="photos"><p class="note">Looking…</p></div></div>
+    ${(site.entrances || []).length ? `<div class="block"><h3>${site.entrances.length} ways in</h3><div id="entrances"></div></div>` : ""}
     <div class="block"><h3>Getting there</h3><div id="getThere"><p class="note">Looking at the paths around it…</p></div></div>
     <div class="block"><h3>Your notes</h3>
       <textarea class="notes" id="noteBox" placeholder="Access, what's inside, when you went… Only kept on this device.">${esc((S.saved[site.key] || {}).note || "")}</textarea></div>
@@ -1222,6 +1274,7 @@ function onPosition(pos) {
   }
   renderLocBtn();
   renderBearing();
+  if (!prev || metres(prev, S.loc.pos) > 20) renderEntrances();
   if (!prev || metres(prev, S.loc.pos) > 75) scheduleList();
 }
 
@@ -1779,16 +1832,23 @@ async function suggest() {
   } catch (_) { /* offline or busy: the town row still works */ }
   if (seq !== suggestSeq || $("searchInput").value.trim() !== q) return;
   S.suggestions = places;
-  const leads = places.length && places[0].name.toLowerCase().startsWith(q.toLowerCase());
+  const starts = n => n.toLowerCase().startsWith(q.toLowerCase());
+  const leads = places.length && (starts(places[0].name) || (places[0].aliases || []).some(starts));
   $("suggest").innerHTML = places.map((s, i) => `
     <li><button type="button" role="option" data-pick="${i}" aria-selected="${leads && i === 0}">
       ${badge(s.category, "sm")}
-      <span><b>${esc(s.name)}</b><small>${esc(s.condition)} · ${esc(catLabel(s.category))}</small></span>
+      <span><b>${esc(s.name)}</b><small>${akaMatch(s, q) ? `also known as ${esc(akaMatch(s, q))}` : `${esc(s.condition)} · ${esc(catLabel(s.category))}`}</small></span>
       <span class="dist">${fmtDist(s.distance_m)}</span></button></li>`).join("")
     + `<li><button type="button" role="option" class="town" data-pick="town" aria-selected="${!leads}">
       ${svg(UI.pin)}<span><b>Find “${esc(q)}”</b><small>as a town, postcode or landmark</small></span><span></span></button></li>`;
   $("suggest").hidden = false;
   $("searchInput").setAttribute("aria-expanded", "true");
+}
+
+function akaMatch(site, q) {
+  const low = q.toLowerCase();
+  if (site.name.toLowerCase().includes(low)) return "";
+  return (site.aliases || []).find(a => a.toLowerCase().includes(low)) || "";
 }
 
 function hideSuggestions() {
