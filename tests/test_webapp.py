@@ -70,6 +70,13 @@ class WebAppTests(unittest.TestCase):
         page = page.decode()
         self.assertIn('rel="manifest"', page)
         self.assertIn('navigator.serviceWorker.register("/sw.js")', page)
+        # The installed app must set up its own worker: initInstall() stops early once installed, and an
+        # iPhone home-screen app doesn't share Safari's storage.
+        install = page[page.index("function initInstall()"):]
+        install = install[:install.index("\n}\n")]
+        self.assertIn("if (standalone) return;", install)
+        self.assertNotIn("serviceWorker.register", install)
+        self.assertIn("\ninitOffline();\n", page)
         self.assertIn('id="view-saved"', page)            # saved places, kept on the device
 
         status, raw, resp = self.request("GET", "/manifest.webmanifest")
