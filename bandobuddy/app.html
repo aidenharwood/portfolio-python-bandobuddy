@@ -178,8 +178,6 @@
     font-weight:600; letter-spacing:0; text-transform:none; color:var(--muted); vertical-align:1px }
   .tag.strong { border-color:var(--accent); color:var(--accent) }
   .foot { display:grid; gap:10px; padding-top:14px }
-  .keep { display:grid; gap:6px; padding:12px; border:1px solid var(--line); border-radius:12px; background:var(--raised) }
-  .keep .btn { justify-self:start }
   .exports { display:flex; gap:6px; align-items:center; flex-wrap:wrap }
 
   .btn { display:inline-flex; align-items:center; justify-content:center; gap:6px; padding:8px 12px; border:1px solid var(--line);
@@ -291,11 +289,7 @@
       <ul class="list" id="list"></ul>
       <p class="note" id="listNote" hidden></p>
       <div class="foot">
-        <div class="keep" id="keepBox" hidden>
-          <button type="button" class="btn small" id="keepBtn">Keep these places for offline</button>
-          <p class="note" id="keepNote">Saves every place in view, and its details, for when there's no signal.
-            Map pictures are kept as you scroll past them.</p>
-        </div>
+        <p class="note" id="keptNote" hidden></p>
         <div class="exports"><span class="note">Download these for a GPS app:</span>
           <a class="btn small" id="expGpx">GPX</a><a class="btn small" id="expKml">KML</a><a class="btn small" id="expCsv">CSV</a></div>
         <p class="credits">Places from <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors (ODbL),
@@ -468,7 +462,7 @@ const S = {
   map: null, bases: null, overlays: {}, base: "Map", zoomCtl: null, markers: new Map(), version: -1, mapSeq: 0, listSeq: 0,
   list: null, listNear: null, selected: null, site: null, status: null, prevVisit: null,
   view: "list", listSnap: "peek", sort: "nearest",
-  wakeLock: null, installPrompt: null, heading: null, compassOn: false, saved: {}, savedTab: "want", lastMap: null,
+  wakeLock: null, installPrompt: null, kept: {}, heading: null, compassOn: false, saved: {}, savedTab: "want", lastMap: null,
   loc: { wanted: false, watch: null, pos: null, follow: false, first: false, quiet: false, auto: false, paused: false, warned: false },
   me: { dot: null, acc: null },
 };
@@ -893,6 +887,7 @@ async function fetchList() {
   sayIfStale(view.stale);
   const data = view.data;
   S.list = data;
+  if (!view.stale) keepInView();
   S.listNear = S.loc.pos ? "you" : "centre";
   renderList();
 }
@@ -1445,10 +1440,10 @@ function initControls() {
   $("filterBtn").addEventListener("click", () => (S.view === "filters" ? backToList() : show("filters", "full")));
   $("statusCard").addEventListener("click", () => show("data", "full"));
   S.saved = loadSaved();
+  S.kept = loadKept();
   renderSavedBtn();
   $("savedBtn").addEventListener("click", () => { show("saved", "full"); renderSaved(); });
   $("savedGpx").addEventListener("click", savedGpx);
-  $("keepBtn").addEventListener("click", keepArea);
   $("sheet").addEventListener("input", e => { if (e.target.id === "noteBox") onNoteInput(); });
   window.addEventListener("storage", e => {   // another tab changed them
     if (e.key === SAVED_KEY) { S.saved = loadSaved(); refreshSavedMarks(); renderSavedBtn(); }
@@ -1574,51 +1569,89 @@ function initInstall() {
 
   window.addEventListener("offline", () => toast("You're offline. The map shows what you looked at last.", 5000));
   window.addEventListener("online", () => { toast("Back online."); scheduleFetch(0); });
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) keepInView(); });
+  navigator.serviceWorker?.addEventListener("controllerchange", keepInView);   // first visit: once the worker's in charge
 
   if ("serviceWorker" in navigator && window.isSecureContext) {
-    navigator.serviceWorker.register("/sw.js")
-      .then(() => { $("keepBox").hidden = false; })
-      .catch(() => { /* fine: the app just won't work offline */ });
+    navigator.serviceWorker.register("/sw.js").catch(() => { /* fine: the app just won't work offline */ });
   }
 }
 
-// ---------- keep an area for offline ----------
-// Only our own data: OpenStreetMap's tile policy rules out bulk-downloading map tiles for offline use.
-const KEEP_LIMIT = 200;
-let keeping = false;
+// ---------- the places in view are kept for offline, by themselves ----------
+// Once the map settles, the details of the places in the list are fetched quietly, so they open with
+// no signal. Gentle on the server: only zoomed in, two at a time, and each place once a week.
+// Our own data only: OpenStreetMap's tile policy rules out bulk-downloading map tiles.
+const KEPT_KEY = "bandobuddy:kept";
+const KEEP_FOR_MS = 7 * 864e5;   // after a week, fetch again so details stay fresh
+const KEEP_MIN_ZOOM = 12;        // roughly a town: not half a county
+const KEEP_SETTLE_MS = 1500;     // wait for the map to stop moving
+let keepQueue = [];
+let keepBusy = 0;
+let keepTimer = null;
+let keptWrite = null;
 
-async function keepArea() {
-  if (keeping) return;
-  keeping = true;
-  $("keepBtn").disabled = true;
-  const status = text => { $("keepNote").textContent = text; };
+function loadKept() {
+  let kept = {};
+  try { kept = JSON.parse(localStorage.getItem(KEPT_KEY)) || {}; } catch (_) { /* storage blocked */ }
+  const now = Date.now();
+  for (const [key, at] of Object.entries(kept)) if (now - at > KEEP_FOR_MS) delete kept[key];
+  return kept;
+}
+
+function saveKeptSoon() {
+  clearTimeout(keptWrite);
+  keptWrite = setTimeout(() => { try { localStorage.setItem(KEPT_KEY, JSON.stringify(S.kept)); } catch (_) { /* full */ } }, 2000);
+}
+
+function keepingBlocked() {
+  if (!("serviceWorker" in navigator) || !navigator.serviceWorker.controller) return "no worker";
+  const c = navigator.connection;
+  if (c && c.saveData) return "Not keeping places for offline while data saver is on.";
+  if (c && /2g/.test(c.effectiveType || "")) return "Not keeping places for offline on a slow connection.";
+  if (!navigator.onLine || document.hidden) return "paused";
+  if (S.map.getZoom() < KEEP_MIN_ZOOM) return "Zoom in and the places here are kept for offline by themselves.";
+  return "";
+}
+
+const isKept = key => S.kept[key] && Date.now() - S.kept[key] < KEEP_FOR_MS;
+
+function renderKept() {
+  const note = $("keptNote");
+  const sites = (S.list && S.list.sites) || [];
+  const blocked = keepingBlocked();
+  if (blocked === "no worker" || blocked === "paused" || !sites.length) { note.hidden = true; return; }
+  note.hidden = false;
+  const kept = sites.filter(s => isKept(s.key)).length;
+  note.textContent = blocked
+    || (kept === sites.length ? `The ${sites.length} place${sites.length === 1 ? " here is" : "s here are"} kept for offline.`
+                              : `Keeping the places here for offline… ${kept} of ${sites.length}`);
+}
+
+function keepInView() {
+  clearTimeout(keepTimer);
+  keepTimer = setTimeout(() => {
+    renderKept();
+    if (keepingBlocked()) return;
+    // Only what's in view now: moving on drops whatever was still waiting from before.
+    keepQueue = ((S.list && S.list.sites) || []).map(s => s.key).filter(key => !isKept(key));
+    while (keepBusy < 2 && keepQueue.length) keepNext();
+  }, KEEP_SETTLE_MS);
+}
+
+async function keepNext() {
+  const key = keepQueue.shift();
+  if (!key || keepingBlocked()) return;
+  keepBusy++;
   try {
-    const p = filterParams();
-    const area = listArea();
-    p.set("bbox", bboxOf(area.bounds));
-    p.set("near", nearOf(S.loc.pos || area.centre));
-    p.set("limit", String(KEEP_LIMIT));
-    const { sites, total } = await api(`/api/list?${p}`);
-    let done = 0;
-    const queue = sites.map(s => s.key);
-    const worker = async () => {
-      while (queue.length) {
-        const key = queue.shift();
-        try { await fetch(`/api/site/${encodeURIComponent(key)}`); } catch (_) { /* offline part-way: keep what we got */ }
-        done += 1;
-        status(`Keeping places for offline… ${done} of ${sites.length}`);
-      }
-    };
-    await Promise.all([worker(), worker(), worker()]);   // three at a time: gentle on the server
-    status(total > sites.length
-      ? `Kept the nearest ${sites.length} of ${fmtN(total)} places here. Zoom in and keep again for the rest.`
-      : `Kept all ${sites.length} places here for offline, with their details.`);
-  } catch (err) {
-    status(navigator.onLine ? `Couldn't keep this area: ${err.message}` : "You're offline, so there's nothing new to keep.");
-  } finally {
-    keeping = false;
-    $("keepBtn").disabled = false;
-  }
+    const res = await fetch(`/api/site/${encodeURIComponent(key)}`);
+    if (res.ok && !res.headers.get("X-Bandobuddy-Stale")) {
+      S.kept[key] = Date.now();
+      saveKeptSoon();
+    }
+  } catch (_) { /* lost signal part-way: keep what we got */ }
+  keepBusy--;
+  renderKept();
+  if (keepQueue.length) keepNext();
 }
 
 // ---------- places you've saved: on this device only ----------
