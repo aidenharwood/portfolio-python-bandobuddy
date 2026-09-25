@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from bandobuddy import cli, webapp
+from bandobuddy import __version__, cli, webapp
 
 from tests.fakes import FakeSession
 from tests.test_pipeline import HAVE_OSMIUM, make_updater
@@ -64,6 +64,40 @@ class WebAppTests(unittest.TestCase):
         self.assertIn("watchPosition", page)  # "use my location"
         self.assertNotIn("min_score", page)
         self.assertEqual(resp.getheader("Referrer-Policy"), "strict-origin-when-cross-origin")
+
+    def test_it_installs_as_an_app(self):
+        status, page, _ = self.request("GET", "/")
+        page = page.decode()
+        self.assertIn('rel="manifest"', page)
+        self.assertIn('navigator.serviceWorker.register("/sw.js")', page)
+
+        status, raw, resp = self.request("GET", "/manifest.webmanifest")
+        self.assertEqual(status, 200)
+        self.assertTrue(resp.getheader("Content-Type").startswith("application/manifest+json"))
+        manifest = json.loads(raw)
+        self.assertEqual(manifest["start_url"], "/")
+        self.assertEqual(manifest["display"], "standalone")
+        self.assertEqual({i["sizes"] for i in manifest["icons"]}, {"192x192", "512x512"})
+        self.assertIn("maskable", [i.get("purpose") for i in manifest["icons"]])
+
+        status, sw, resp = self.request("GET", "/sw.js")
+        self.assertEqual(status, 200)
+        self.assertNotIn(b"__VERSION__", sw)             # stamped, so a release retires old caches
+        self.assertIn(__version__.encode(), sw)
+        self.assertEqual(resp.getheader("Cache-Control"), "no-cache")
+        self.assertEqual(resp.getheader("Service-Worker-Allowed"), "/")
+
+        for path in ("/static/icon-192.png", "/static/icon-512.png", "/static/icon-maskable-512.png",
+                     "/static/apple-touch-icon.png"):
+            status, body, resp = self.request("GET", path)
+            self.assertEqual(status, 200, path)
+            self.assertEqual(resp.getheader("Content-Type"), "image/png", path)
+            self.assertTrue(body.startswith(b"\x89PNG"), path)
+            self.assertIn("max-age", resp.getheader("Cache-Control"), path)
+
+        # Nothing else is served from the package, however the path is dressed up.
+        for path in ("/static/../webapp.py", "/static/sw.js", "/static/nope.png"):
+            self.assertEqual(self.request("GET", path)[0], 404, path)
 
     def test_list_nearest_first_with_filters(self):
         view = "bbox=-0.2,51.4,0.0,51.6"

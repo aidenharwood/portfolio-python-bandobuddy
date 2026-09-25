@@ -7,6 +7,11 @@
 <meta name="theme-color" content="#1a1916" media="(prefers-color-scheme: dark)">
 <meta name="description" content="A free, open map of likely-abandoned places across the UK.">
 <title>bandobuddy</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="bandobuddy">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%23ea580c'/%3E%3Cpath d='M4 19h16M6 19v-6a6 6 0 0 1 12 0v6M10 19v-5a2 2 0 0 1 4 0v5' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
       integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
@@ -309,6 +314,11 @@
         <div class="row"><span class="note">Refresh every</span><input type="number" id="updateDays" min="1" max="90" style="width:72px"><span class="note">days</span></div>
         <p class="note" id="dataDir"></p>
       </div>
+      <div class="source" id="installBox" hidden>
+        <h3><span>Install bandobuddy</span><button type="button" class="btn small accent" id="installBtn">Install</button></h3>
+        <p class="note" id="installNote">Adds it to your home screen and opens it full screen, with the places and
+          map tiles you've already looked at kept for when there's no signal.</p>
+      </div>
       <details class="box" id="logBox"><summary>Log</summary><div><pre class="log" id="log"></pre></div></details>
       <p class="note" id="publicNote" style="margin-top:12px" hidden>This public copy refreshes itself automatically.</p>
       <p class="credits" id="registerCredits" style="margin-top:12px"></p>
@@ -379,6 +389,7 @@ const S = {
   map: null, bases: null, overlays: {}, base: "Map", zoomCtl: null, markers: new Map(), version: -1, mapSeq: 0, listSeq: 0,
   list: null, listNear: null, selected: null, site: null, status: null, prevVisit: null,
   view: "list", listSnap: "peek",
+  wakeLock: null, installPrompt: null,
   loc: { wanted: false, watch: null, pos: null, follow: false, first: false, quiet: false, auto: false, paused: false, warned: false },
   me: { dot: null, acc: null },
 };
@@ -921,7 +932,22 @@ async function shareSite(site) {
 }
 
 // ---------- your location ----------
+// Keep the screen on while you're walking to a place; let it sleep as soon as you stop.
+async function holdScreenAwake(wanted) {
+  if (!("wakeLock" in navigator)) return;
+  try {
+    if (wanted && !S.wakeLock && !document.hidden) {
+      S.wakeLock = await navigator.wakeLock.request("screen");
+      S.wakeLock.addEventListener("release", () => { S.wakeLock = null; });
+    } else if (!wanted && S.wakeLock) {
+      await S.wakeLock.release();
+      S.wakeLock = null;
+    }
+  } catch (_) { /* refused (low battery, or not allowed): the map still works */ }
+}
+
 function renderLocBtn() {
+  holdScreenAwake(S.loc.wanted);
   const st = !S.loc.wanted ? "off" : !S.loc.pos ? "searching" : S.loc.follow ? "follow" : "on";
   const b = $("locBtn");
   b.className = `fab ${st}`;
@@ -1015,6 +1041,7 @@ document.addEventListener("visibilitychange", () => {
     S.loc.paused = false;
     watchLocation();
   }
+  holdScreenAwake(!document.hidden && S.loc.wanted);
 });
 
 // Ask for the user's location as the page opens (the browser shows its own prompt the first time),
@@ -1238,6 +1265,41 @@ function initControls() {
   });
 }
 
+// Installing, and working without a signal.
+function initInstall() {
+  const standalone = window.matchMedia("(display-mode: standalone)").matches || navigator.standalone;
+  const apple = /iPhone|iPad|iPod/.test(navigator.userAgent);
+  if (standalone) return;
+  if (apple) {  // Safari has no prompt: say how instead
+    $("installBox").hidden = false;
+    $("installBtn").hidden = true;
+    $("installNote").textContent = "Tap Share, then \"Add to Home Screen\", to keep bandobuddy on your home "
+      + "screen. It then opens full screen, with the places and map tiles you've already looked at kept for "
+      + "when there's no signal.";
+  }
+  window.addEventListener("beforeinstallprompt", e => {
+    e.preventDefault();
+    S.installPrompt = e;
+    $("installBox").hidden = false;
+  });
+  $("installBtn").addEventListener("click", async () => {
+    const prompt = S.installPrompt;
+    if (!prompt) return;
+    S.installPrompt = null;
+    $("installBox").hidden = true;
+    prompt.prompt();
+    await prompt.userChoice;
+  });
+  window.addEventListener("appinstalled", () => { $("installBox").hidden = true; });
+
+  window.addEventListener("offline", () => toast("You're offline. The map shows what you looked at last.", 5000));
+  window.addEventListener("online", () => { toast("Back online."); scheduleFetch(0); });
+
+  if ("serviceWorker" in navigator && window.isSecureContext) {
+    navigator.serviceWorker.register("/sw.js").catch(() => { /* fine: the app just won't work offline */ });
+  }
+}
+
 // "New since last visit" compares against the previous session's visit time.
 try {
   S.prevVisit = sessionStorage.getItem("bandobuddy:prevVisit") || localStorage.getItem("bandobuddy:lastVisit");
@@ -1246,6 +1308,7 @@ try {
 } catch (_) { /* storage blocked */ }
 
 initControls();
+initInstall();
 initFilters();
 initSheetDrag();
 Sheet.set("peek");
