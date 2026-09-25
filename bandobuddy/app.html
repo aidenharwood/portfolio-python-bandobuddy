@@ -169,6 +169,8 @@
     font-weight:600; letter-spacing:0; text-transform:none; color:var(--muted); vertical-align:1px }
   .tag.strong { border-color:var(--accent); color:var(--accent) }
   .foot { display:grid; gap:10px; padding-top:14px }
+  .keep { display:grid; gap:6px; padding:12px; border:1px solid var(--line); border-radius:12px; background:var(--raised) }
+  .keep .btn { justify-self:start }
   .exports { display:flex; gap:6px; align-items:center; flex-wrap:wrap }
 
   .btn { display:inline-flex; align-items:center; justify-content:center; gap:6px; padding:8px 12px; border:1px solid var(--line);
@@ -280,6 +282,11 @@
       <ul class="list" id="list"></ul>
       <p class="note" id="listNote" hidden></p>
       <div class="foot">
+        <div class="keep" id="keepBox" hidden>
+          <button type="button" class="btn small" id="keepBtn">Keep these places for offline</button>
+          <p class="note" id="keepNote">Saves every place in view, and its details, for when there's no signal.
+            Map pictures are kept as you scroll past them.</p>
+        </div>
         <div class="exports"><span class="note">Download these for a GPS app:</span>
           <a class="btn small" id="expGpx">GPX</a><a class="btn small" id="expKml">KML</a><a class="btn small" id="expCsv">CSV</a></div>
         <p class="credits">Places from <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors (ODbL),
@@ -1320,6 +1327,7 @@ function initControls() {
   renderSavedBtn();
   $("savedBtn").addEventListener("click", () => { show("saved", "full"); renderSaved(); });
   $("savedGpx").addEventListener("click", savedGpx);
+  $("keepBtn").addEventListener("click", keepArea);
   $("sheet").addEventListener("input", e => { if (e.target.id === "noteBox") onNoteInput(); });
   window.addEventListener("storage", e => {   // another tab changed them
     if (e.key === SAVED_KEY) { S.saved = loadSaved(); refreshSavedMarks(); renderSavedBtn(); }
@@ -1444,7 +1452,48 @@ function initInstall() {
   window.addEventListener("online", () => { toast("Back online."); scheduleFetch(0); });
 
   if ("serviceWorker" in navigator && window.isSecureContext) {
-    navigator.serviceWorker.register("/sw.js").catch(() => { /* fine: the app just won't work offline */ });
+    navigator.serviceWorker.register("/sw.js")
+      .then(() => { $("keepBox").hidden = false; })
+      .catch(() => { /* fine: the app just won't work offline */ });
+  }
+}
+
+// ---------- keep an area for offline ----------
+// Only our own data: OpenStreetMap's tile policy rules out bulk-downloading map tiles for offline use.
+const KEEP_LIMIT = 200;
+let keeping = false;
+
+async function keepArea() {
+  if (keeping) return;
+  keeping = true;
+  $("keepBtn").disabled = true;
+  const status = text => { $("keepNote").textContent = text; };
+  try {
+    const p = filterParams();
+    const area = listArea();
+    p.set("bbox", bboxOf(area.bounds));
+    p.set("near", nearOf(S.loc.pos || area.centre));
+    p.set("limit", String(KEEP_LIMIT));
+    const { sites, total } = await api(`/api/list?${p}`);
+    let done = 0;
+    const queue = sites.map(s => s.key);
+    const worker = async () => {
+      while (queue.length) {
+        const key = queue.shift();
+        try { await fetch(`/api/site/${encodeURIComponent(key)}`); } catch (_) { /* offline part-way: keep what we got */ }
+        done += 1;
+        status(`Keeping places for offline… ${done} of ${sites.length}`);
+      }
+    };
+    await Promise.all([worker(), worker(), worker()]);   // three at a time: gentle on the server
+    status(total > sites.length
+      ? `Kept the nearest ${sites.length} of ${fmtN(total)} places here. Zoom in and keep again for the rest.`
+      : `Kept all ${sites.length} places here for offline, with their details.`);
+  } catch (err) {
+    status(navigator.onLine ? `Couldn't keep this area: ${err.message}` : "You're offline, so there's nothing new to keep.");
+  } finally {
+    keeping = false;
+    $("keepBtn").disabled = false;
   }
 }
 

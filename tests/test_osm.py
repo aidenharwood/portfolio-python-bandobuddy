@@ -36,6 +36,14 @@ class ClassifyTests(unittest.TestCase):
         self.assertEqual(classify({"building": "yes", "description": "Derelict since 1990", "disused": "yes"}),
                          ("OSM: description says 'derelict'", 25))
 
+    def test_only_lifecycle_tags_on_the_feature_itself_count(self):
+        # A pub whose website has lapsed is not a derelict pub.
+        self.assertIsNone(classify({"amenity": "pub", "disused:website": "http://example.org"}))
+        self.assertIsNone(classify({"shop": "bakery", "disused:phone": "01225 000000", "disused:opening_hours": "Mo-Fr"}))
+        # When both are there, the evidence names the pub, not the website.
+        evidence, _ = classify({"disused:website": "http://example.org", "disused:amenity": "pub", "disused:building": "yes"})
+        self.assertEqual(evidence, "OSM: disused:amenity=pub")
+
     def test_heritage_ruins_and_shop_units_count_for_less(self):
         castle = {"building": "ruins", "historic": "castle", "name": "Old Wardour Castle", "operator": "English Heritage"}
         self.assertEqual(classify(castle)[1], 10)
@@ -46,6 +54,8 @@ class ClassifyTests(unittest.TestCase):
     def test_is_candidate_prefilter(self):
         self.assertTrue(is_candidate([Tag("disused:shop", "x")]))
         self.assertTrue(is_candidate([Tag("military", "bunker")]))
+        self.assertTrue(is_candidate([Tag("disused:amenity", "pub")]))
+        self.assertFalse(is_candidate([Tag("amenity", "pub"), Tag("disused:website", "http://example.org")]))
         self.assertTrue(is_candidate([Tag("name", "The Derelict Barn")]))
         self.assertFalse(is_candidate([Tag("amenity", "cafe"), Tag("name", "Busy Cafe")]))
         self.assertFalse(is_candidate([Tag("disused", "no")]))
