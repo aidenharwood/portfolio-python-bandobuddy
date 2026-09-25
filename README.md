@@ -133,7 +133,8 @@ Once installed it keeps working where the signal doesn't:
 
 - the page, its icons and Leaflet are cached, so it opens with no connection at all
 - map tiles you've already looked at are kept (capped at 600, and only ever tiles you actually viewed)
-- places you've looked at are kept, so the nearby list and a shared link still open offline
+- places you've looked at are kept, so the nearby list and a shared link still open offline; move somewhere
+  you haven't loaded and it shows the nearest view it does have, and says so
 - the screen stays awake while you're following your location, and sleeps as soon as you stop
 
 Updates and settings still need a connection, and the app tells you when you're offline. A new release retires the
