@@ -348,12 +348,14 @@ class Store:
 
     def list_sites(self, near: tuple[float, float] | None = None, sort: str = "nearest", limit: int = 100,
                    **filters) -> tuple[int, list[dict]]:
-        """Sites for the side list, nearest to `near` first (or strongest evidence first)."""
+        """Sites for the side list: nearest to `near` first, strongest evidence first, or newest first."""
         where, args = self._site_filter(**filters)
         if sort == "nearest" and near:
             lat, lng = near
             k2 = math.cos(math.radians(lat)) ** 2  # longitude degrees shrink away from the equator
             order, order_args = "(lat - ?) * (lat - ?) + (lng - ?) * (lng - ?) * ?", [lat, lat, lng, lng, k2]
+        elif sort == "newest":
+            order, order_args = "COALESCE(added, first_seen) DESC, score DESC, key", []
         else:
             order, order_args = "score DESC, key", []
         with self.connect() as db:
