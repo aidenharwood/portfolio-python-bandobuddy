@@ -6,11 +6,13 @@ merging rules in one place and means tweaking the scoring never needs a re-crawl
 from __future__ import annotations
 
 import math
+import re
 from collections import defaultdict
 from difflib import SequenceMatcher
 
 from .geo import haversine_m
 from .osm import best_name, classify, describe_kind
+from .config import WEAK_BELOW
 from .scoring import category_for, condition_for, score_site, strength_for
 from .store import Store
 from .wikidata import evaluate, wikipedia_title
@@ -18,6 +20,8 @@ from .wikidata import evaluate, wikipedia_title
 TWIN_M = 40      # OSM elements this close (and not differently named) are one site
 MATCH_M = 80     # Wikidata items this close and similarly named, or within SAME_SPOT_M, join a site
 SAME_SPOT_M = 25
+LOOSE_M = 60     # a weak lead this close to a site is the same place, whatever each calls it
+COMPLEX_M = 120  # parts of one quarry or colliery that a register recorded separately
 CELL_DEG = 0.002  # grid cell for neighbour lookups; bigger than MATCH_M in both directions
 
 
@@ -41,6 +45,10 @@ def _similar(a: str, b: str) -> float:
     return SequenceMatcher(None, a.lower().strip(), b.lower().strip()).ratio()
 
 
+def _strongest(site: dict) -> int:
+    return max((m["weight"] for m in site["osm"] + site["wikidata"] + site["open"]), default=0)
+
+
 def _best_match(item: dict, candidates: list[dict]) -> dict | None:
     best, best_score = None, 0.0
     for c in candidates:
@@ -48,11 +56,70 @@ def _best_match(item: dict, candidates: list[dict]) -> dict | None:
         if d > MATCH_M:
             continue
         sim = _similar(item["name"], c["name"]) if item.get("name") else 0.0
-        if d <= SAME_SPOT_M or sim >= 0.6:
+        # A brownfield plot or heritage listing sitting on a ruin is that ruin, not a second place.
+        loose = d <= LOOSE_M and min(item["weight"], _strongest(c)) < WEAK_BELOW
+        if d <= SAME_SPOT_M or sim >= 0.6 or loose:
             s = sim + (1 - d / MATCH_M)
             if s > best_score:
                 best, best_score = c, s
     return best
+
+
+# Words that name a kind of thing, or a part of one, rather than a particular place.
+_KINDS = {"quarry", "quarries", "mine", "mines", "mill", "mills", "colliery", "collieries", "works", "pit", "pits",
+          "shaft", "shafts", "adit", "adits", "level", "levels", "kiln", "kilns", "ironworks", "brickworks"}
+_PARTS = {"track", "trackway", "incline", "tramway", "ropeway", "base", "engine", "house", "building", "buildings",
+          "site", "post", "battery", "winding", "wheelpit", "tip", "tips", "reservoir", "leat", "office", "store",
+          "disused", "former", "old", "north", "south", "east", "west", "upper", "lower", "the", "of", "and", "y"}
+_NUMBERED = re.compile(r"\s+(?:[ivx]+|\d+)$", re.I)
+
+
+def _words(part: str) -> list[str]:
+    return [w for w in re.findall(r"[a-z0-9']+", part.lower()) if not re.fullmatch(r"[ivx]+|\d+", w)]
+
+
+def _complex_parts(name: str) -> set[str]:
+    """Parts of a name that name a whole complex: a distinctive word and a kind of place
+    ("Manod Granite Quarries"), not a village ("Llandaff") or a bare kind ("Disused Quarry")."""
+    out = set()
+    for part in name.split(","):
+        words = _words(part)
+        if any(w in _KINDS for w in words) and any(w not in _KINDS and w not in _PARTS for w in words):
+            out.add(" ".join(words))
+    return out
+
+
+def _numbered(name: str) -> tuple[str, str] | None:
+    """"Quarry II, Bwlch y Bi" -> ("quarry", "bwlch y bi"): one of several numbered parts."""
+    parts = [p.strip() for p in name.split(",")]
+    if len(parts) != 2 or not _NUMBERED.search(parts[0]):
+        return None
+    return " ".join(_words(parts[0])), " ".join(_words(parts[1]))
+
+
+def _same_complex(item: dict, candidates: list[dict]) -> tuple[dict, str] | None:
+    """The site this record is one more part of, and the name for the whole."""
+    mine, numbered = _complex_parts(item["name"]), _numbered(item["name"])
+    if not mine and not numbered:
+        return None
+    best, closest = None, COMPLEX_M
+    for c in candidates:
+        d = haversine_m(item["lat"], item["lng"], c["lat"], c["lng"])
+        if d > closest:
+            continue
+        shared = mine & _complex_parts(c["name"])
+        if shared:
+            best, closest = (c, next(iter(shared))), d
+        elif numbered and _numbered(c["name"]) == numbered:
+            best, closest = (c, None), d
+    if not best:
+        return None
+    site, shared = best
+    if shared:  # name it after the complex, as the register spelled it
+        whole = next(p.strip() for p in item["name"].split(",") if " ".join(_words(p)) == shared)
+        return site, _NUMBERED.sub("", whole)
+    feature, place = [p.strip() for p in item["name"].split(",")]
+    return site, f"{_NUMBERED.sub('', feature)}, {place}"
 
 
 def build_sites(store: Store) -> int:
@@ -114,7 +181,15 @@ def build_sites(store: Store) -> int:
         ev = {"ref": row["ref"], "name": row["name"], "kind": row["kind"], "evidence": row["evidence"],
               "weight": row["weight"], "url": row["url"], "lat": row["lat"], "lng": row["lng"],
               "first_seen": row["first_seen"], "source": row["dataset"]}
-        target = _best_match(ev, grid.near(row["lat"], row["lng"]))
+        near = grid.near(row["lat"], row["lng"])
+        # "Track II" and "Incline III" of the same quarry are one place to visit, named for the quarry.
+        found = _same_complex(ev, [s for s in near if s["open"] and not s["osm"] and not s["wikidata"]])
+        if found:
+            complex_site, whole = found
+            complex_site["open"].append(ev)
+            complex_site["name"] = whole
+            continue
+        target = _best_match(ev, near)
         if target:
             target["open"].append(ev)
             if target["name"].startswith("Unnamed ") and not ev["name"].startswith("Unnamed "):

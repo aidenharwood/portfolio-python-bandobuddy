@@ -43,12 +43,13 @@ DEAD_NAME_WORDS = ["abandoned", "derelict", "disused", "defunct", "ruin", "ruins
 # kind, evidence text and Wikidata types. Order matters: a ruined chapel is a chapel, a railway
 # tunnel is a tunnel, and anything else that's ruined falls through to "Ruins & castles".
 CATEGORIES = [
-    ("military", "Military", r"bunker|pillbox|military|barracks|\bfort\b|air[- ]raid|anti[- ]aircraft|\broc\b|observation post"
-                             r"|observer corps"
-                             r"|blockhouse|aeroway|aerodrome|airfield|\braf\b|firing range|searchlight|gun emplacement"
-                             r"|decoy"),
-    ("underground", "Mines, caves & tunnels", r"\bmines?\b|\badit|shaft|quarr|\bcaves?\b|cave entrance|colliery|tunnel|workings"
-                                              r"|catacomb|underground"),
+    # A hatch in a field: ROC monitoring posts, bunkers and pillboxes are their own kind of trip.
+    ("bunkers", "Bunkers & ROC posts", r"bunker|pillbox|\broc\b|observation post|observer corps|monitoring post"
+                                       r"|blockhouse|air[- ]raid shelter|nuclear"),
+    ("military", "Military", r"military|barracks|\bfort\b|air[- ]raid|anti[- ]aircraft|aeroway|aerodrome|airfield"
+                             r"|\braf\b|firing range|searchlight|gun emplacement|decoy|\bbattery\b"),
+    ("mines", "Mines & quarries", r"\bmines?\b|\badit|shaft|quarr|colliery|workings"),
+    ("tunnels", "Tunnels & caves", r"tunnel|\bcaves?\b|cave entrance|catacomb|underground"),
     ("rail", "Railways", r"railway|train station|\bhalt\b|viaduct|signal box|platform|\brail\b|tramway"),
     ("industrial", "Industrial", r"\bmills?\b|windmill|watermill|sawmill|factory|\bworks\b|brewery|distillery|maltings"
                                  r"|power station|power plant|\bpower\b|gasworks|warehouse|foundry|kiln|chimney"

@@ -214,6 +214,37 @@ _GONE = re.compile(r"\bsite of\b|\(site\)|demolish|destroyed|\bremoved\b|no long
                    r"|\blevelled\b|built over|\bobliterated\b", re.I)
 
 
+# Words that say what a part of a name *is*: "Ackergill, Quadrant Observation Tower" is about the tower.
+_FEATURE = re.compile("|".join(rx for rx, _, _ in RECORD_TYPES)
+                      + r"|\btower\b|\bhall\b|\bstation\b|\bcamp\b|\bpit\b|\bincline\b|tramway|ropeway"
+                      + r"|\btrack\b|\bbridge\b|chapel|church|\bhouse\b", re.I)
+_SMALL_WORDS = {"of", "the", "and", "on", "in", "at", "by", "upon", "y", "yr"}
+_ROMAN = re.compile(r"(?:i{1,3}|iv|vi{0,3}|ix|x)", re.I)
+
+
+def _cased(word: str, first: bool) -> str:
+    low = word.lower()
+    if low == "roc" or (_ROMAN.fullmatch(low) and not first):
+        return low.upper()
+    if low in _SMALL_WORDS and not first:
+        return low
+    return low[:1].upper() + low[1:]
+
+
+def tidy_name(name: str, shouting: bool = False) -> str:
+    """Make a register's name read like a name. Canmore shouts ("LOCH OF BRECK, NORSE MILL") and
+    both registers lead with the parish; lead with the thing instead, then where it is:
+    "Coetgae, Abertillery, Former Opencast Mine" -> "Former Opencast Mine, Abertillery"."""
+    name = re.sub(r"\s*\[[^\]]*\]", "", name or "")        # "[Disused]" is the condition, not the name
+    if shouting:
+        name = re.sub(r"[A-Za-z]+(?:'[A-Za-z]+)?", lambda m: _cased(m.group(0), m.start() == 0), name.strip())
+    parts = [p.strip() for p in re.sub(r"\s+,", ",", name).split(",") if p.strip()]
+    feature = next((i for i in range(len(parts) - 1, -1, -1) if _FEATURE.search(parts[i])), None)
+    if feature:                                              # found, and not already first
+        parts = [parts[feature], parts[feature - 1]]
+    return ", ".join(parts)
+
+
 def sounds_gone(text: str) -> bool:
     """Does a record say the place isn't there any more?"""
     return bool(_GONE.search(text))
@@ -287,8 +318,9 @@ def _brownfield(row: dict) -> dict | None:
 
 
 def _canmore(row: dict) -> dict | None:
-    name = (row.get("NMRSNAME") or "").strip().title()
-    verdict = judge_segments(row.get("SITETYPE") or "", name)
+    raw = (row.get("NMRSNAME") or "").strip()
+    verdict = judge_segments(row.get("SITETYPE") or "", raw)
+    name = tidy_name(raw, shouting=True)
     if not verdict:
         return None
     weight, kind, what = verdict
@@ -303,8 +335,9 @@ def _canmore(row: dict) -> dict | None:
 
 
 def _coflein(row: dict) -> dict | None:
-    name = (row.get("name") or "").strip()
-    verdict = judge_segments(row.get("site_type") or "", name)
+    raw = (row.get("name") or "").strip()
+    verdict = judge_segments(row.get("site_type") or "", raw)
+    name = tidy_name(raw)
     if not verdict:
         return None
     weight, kind, what = verdict
