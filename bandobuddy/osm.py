@@ -11,12 +11,16 @@ import threading
 from pathlib import Path
 from typing import Callable
 
+from .geo import haversine_m
+
 # Lifecycle prefixes on things that are just lines on the ground (old trackbeds,
 # removed power lines, etc.) - not somewhere to explore.
 LINEAR_VALUES = {
     "rail", "tram", "light_rail", "narrow_gauge", "subway", "monorail", "funicular",
     "line", "minor_line", "cable", "road", "track", "path", "footway", "service",
     "unclassified", "residential", "canal", "ditch", "drain", "pipeline",
+    "motorway", "trunk", "primary", "secondary", "tertiary", "motorway_link", "trunk_link", "primary_link",
+    "secondary_link", "tertiary_link", "living_street", "pedestrian", "bridleway", "cycleway", "steps",
 }
 
 # Evidence weights, fed into the score in scoring.py.
@@ -51,6 +55,23 @@ HERITAGE_OPERATORS = re.compile(r"english heritage|national trust|cadw|historic 
 # not a building standing empty.
 POINT_UNIT_KEYS = ("disused:shop", "disused:amenity", "disused:office", "disused:craft", "disused:healthcare")
 POINT_UNIT = 15
+
+
+# In use as somewhere to visit: whatever it was, it's open, staffed and looked after now.
+ATTRACTIONS = {"museum": "Museum", "gallery": "Gallery", "attraction": "Visitor attraction",
+               "theme_park": "Theme park", "zoo": "Zoo", "aquarium": "Aquarium"}
+
+
+def in_use_as(tags: dict[str, str]) -> str | None:
+    """What a place is in use as today, if that's a visitor attraction ("Museum"), else None."""
+    if tags.get("tourism") in ATTRACTIONS:
+        return ATTRACTIONS[tags["tourism"]]
+    if tags.get("railway") in ("station", "halt") and (tags.get("usage") == "tourism"
+                                                       or tags.get("railway:preserved") == "yes"):
+        return "Heritage railway"
+    if HERITAGE_OPERATORS.search(tags.get("operator", "")):
+        return "Heritage site"
+    return None
 
 
 def is_heritage_site(tags: dict[str, str]) -> bool:
@@ -163,6 +184,9 @@ def is_candidate(tags) -> bool:
         values = _INTERESTING.get(k)
         if values is not None and tag.v in values:
             return True
+        if (k == "tourism" and tag.v in ATTRACTIONS) or (k == "usage" and tag.v == "tourism") \
+                or (k == "operator" and HERITAGE_OPERATORS.search(tag.v)):
+            return True  # not a lead itself, but it tells us a lead nearby is open to the public
         if k in _TEXT_KEYS and _DEAD_WORDS.search(tag.v):
             return True
     return False
@@ -205,12 +229,13 @@ def extract_candidates(
         if not is_candidate(obj.tags):
             continue
         tags = {t.k: t.v for t in obj.tags}
-        if classify(tags) is None:
+        if classify(tags) is None and in_use_as(tags) is None:
             continue
         kind = obj.type_str()
         if kind == "n":
             if obj.location.valid():
-                nodes.append({"osm_id": f"node/{obj.id}", "lat": obj.location.lat, "lng": obj.location.lon, "tags": tags})
+                nodes.append({"osm_id": f"node/{obj.id}", "lat": obj.location.lat, "lng": obj.location.lon,
+                              "extent_m": 0, "tags": tags})
         elif kind == "w":
             ways[obj.id] = (tags, [n.ref for n in obj.nodes])
         else:
@@ -240,21 +265,23 @@ def extract_candidates(
         if cancel.is_set():
             raise Cancelled()
 
-    def centre(refs: list[int]) -> tuple[float, float] | None:
+    def place(refs: list[int]) -> tuple[float, float, int] | None:
+        """Centre of the outline's box, and half its diagonal: how far the outline reaches."""
         pts = [coords[r] for r in refs if r in coords]
         if not pts:
             return None
         lats, lngs = [p[0] for p in pts], [p[1] for p in pts]
-        return (min(lats) + max(lats)) / 2, (min(lngs) + max(lngs)) / 2
+        reach = haversine_m(min(lats), min(lngs), max(lats), max(lngs)) / 2
+        return (min(lats) + max(lats)) / 2, (min(lngs) + max(lngs)) / 2, round(reach)
 
     out = list(nodes)
     for wid, (tags, refs) in ways.items():
-        c = centre(refs)
+        c = place(refs)
         if c:
-            out.append({"osm_id": f"way/{wid}", "lat": c[0], "lng": c[1], "tags": tags})
+            out.append({"osm_id": f"way/{wid}", "lat": c[0], "lng": c[1], "extent_m": c[2], "tags": tags})
     for rid, (tags, members) in rels.items():
-        c = centre([r for wid in members for r in member_ways.get(wid, [])])
+        c = place([r for wid in members for r in member_ways.get(wid, [])])
         if c:
-            out.append({"osm_id": f"relation/{rid}", "lat": c[0], "lng": c[1], "tags": tags})
+            out.append({"osm_id": f"relation/{rid}", "lat": c[0], "lng": c[1], "extent_m": c[2], "tags": tags})
     report("Placing outlines", len(wanted_nodes), len(wanted_nodes))
     return out

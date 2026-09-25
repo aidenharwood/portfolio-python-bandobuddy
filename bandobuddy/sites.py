@@ -11,7 +11,7 @@ from collections import defaultdict
 from difflib import SequenceMatcher
 
 from .geo import haversine_m
-from .osm import best_name, classify, describe_kind
+from .osm import best_name, classify, describe_kind, in_use_as
 from .config import WEAK_BELOW
 from .scoring import category_for, condition_for, score_site, strength_for
 from .store import Store
@@ -22,6 +22,11 @@ MATCH_M = 80     # Wikidata items this close and similarly named, or within SAME
 SAME_SPOT_M = 25
 LOOSE_M = 60     # a weak lead this close to a site is the same place, whatever each calls it
 COMPLEX_M = 120  # parts of one quarry or colliery that a register recorded separately
+ATTRACTION_SPOT_M = 15    # a museum mapped as a single point speaks for its own building...
+ATTRACTION_POINT_M = 40   # ...or a neighbour this close that shares its name; on a high street, 40 m is five shops
+ATTRACTION_EDGE_M = 20    # slack around an outline, for a colliery point just inside the museum's fence
+ATTRACTION_MAX_M = 1500   # an "attraction" reaching further (a country park) says nothing about one building
+ATTRACTION_CELL = 0.01    # ~1 km lookups: wider than the biggest reach we believe
 CELL_DEG = 0.002  # grid cell for neighbour lookups; bigger than MATCH_M in both directions
 
 
@@ -122,6 +127,45 @@ def _same_complex(item: dict, candidates: list[dict]) -> tuple[dict, str] | None
     return site, f"{_NUMBERED.sub('', feature)}, {place}"
 
 
+class Attractions:
+    """Places in use as somewhere to visit, and how far each reaches."""
+
+    def __init__(self):
+        self.cells: dict[tuple[int, int], list[dict]] = defaultdict(list)
+
+    def add(self, lat: float, lng: float, reach_m: float | None, kind: str, name: str | None, source: str) -> None:
+        """`reach_m` is how far an outline reaches; None for something mapped as a point."""
+        self.cells[(math.floor(lat / ATTRACTION_CELL), math.floor(lng / ATTRACTION_CELL))].append(
+            {"lat": lat, "lng": lng, "reach": reach_m, "kind": kind, "name": name, "source": source})
+
+    def covering(self, lat: float, lng: float, name: str) -> dict | None:
+        ci, cj = math.floor(lat / ATTRACTION_CELL), math.floor(lng / ATTRACTION_CELL)
+        best, closest = None, math.inf
+        for di in (-1, 0, 1):
+            for dj in (-1, 0, 1):
+                for a in self.cells.get((ci + di, cj + dj), ()):
+                    d = haversine_m(lat, lng, a["lat"], a["lng"])
+                    if a["reach"] is not None:
+                        inside = d <= a["reach"]
+                    else:
+                        inside = d <= ATTRACTION_SPOT_M or (d <= ATTRACTION_POINT_M and _share_a_name(name, a["name"]))
+                    if inside and d < closest:
+                        best, closest = a, d
+        return best
+
+
+_PLAIN_WORDS = {"the", "and", "old", "museum", "gallery", "centre", "center", "heritage", "house", "hall", "visitor",
+                "attraction", "trust", "national", "english", "unnamed", "building", "structure", "church", "chapel"}
+
+
+def _share_a_name(a: str | None, b: str | None) -> bool:
+    """"Wilton Royal Carpet Factory" and "Wilton Royal Carpet Factory Museum" share a name; "The Bear" and
+    "Chippenham Museum" don't."""
+    def words(s):
+        return {w for w in re.findall(r"[a-z']+", (s or "").lower()) if len(w) > 3 and w not in _PLAIN_WORDS}
+    return bool(words(a) & words(b))
+
+
 def build_sites(store: Store) -> int:
     """Rebuild the sites table from the raw items. Returns how many sites there are."""
     grid = Grid()
@@ -135,7 +179,13 @@ def build_sites(store: Store) -> int:
 
     # OSM: strongest evidence first, so a cluster is keyed by (and named after) its best element.
     osm_items = []
+    attractions = Attractions()
     for item in store.active_osm():
+        use = in_use_as(item["tags"])
+        extent = item.get("extent_m") or 0
+        if use and extent <= ATTRACTION_MAX_M:
+            reach = extent + ATTRACTION_EDGE_M if extent else None
+            attractions.add(item["lat"], item["lng"], reach, use, best_name(item["tags"]), "OpenStreetMap")
         verdict = classify(item["tags"], item["osm_id"].split("/", 1)[0])
         if verdict:
             osm_items.append((verdict, item))
@@ -165,6 +215,8 @@ def build_sites(store: Store) -> int:
         if not ev:
             continue
         ev.update(first_seen=row["first_seen"], source="wikidata")
+        if ev.get("in_use"):
+            attractions.add(ev["lat"], ev["lng"], None, ev["in_use"], ev["name"], "Wikidata")
         target = _best_match(ev, grid.near(ev["lat"], ev["lng"]))
         if target:
             target["wikidata"].append(ev)
@@ -202,6 +254,7 @@ def build_sites(store: Store) -> int:
 
     out = []
     for site in sites:
+        site["in_use"] = attractions.covering(site["lat"], site["lng"], site["name"])
         members = site["osm"] + site["wikidata"] + site["open"]
         score, reasons = score_site(site)
         first_seen = min(m["first_seen"] for m in members)

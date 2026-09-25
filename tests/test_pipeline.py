@@ -270,6 +270,8 @@ class ScoringTests(unittest.TestCase):
         self.assertEqual(condition_for(site(("OSM: landuse=brownfield", 5), ("OSM: building=ruins", 25))), "Ruin")
         self.assertEqual(condition_for(site(("OSM: building=ruins (heritage site open to visitors)", 5))),
                          "Heritage site")
+        # Mapped ruins are ruins: "often a heritage site" is a hedge, not a fact.
+        self.assertEqual(condition_for(site(("OSM: historic=ruins (often a heritage site)", 10))), "Ruin")
         self.assertEqual(condition_for(site(("Wikidata: closed in 1950", 20))), "Closed 1950")
         self.assertEqual(condition_for(site(("OSM: military bunker (pillbox)", 15))), "Old military")
         self.assertEqual(condition_for(site(("OSM: cave entrance", 5))), "Cave")
