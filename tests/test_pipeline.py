@@ -27,7 +27,8 @@ AREA = (51.3, -0.4, 51.8, 0.1)  # a small "UK" for the tests: one 0.5 degree box
 def make_updater(tmp: Path, session: FakeSession | None = None) -> Updater:
     session = session or FakeSession()
     store = Store(tmp / DB_NAME)
-    up = Updater(store, tmp, session_factory=lambda: session, log=lambda m: None, extract_url=EXTRACT_URL, uk_bbox=AREA)
+    up = Updater(store, tmp, session_factory=lambda: session, log=lambda m: None, extract_url=EXTRACT_URL,
+                 uk_bbox=AREA, sources=("osm", "wikidata"))  # the open registers are tested on their own
     up.polite_delay = up.intro_delay = 0
     return up
 
@@ -274,6 +275,10 @@ class ScoringTests(unittest.TestCase):
         self.assertEqual(condition_for(site(("OSM: cave entrance", 5))), "Cave")
         self.assertEqual(condition_for(site(("Wikidata: listed building", 5))), "Historic")
         self.assertEqual(condition_for({}), "Historic")
+        # A register may say only what a place is; then the name decides.
+        self.assertEqual(condition_for({"name": "Disused Quarry, Cwm Llwyd",
+                                        "open": [{"evidence": "Coflein records a quarry here", "weight": 22}]}),
+                         "Disused")
 
     def test_strength_and_category(self):
         self.assertEqual([strength_for(n) for n in (0, 19, 20, 34, 35, 100)],

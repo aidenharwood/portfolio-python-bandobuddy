@@ -59,7 +59,12 @@ def build_sites(store: Store) -> int:
     """Rebuild the sites table from the raw items. Returns how many sites there are."""
     grid = Grid()
     sites: list[dict] = []
-    baseline = {src: (store.get_setting(f"baseline_{src}") or None) for src in ("osm", "wikidata")}
+    baselines: dict[str, str | None] = {}
+
+    def baseline(source: str) -> str | None:
+        if source not in baselines:
+            baselines[source] = store.get_setting(f"baseline_{source}") or None
+        return baselines[source]
 
     # OSM: strongest evidence first, so a cluster is keyed by (and named after) its best element.
     osm_items = []
@@ -82,7 +87,7 @@ def build_sites(store: Store) -> int:
                 twin["osm_name"] = twin["name"] = name
             continue
         site = {"key": f"osm:{item['osm_id']}", "name": name or f"Unnamed {ev['kind']}", "osm_name": name,
-                "lat": item["lat"], "lng": item["lng"], "osm": [ev], "wikidata": []}
+                "lat": item["lat"], "lng": item["lng"], "osm": [ev], "wikidata": [], "open": []}
         sites.append(site)
         grid.add(site)
 
@@ -100,19 +105,36 @@ def build_sites(store: Store) -> int:
                 target["name"] = ev["name"]
             continue
         site = {"key": f"wd:{ev['qid']}", "name": ev["name"], "osm_name": None, "lat": ev["lat"], "lng": ev["lng"],
-                "osm": [], "wikidata": [ev]}
+                "osm": [], "wikidata": [ev], "open": []}
+        sites.append(site)
+        grid.add(site)
+
+    # Open registers: join the site already at this spot, or stand alone like a Wikidata item.
+    for row in store.active_od():
+        ev = {"ref": row["ref"], "name": row["name"], "kind": row["kind"], "evidence": row["evidence"],
+              "weight": row["weight"], "url": row["url"], "lat": row["lat"], "lng": row["lng"],
+              "first_seen": row["first_seen"], "source": row["dataset"]}
+        target = _best_match(ev, grid.near(row["lat"], row["lng"]))
+        if target:
+            target["open"].append(ev)
+            if target["name"].startswith("Unnamed ") and not ev["name"].startswith("Unnamed "):
+                target["name"] = ev["name"]
+            continue
+        site = {"key": f"{row['dataset']}:{row['ref']}", "name": ev["name"], "osm_name": None,
+                "lat": row["lat"], "lng": row["lng"], "osm": [], "wikidata": [], "open": [ev]}
         sites.append(site)
         grid.add(site)
 
     out = []
     for site in sites:
-        members = site["osm"] + site["wikidata"]
+        members = site["osm"] + site["wikidata"] + site["open"]
         score, reasons = score_site(site)
         first_seen = min(m["first_seen"] for m in members)
         # "New" only once a source's first full crawl is done, and only if every part of the site is new.
-        is_new = all(baseline[m["source"]] and m["first_seen"] > baseline[m["source"]] for m in members)
+        is_new = all(baseline(m["source"]) and m["first_seen"] > baseline(m["source"]) for m in members)
         best = max(members, key=lambda m: m["weight"])
-        sources = "+".join(src for src in ("osm", "wikidata") if site[src])
+        order = {"osm": 0, "wikidata": 1}
+        sources = "+".join(sorted({m["source"] for m in members}, key=lambda s: (order.get(s, 2), s)))
         out.append({
             "key": site["key"],
             "name": site["name"],
@@ -125,7 +147,7 @@ def build_sites(store: Store) -> int:
             "kind": best["kind"],
             "sources": sources,
             "reasons": reasons,
-            "detail": {"osm": site["osm"], "wikidata": site["wikidata"]},
+            "detail": {"osm": site["osm"], "wikidata": site["wikidata"], "open": site["open"]},
             "first_seen": first_seen,
             "added": first_seen if is_new else None,
         })

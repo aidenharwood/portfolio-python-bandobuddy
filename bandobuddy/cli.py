@@ -3,6 +3,7 @@
     bandobuddy                          open the map (and keep the UK data up to date in the background)
     bandobuddy update [--source osm]    build/refresh the data without the UI (e.g. from a scheduler)
     bandobuddy export --near 51.34,-2.25 --radius 5 --format gpx -o spots.gpx
+    bandobuddy import defence-of-britain.kmz   add places from a file of your own (CSV/GPX/GeoJSON/KML/KMZ)
 
 Every server option can also come from a BANDOBUDDY_* environment variable (handy in containers).
 """
@@ -14,8 +15,9 @@ import os
 import sys
 from pathlib import Path
 
-from . import __version__, export
+from . import __version__, export, importer
 from .config import DATA_DIR, DB_NAME, WEAK_BELOW
+from .sites import build_sites
 from .store import Store
 from .updater import SOURCES, Updater
 
@@ -49,9 +51,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-auto-update", action="store_true", default=_env_flag("BANDOBUDDY_NO_AUTO_UPDATE"),
                    help="don't refresh the data in the background [BANDOBUDDY_NO_AUTO_UPDATE]")
 
-    sub = p.add_subparsers(dest="command", metavar="{update,export}")
+    sub = p.add_subparsers(dest="command", metavar="{update,export,import}")
     up = sub.add_parser("update", help="build or refresh the UK data now, then exit")
     up.add_argument("--source", choices=[*SOURCES, "all"], default="all")
+
+    im = sub.add_parser("import", help="add places from a file of your own (CSV, GPX, GeoJSON, KML, KMZ)")
+    im.add_argument("file", nargs="?", type=Path, help="the file to read")
+    im.add_argument("--label", help="what to call this set (default: the file name)")
+    im.add_argument("--forget", metavar="LABEL", help="remove a set you imported earlier")
+    im.add_argument("--list", action="store_true", help="show what you've imported")
 
     ex = sub.add_parser("export", help="write places to CSV/KML/GPX")
     ex.add_argument("--near", metavar="LAT,LNG", help="centre point")
@@ -81,6 +89,30 @@ def run_update(args: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
+def run_import(args: argparse.Namespace) -> int:
+    store = Store(args.data_dir / DB_NAME)
+    if args.list or args.forget:
+        if args.forget:
+            gone = store.forget_imports(args.forget)
+            print(f"Removed {gone} places imported as '{args.forget}'." if gone
+                  else f"Nothing imported under '{args.forget}'.")
+            build_sites(store)
+        labels = store.import_labels()
+        print("Imported so far: " + (", ".join(f"{k} ({v:,})" for k, v in labels.items()) if labels else "nothing"))
+        return 0
+    if not args.file:
+        print("Give a file to import, or --list / --forget LABEL", file=sys.stderr)
+        return 2
+    try:
+        count = importer.load(store, args.file, args.label)
+    except (OSError, importer.BadFile) as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    total = build_sites(store)
+    print(f"Imported {count:,} place{'s' if count != 1 else ''} from {args.file.name}; the map now has {total:,}.")
+    return 0
+
+
 def run_export(args: argparse.Namespace) -> int:
     if args.bbox:
         bbox = tuple(float(x) for x in args.bbox.split(","))
@@ -106,6 +138,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_update(args)
     if args.command == "export":
         return run_export(args)
+    if args.command == "import":
+        return run_import(args)
 
     from .webapp import serve
 

@@ -43,10 +43,11 @@ DEAD_NAME_WORDS = ["abandoned", "derelict", "disused", "defunct", "ruin", "ruins
 # kind, evidence text and Wikidata types. Order matters: a ruined chapel is a chapel, a railway
 # tunnel is a tunnel, and anything else that's ruined falls through to "Ruins & castles".
 CATEGORIES = [
-    ("military", "Military", r"bunker|pillbox|military|barracks|\bfort\b|air[- ]raid|anti[- ]aircraft|\broc\b"
+    ("military", "Military", r"bunker|pillbox|military|barracks|\bfort\b|air[- ]raid|anti[- ]aircraft|\broc\b|observation post"
+                             r"|observer corps"
                              r"|blockhouse|aeroway|aerodrome|airfield|\braf\b|firing range|searchlight|gun emplacement"
                              r"|decoy"),
-    ("underground", "Mines, caves & tunnels", r"\bmines?\b|\badit|shaft|quarr|\bcaves?\b|cave entrance|colliery|tunnel"
+    ("underground", "Mines, caves & tunnels", r"\bmines?\b|\badit|shaft|quarr|\bcaves?\b|cave entrance|colliery|tunnel|workings"
                                               r"|catacomb|underground"),
     ("rail", "Railways", r"railway|train station|\bhalt\b|viaduct|signal box|platform|\brail\b|tramway"),
     ("industrial", "Industrial", r"\bmills?\b|windmill|watermill|sawmill|factory|\bworks\b|brewery|distillery|maltings"

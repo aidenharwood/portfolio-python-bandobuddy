@@ -49,8 +49,12 @@ def strength_for(score: int) -> str:
     return STRENGTHS[-1][1]
 
 
+def members_of(site: dict) -> list[dict]:
+    return (site.get("osm") or []) + (site.get("wikidata") or []) + (site.get("open") or [])
+
+
 def category_for(site: dict) -> str:
-    evidence = (site.get("osm") or []) + (site.get("wikidata") or [])
+    evidence = members_of(site)
     text = " ".join([site.get("name") or ""] + [f"{e.get('kind', '')} {e.get('evidence', '')}" for e in evidence])
     for key, _, rx in _CATEGORY_RX:
         if rx.search(text):
@@ -60,6 +64,8 @@ def category_for(site: dict) -> str:
 
 def _condition_from(evidence: str) -> str | None:
     text = evidence.lower()
+    if "heritage at risk" in text:
+        return "At risk"
     if "heritage site" in text:
         return "Heritage site"
     if "new use" in text:
@@ -81,21 +87,26 @@ def _condition_from(evidence: str) -> str | None:
         return "Cave"
     if re.search(r"old (mine|quarry|colliery)|adit|mineshaft|mine_shaft", text):
         return "Old workings"
-    if re.search(r"bunker|pillbox", text):
+    if re.search(r"bunker|pillbox|observation post|observer corps|monitoring post|roc post", text):
         return "Old military"
     if "former" in text:
         return "Former"
     return None
 
 
+_NAME_CONDITIONS = {"abandoned": "Abandoned", "derelict": "Abandoned", "disused": "Disused", "defunct": "Disused",
+                    "ruin": "Ruin", "ruins": "Ruin", "former": "Former", "closed down": "Closed"}
+
+
 def condition_for(site: dict) -> str:
-    """The state a site is in, judged from its strongest piece of evidence first."""
-    members = sorted((site.get("osm") or []) + (site.get("wikidata") or []), key=lambda m: -m["weight"])
+    """The state a site is in, judged from its strongest piece of evidence first. Registers often
+    say no more than what a place is, so the name has the last word ("Disused Quarry, Cwm Llwyd")."""
+    members = sorted(members_of(site), key=lambda m: -m["weight"])
     for m in members:
         found = _condition_from(m.get("evidence", ""))
         if found:
             return found
-    return "Historic"
+    return _NAME_CONDITIONS.get(dead_name_hit(site.get("name")) or "", "Historic")
 
 
 _LIFECYCLE = re.compile(r"^OSM: (abandoned|disused):(\w+)=([^\s(]+)\s*(.*)$")
@@ -176,6 +187,16 @@ def score_site(site: dict) -> tuple[int, list[str]]:
         reasons.extend(describe_wikidata(best["evidence"]))
         if best.get("snippet"):
             reasons.append(f"Wikipedia: \"{best['snippet']}\"")
+
+    registers = site.get("open") or []
+    if registers:
+        best = max(registers, key=lambda r: r["weight"])
+        score += best["weight"] if not (osm or wikidata) else best["weight"] // 2
+        reasons.append(best["evidence"])
+        others = [r for r in registers if r is not best]
+        if others:
+            reasons.append(f"{len(others)} other open register{'s' if len(others) > 1 else ''} record"
+                           f"{'' if len(others) > 1 else 's'} it too")
 
     word = dead_name_hit(site.get("name"))
     if word:

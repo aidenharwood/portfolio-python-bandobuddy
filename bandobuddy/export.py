@@ -6,6 +6,8 @@ import io
 from html import escape
 
 from .config import CATEGORIES, OTHER_CATEGORY
+from .importer import SOURCE as IMPORTED
+from .opendata import DATASETS
 
 _LABELS = {k: label for k, label, _ in CATEGORIES} | {OTHER_CATEGORY[0]: OTHER_CATEGORY[1]}
 
@@ -31,7 +33,17 @@ def links(site: dict) -> dict[str, str]:
         out["wikipedia"] = wiki
     if wd:
         out["wikidata"] = wd[0]["url"]
+    registers = [{"label": _register_label(e["source"]), "url": e["url"]}
+                 for e in (detail.get("open") or []) if e.get("url")]
+    if registers:
+        out["registers"] = registers
     return out
+
+
+def _register_label(source: str) -> str:
+    if source in DATASETS:
+        return DATASETS[source].label
+    return "Where you got it" if source == IMPORTED else source
 
 
 def to_csv(sites: list[dict]) -> str:
