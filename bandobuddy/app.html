@@ -719,7 +719,29 @@ function scheduleList(delay = 300) {
   listTimer = setTimeout(fetchList, delay);
 }
 
-const bboxOf = b => [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].map(x => x.toFixed(5)).join(",");
+// Snap the edges outwards to a grid, so coming back to roughly the same view asks for exactly the
+// same thing: the server answers from its own work, and offline it's already in the cache.
+function bboxOf(bounds) {
+  const grid = S.map.getZoom() >= 16 ? 0.0005 : 0.002;   // ~50 m zoomed in, ~200 m out
+  const snap = (v, dir) => (dir < 0 ? Math.floor(v / grid) : Math.ceil(v / grid)) * grid;
+  return [snap(bounds.getWest(), -1), snap(bounds.getSouth(), -1),
+          snap(bounds.getEast(), 1), snap(bounds.getNorth(), 1)].map(v => v.toFixed(4)).join(",");
+}
+
+const nearOf = point => `${point.lat.toFixed(3)},${point.lng.toFixed(3)}`;  // ~100 m: repeats cache too
+
+async function apiView(path) {
+  const res = await fetch(path);
+  if (!res.ok) throw new Error(`Request failed (${res.status})`);
+  return { data: await res.json(), stale: res.headers.get("X-Bandobuddy-Stale") === "1" };
+}
+
+let staleSaid = 0;
+function sayIfStale(stale) {
+  if (!stale || Date.now() - staleSaid < 60000) return;
+  staleSaid = Date.now();
+  toast("Offline. These are the nearest places you looked at before.", 5000);
+}
 
 function selectedCats() {
   return [...document.querySelectorAll('#catChips .cat[aria-pressed="true"]')].map(c => c.dataset.cat);
@@ -755,11 +777,12 @@ async function fetchMap() {
   p.set("bbox", bboxOf(S.map.getBounds().pad(0.2)));  // a margin, so short pans already have pins
   p.set("zoom", S.map.getZoom());
   const seq = ++S.mapSeq;
-  let data;
-  try { data = await api(`/api/map?${p}`); } catch (_) { return; }
+  let view;
+  try { view = await apiView(`/api/map?${p}`); } catch (_) { return; }
   if (seq !== S.mapSeq) return;
-  S.version = data.version;
-  renderMap(data);
+  sayIfStale(view.stale);
+  S.version = view.data.version;
+  renderMap(view.data);
 }
 
 async function fetchList() {
@@ -775,12 +798,14 @@ async function fetchList() {
   }
   const near = S.loc.pos || area.centre;
   p.set("bbox", bboxOf(b));
-  p.set("near", `${near.lat.toFixed(5)},${near.lng.toFixed(5)}`);
+  p.set("near", nearOf(near));
   p.set("limit", String(LIST_LIMIT));
   const seq = ++S.listSeq;
-  let data;
-  try { data = await api(`/api/list?${p}`); } catch (_) { return; }
+  let view;
+  try { view = await apiView(`/api/list?${p}`); } catch (_) { return; }
   if (seq !== S.listSeq) return;
+  sayIfStale(view.stale);
+  const data = view.data;
   S.list = data;
   S.listNear = S.loc.pos ? "you" : "centre";
   renderList();

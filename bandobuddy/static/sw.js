@@ -62,6 +62,40 @@ async function cacheFirst(request, cacheName, limit) {
   return response;
 }
 
+function centreOf(url) {
+  const bbox = new URL(url).searchParams.get("bbox");
+  if (!bbox) return null;
+  const [w, s, e, n] = bbox.split(",").map(Number);
+  return [w, s, e, n].some(Number.isNaN) ? null : [(w + e) / 2, (s + n) / 2];
+}
+
+/* Offline and this exact view was never loaded? Answer with the nearest one that was, rather than
+ * nothing at all. The app says the pins are from somewhere else. */
+async function nearestKept(cache, request) {
+  const wanted = centreOf(request.url);
+  if (!wanted) return null;
+  const path = new URL(request.url).pathname;
+  let best = null;
+  let closest = Infinity;
+  for (const key of await cache.keys()) {
+    if (new URL(key.url).pathname !== path) continue;
+    const centre = centreOf(key.url);
+    if (!centre) continue;
+    const away = (centre[0] - wanted[0]) ** 2 + (centre[1] - wanted[1]) ** 2;
+    if (away < closest) {
+      closest = away;
+      best = key;
+    }
+  }
+  return best ? cache.match(best) : null;
+}
+
+async function markStale(response) {
+  const headers = new Headers(response.headers);
+  headers.set("X-Bandobuddy-Stale", "1");
+  return new Response(await response.blob(), { status: response.status, headers });
+}
+
 async function networkFirst(request, cacheName) {
   const cache = await caches.open(cacheName);
   try {
@@ -71,6 +105,8 @@ async function networkFirst(request, cacheName) {
   } catch (err) {
     const hit = await cache.match(request);
     if (hit) return hit;
+    const nearby = await nearestKept(cache, request);
+    if (nearby) return markStale(nearby);
     throw err;
   }
 }
