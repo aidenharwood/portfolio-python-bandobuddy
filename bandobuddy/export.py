@@ -50,13 +50,26 @@ def to_csv(sites: list[dict]) -> str:
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(["name", "category", "condition", "evidence", "latitude", "longitude", "sources", "reasons",
-                "openstreetmap", "wikipedia", "added"])
+                "openstreetmap", "wikipedia", "added", "also_known_as", "entrances"])
     for s in sites:
         lk = links(s)
+        entrances = "; ".join(f"{_entrance_label(e)} ({e['lat']:.6f}, {e['lng']:.6f})" for e in s.get("entrances") or [])
         w.writerow([s["name"], category_label(s["category"]), s["condition"], s["strength"], f"{s['lat']:.6f}",
                     f"{s['lng']:.6f}", s["sources"], " | ".join(s["reasons"]),
-                    lk.get("osm_element", lk["openstreetmap"]), lk.get("wikipedia", ""), s.get("added") or ""])
+                    lk.get("osm_element", lk["openstreetmap"]), lk.get("wikipedia", ""), s.get("added") or "",
+                    "; ".join(s.get("aliases") or []), entrances])
     return buf.getvalue()
+
+
+def _entrance_label(e: dict) -> str:
+    return e["name"] or e["kind"]
+
+
+def _ways_in(s: dict):
+    """Each entrance as a point of its own, named so a GPS list reads "Gripwood Quarry: Air shaft"."""
+    for e in s.get("entrances") or []:
+        label = e["name"] if e["name"] and s["name"].lower() in e["name"].lower() else f"{s['name']}: {_entrance_label(e)}"
+        yield label, e
 
 
 def to_kml(sites: list[dict], title: str = "bandobuddy") -> str:
@@ -68,6 +81,9 @@ def to_kml(sites: list[dict], title: str = "bandobuddy") -> str:
             f"<description><![CDATA[{desc}]]></description>"
             f"<Point><coordinates>{s['lng']:.6f},{s['lat']:.6f},0</coordinates></Point></Placemark>"
         )
+        for label, e in _ways_in(s):
+            marks.append(f"<Placemark><name>{escape(label)}</name><description>{escape(e['kind'])}</description>"
+                         f"<Point><coordinates>{e['lng']:.6f},{e['lat']:.6f},0</coordinates></Point></Placemark>")
     return ('<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2"><Document>'
             f"<name>{escape(title)}</name>" + "".join(marks) + "</Document></kml>\n")
 
@@ -80,6 +96,9 @@ def to_gpx(sites: list[dict], title: str = "bandobuddy") -> str:
             f"<desc>{escape(s['condition'] + ': ' + ' | '.join(s['reasons']))}</desc>"
             f"<type>{escape(category_label(s['category']))}</type></wpt>"
         )
+        for label, e in _ways_in(s):
+            pts.append(f'<wpt lat="{e["lat"]:.6f}" lon="{e["lng"]:.6f}"><name>{escape(label)}</name>'
+                       f"<desc>{escape(e['kind'])} of {escape(s['name'])}</desc><type>Entrance</type></wpt>")
     return ('<?xml version="1.0" encoding="UTF-8"?>\n'
             '<gpx version="1.1" creator="bandobuddy" xmlns="http://www.topografix.com/GPX/1/1">'
             f"<metadata><name>{escape(title)}</name></metadata>" + "".join(pts) + "</gpx>\n")

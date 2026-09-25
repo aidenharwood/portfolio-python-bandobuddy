@@ -225,6 +225,18 @@ Places with only weak evidence are **weaker leads**: hidden unless you turn on *
 (or pass `--include-weak` to `bandobuddy export`). Stronger places win when the map is zoomed out, and are marked
 *Strong evidence*.
 
+**A place can have several ways in.** Cave entrances, adits and shafts that belong to a place are listed with it
+rather than as pins of their own: one joins a place within 400 m that shares a distinctive part of its name (or of
+one of its other names), and an unnamed one joins only what it's right beside. Open a place and each entrance is
+on the map and in the list with its distance and direction; Directions goes to the nearest; GPX and KML exports
+carry every entrance as its own waypoint. Whether a register record is an entrance comes from what it recorded,
+not its name: "Meadow Shaft Lead Mine: Rock-Crusher House" is a building.
+
+**Places answer to all their names.** OpenStreetMap's `alt_name` and `old_name`, Wikidata's aliases, Canmore's own
+alternative names and an `alt_name` column in your imports all count, for merging (a record called Bethel Quarry
+that says it's also Gripwood Quarry is Gripwood Quarry), for search, and under the name as "Also known as". Where
+sources disagree the place takes the name most of them use, and a real name always beats a brownfield address.
+
 **Museums and attractions are weaker leads too**, whatever the evidence says. A register saying a colliery was
 there doesn't say it's now the National Mining Museum. So a place inside the outline of something OpenStreetMap
 maps as a museum, gallery, visitor attraction, theme park, zoo or heritage railway station, or run by English

@@ -22,11 +22,11 @@ CREATE TABLE IF NOT EXISTS osm_items (
 );
 CREATE TABLE IF NOT EXISTS wd_items (
     qid TEXT PRIMARY KEY, label TEXT, lat REAL, lng REAL, types TEXT, states TEXT, ended TEXT, wiki TEXT,
-    first_seen TEXT, last_seen TEXT, gone_at TEXT
+    first_seen TEXT, last_seen TEXT, gone_at TEXT, aliases TEXT
 );
 CREATE TABLE IF NOT EXISTS od_items (
     dataset TEXT, ref TEXT, name TEXT, lat REAL, lng REAL, kind TEXT, evidence TEXT, weight INTEGER, url TEXT,
-    first_seen TEXT, last_seen TEXT, gone_at TEXT,
+    first_seen TEXT, last_seen TEXT, gone_at TEXT, aliases TEXT,
     PRIMARY KEY (dataset, ref)
 );
 CREATE TABLE IF NOT EXISTS intros (title TEXT PRIMARY KEY, extract TEXT, fetched_at TEXT);
@@ -40,14 +40,16 @@ CREATE TABLE IF NOT EXISTS tiles (
 );
 CREATE TABLE IF NOT EXISTS sites (
     key TEXT PRIMARY KEY, name TEXT, lat REAL, lng REAL, score INTEGER, strength TEXT, category TEXT,
-    condition TEXT, kind TEXT, sources TEXT, reasons TEXT, detail TEXT, first_seen TEXT, added TEXT
+    condition TEXT, kind TEXT, sources TEXT, reasons TEXT, detail TEXT, first_seen TEXT, added TEXT,
+    aliases TEXT, entrances TEXT
 );
 CREATE INDEX IF NOT EXISTS sites_lat ON sites(lat);
 CREATE INDEX IF NOT EXISTS sites_score ON sites(score);
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
 """
 
-SITE_LIST_FIELDS = "key, name, lat, lng, score, strength, category, condition, kind, sources, added"
+SITE_LIST_FIELDS = ("key, name, lat, lng, score, strength, category, condition, kind, sources, added, aliases, "
+                    "json_array_length(entrances) AS entrance_count")
 MAP_SITE_LIMIT = 400   # more matches than this in view and the map shows clusters instead
 CLUSTER_PX = 64        # roughly how wide a cluster cell is on screen
 
@@ -64,11 +66,14 @@ class Store:
         with self.connect() as db:
             db.execute("PRAGMA journal_mode=WAL")
             columns = {r["name"] for r in db.execute("PRAGMA table_info(sites)")}
-            if columns and "condition" not in columns:
+            if columns and not {"condition", "entrances"} <= columns:
                 db.execute("DROP TABLE sites")  # derived data from an older version; rebuilt from raw items
             db.executescript(SCHEMA)
-            if "extent_m" not in {r["name"] for r in db.execute("PRAGMA table_info(osm_items)")}:
-                db.execute("ALTER TABLE osm_items ADD COLUMN extent_m REAL")  # filled in by the next extract
+            # Columns added since a table was made: add them in place, and the next update fills them in.
+            for table, column, kind in (("osm_items", "extent_m", "REAL"), ("wd_items", "aliases", "TEXT"),
+                                        ("od_items", "aliases", "TEXT")):
+                if column not in {r["name"] for r in db.execute(f"PRAGMA table_info({table})")}:
+                    db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
@@ -105,28 +110,30 @@ class Store:
 
     def upsert_wd(self, items: Iterable[dict], seen_at: str) -> None:
         rows = [(i["qid"], i["label"], i["lat"], i["lng"], json.dumps(i["types"]), json.dumps(i["states"]),
-                 i["ended"], i["wiki"], seen_at, seen_at) for i in items]
+                 i["ended"], i["wiki"], json.dumps(i.get("aliases") or [], ensure_ascii=False), seen_at, seen_at)
+                for i in items]
         with self.connect() as db:
             db.executemany(
-                """INSERT INTO wd_items (qid, label, lat, lng, types, states, ended, wiki, first_seen, last_seen)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """INSERT INTO wd_items (qid, label, lat, lng, types, states, ended, wiki, aliases, first_seen, last_seen)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(qid) DO UPDATE SET label = excluded.label, lat = excluded.lat, lng = excluded.lng,
                    types = excluded.types, states = excluded.states, ended = excluded.ended, wiki = excluded.wiki,
-                   last_seen = excluded.last_seen, gone_at = NULL""",
+                   aliases = excluded.aliases, last_seen = excluded.last_seen, gone_at = NULL""",
                 rows,
             )
 
     def upsert_od(self, items: Iterable[dict], seen_at: str) -> None:
         """Records from an open register (Historic England, Canmore, Coflein, brownfield...)."""
         rows = [(i["dataset"], i["ref"], i["name"], i["lat"], i["lng"], i["kind"], i["evidence"], i["weight"],
-                 i.get("url"), seen_at, seen_at) for i in items]
+                 i.get("url"), json.dumps(i.get("aliases") or [], ensure_ascii=False), seen_at, seen_at) for i in items]
         with self.connect() as db:
             db.executemany(
-                """INSERT INTO od_items (dataset, ref, name, lat, lng, kind, evidence, weight, url,
-                   first_seen, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """INSERT INTO od_items (dataset, ref, name, lat, lng, kind, evidence, weight, url, aliases,
+                   first_seen, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(dataset, ref) DO UPDATE SET name = excluded.name, lat = excluded.lat,
                    lng = excluded.lng, kind = excluded.kind, evidence = excluded.evidence,
-                   weight = excluded.weight, url = excluded.url, last_seen = excluded.last_seen, gone_at = NULL""",
+                   weight = excluded.weight, url = excluded.url, aliases = excluded.aliases,
+                   last_seen = excluded.last_seen, gone_at = NULL""",
                 rows,
             )
 
@@ -135,7 +142,7 @@ class Store:
         with self.connect() as db:
             rows = db.execute(f"SELECT * FROM od_items WHERE {where} ORDER BY dataset, ref",
                               (dataset,) if dataset else ())
-            return [dict(r) for r in rows]
+            return [{**dict(r), "aliases": json.loads(r["aliases"] or "[]")} for r in rows]
 
     def import_labels(self) -> dict[str, int]:
         """The imported sets in the database, and how many places each holds."""
@@ -172,7 +179,8 @@ class Store:
             rows = db.execute("SELECT * FROM wd_items WHERE gone_at IS NULL")
             return [{"qid": r["qid"], "label": r["label"], "lat": r["lat"], "lng": r["lng"],
                      "types": json.loads(r["types"]), "states": json.loads(r["states"]), "ended": r["ended"],
-                     "wiki": r["wiki"], "first_seen": r["first_seen"]} for r in rows]
+                     "wiki": r["wiki"], "aliases": json.loads(r["aliases"] or "[]"), "first_seen": r["first_seen"]}
+                    for r in rows]
 
     def count_items(self) -> dict:
         with self.connect() as db:
@@ -270,10 +278,12 @@ class Store:
     def replace_sites(self, sites: list[dict]) -> None:
         rows = [(s["key"], s["name"], s["lat"], s["lng"], s["score"], s["strength"], s["category"], s["condition"],
                  s["kind"], s["sources"], json.dumps(s["reasons"], ensure_ascii=False),
-                 json.dumps(s["detail"], ensure_ascii=False), s["first_seen"], s["added"]) for s in sites]
+                 json.dumps(s["detail"], ensure_ascii=False), s["first_seen"], s["added"],
+                 json.dumps(s.get("aliases") or [], ensure_ascii=False),
+                 json.dumps(s.get("entrances") or [], ensure_ascii=False)) for s in sites]
         with self.connect() as db:
             db.execute("DELETE FROM sites")
-            db.executemany("INSERT INTO sites VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
+            db.executemany("INSERT INTO sites VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
 
     def _site_filter(self, bbox=None, min_score=0, categories=None, sources=None, added_since=None, q=None):
         where, args = ["score >= ?"], [min_score]
@@ -291,8 +301,8 @@ class Store:
             where.append("added > ?")
             args.append(added_since)
         if q:
-            where.append("name LIKE ?")
-            args.append(f"%{q}%")
+            where.append("(name LIKE ? OR aliases LIKE ?)")   # "Bethel" finds Gripwood Quarry
+            args += [f"%{q}%", f"%{q}%"]
         return " AND ".join(where), args
 
     def query_sites(self, limit: int = 3000, **filters) -> tuple[int, list[dict]]:
@@ -301,7 +311,7 @@ class Store:
             total = db.execute(f"SELECT COUNT(*) FROM sites WHERE {where}", args).fetchone()[0]
             rows = db.execute(f"SELECT {SITE_LIST_FIELDS} FROM sites WHERE {where} ORDER BY score DESC, key LIMIT ?",
                               [*args, limit]).fetchall()
-        return total, [dict(r) for r in rows]
+        return total, [_listed(r) for r in rows]
 
     def full_sites(self, limit: int = 50_000, **filters) -> list[dict]:
         where, args = self._site_filter(**filters)
@@ -323,7 +333,7 @@ class Store:
             if total <= MAP_SITE_LIMIT or zoom >= 15:
                 rows = db.execute(f"SELECT {SITE_LIST_FIELDS} FROM sites WHERE {where} "
                                   "ORDER BY score DESC, key LIMIT 2000", args).fetchall()
-                return {"mode": "sites", "total": total, "sites": [dict(r) for r in rows], "clusters": []}
+                return {"mode": "sites", "total": total, "sites": [_listed(r) for r in rows], "clusters": []}
 
             _, s, _, n = bbox
             cell_lng = 360 / (256 * 2 ** zoom) * CLUSTER_PX
@@ -342,7 +352,7 @@ class Store:
                 if r["n"] > top.get(k, (0, ""))[0]:
                     top[k] = (r["n"], r["category"])
             singles = [g["key"] for g in groups if g["n"] == 1]
-            single_rows = {r["key"]: dict(r) for r in db.execute(
+            single_rows = {r["key"]: _listed(r) for r in db.execute(
                 f"SELECT {SITE_LIST_FIELDS} FROM sites WHERE key IN ({','.join('?' * len(singles))})", singles)
             } if singles else {}
         clusters = [{"lat": g["lat"], "lng": g["lng"], "count": g["n"], "category": top[(g["gy"], g["gx"])][1],
@@ -367,7 +377,7 @@ class Store:
                               [*args, *order_args, limit]).fetchall()
         out = []
         for r in rows:
-            site = dict(r)
+            site = _listed(r)
             site["summary"] = (json.loads(site.pop("reasons")) or [""])[0]
             out.append(site)
         return total, out
@@ -384,8 +394,16 @@ def _tile_id(s: float, w: float, n: float, e: float) -> str:
     return f"{s:.5f},{w:.5f},{n:.5f},{e:.5f}"
 
 
+def _listed(row: sqlite3.Row) -> dict:
+    site = dict(row)
+    site["aliases"] = json.loads(site.get("aliases") or "[]")
+    return site
+
+
 def _decode_site(row: sqlite3.Row) -> dict:
     site = dict(row)
     site["reasons"] = json.loads(site["reasons"])
     site["detail"] = json.loads(site["detail"])
+    site["aliases"] = json.loads(site.get("aliases") or "[]")
+    site["entrances"] = json.loads(site.get("entrances") or "[]")
     return site

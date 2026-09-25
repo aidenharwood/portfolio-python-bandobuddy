@@ -321,6 +321,7 @@ def _canmore(row: dict) -> dict | None:
     raw = (row.get("NMRSNAME") or "").strip()
     verdict = judge_segments(row.get("SITETYPE") or "", raw)
     name = tidy_name(raw, shouting=True)
+    aliases = [tidy_name(a, shouting=True) for a in (row.get("ALTNAME") or "").split(";") if a.strip()]
     if not verdict:
         return None
     weight, kind, what = verdict
@@ -329,6 +330,7 @@ def _canmore(row: dict) -> dict | None:
         "name": name,
         "kind": kind,
         "evidence": f"Canmore records {_a(what)} here",
+        "aliases": [a for a in aliases if a and a != name],
         "weight": weight,
         "url": row.get("URL"),
     }
@@ -383,7 +385,7 @@ DATASETS = {
                         "© Historic Environment Scotland",
             home="https://canmore.org.uk/",
             fetch=ArcGISByIds("https://inspire.hes.scot/arcgis/rest/services/CANMORE/Canmore_Points/MapServer/0",
-                              CANMORE_WHERES, fields="CANMOREID,SITENUMBER,NMRSNAME,SITETYPE,BROADCLASS,URL"),
+                              CANMORE_WHERES, fields="CANMOREID,SITENUMBER,NMRSNAME,ALTNAME,SITETYPE,BROADCLASS,URL"),
             judge=_canmore,
         ),
         Dataset(

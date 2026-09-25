@@ -44,6 +44,16 @@ class ClassifyTests(unittest.TestCase):
         evidence, _ = classify({"disused:website": "http://example.org", "disused:amenity": "pub", "disused:building": "yes"})
         self.assertEqual(evidence, "OSM: disused:amenity=pub")
 
+    def test_other_names_and_ways_in(self):
+        from bandobuddy.osm import alt_names, entrance_kind
+        self.assertEqual(alt_names({"name": "Gripwood Quarry", "alt_name": "Bethel Quarry;Frome Road Quarry",
+                                    "old_name": "Gripwood Quarry"}), ["Bethel Quarry", "Frome Road Quarry"])
+        self.assertEqual(entrance_kind({"natural": "cave_entrance"}), "Cave entrance")
+        self.assertEqual(entrance_kind({"disused:man_made": "adit"}), "Adit")
+        self.assertEqual(entrance_kind({"man_made": "mineshaft", "mineshaft_type": "air"}), "Air shaft")
+        self.assertEqual(entrance_kind({"historic": "mine_shaft"}), "Shaft")
+        self.assertIsNone(entrance_kind({"landuse": "quarry"}))
+
     def test_old_road_alignments_arent_places(self):
         self.assertIsNone(classify({"abandoned:highway": "primary", "name": "A344"}))
         self.assertIsNotNone(classify({"abandoned:highway": "primary", "tunnel": "yes"}))  # a road tunnel still is

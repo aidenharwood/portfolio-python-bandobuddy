@@ -305,6 +305,80 @@ class StoreAndSitesTests(unittest.TestCase):
         self.assertEqual(in_use_as(["railway station", "heritage railway station"]), "Heritage railway")
         self.assertIsNone(in_use_as(["colliery"]))
 
+    def _notes(self, *rows):
+        """Your own import: (name, kind, metres north, metres east, other names) around Gripwood."""
+        from bandobuddy.geo import offset
+        items = []
+        for name, kind, north, east, aka in rows:
+            lat, lng = offset(51.3415, -2.2569, north, east)
+            items.append({"dataset": "imported", "ref": f"notes:{name}:{north}:{east}", "name": name, "lat": lat,
+                          "lng": lng, "kind": kind, "evidence": f'From your import "notes": {kind}', "weight": 20,
+                          "url": None, "aliases": aka})
+        self.store.upsert_od(items, self.now)
+
+    def test_entrances_join_the_place_they_belong_to(self):
+        self._notes(
+            ("Gripwood Quarry", "quarry", 0, 0, []),
+            ("Bethel Quarry", "quarry", 30, 20, ["Gripwood Quarry"]),        # the same quarry, by its other name
+            ("Gripwood Quarry Main Entrance", "cave entrance", -150, 40, []),
+            ("Gripwood Quarry Entrance 1", "cave entrance", -180, -60, []),
+            ("Bethel Quarry Air Shaft 1", "air shaft", 250, 120, []),      # joins through "Bethel"
+            ("Frome Road Tunnel Portal", "portal", 200, -100, []),        # shares no name: a different place
+            ("Unnamed cave entrance", "cave entrance", 300, 300, []),     # unnamed, and too far to assume
+        )
+        self.store.upsert_osm([{"osm_id": "node/77", "lat": 51.3415 + 0.0005, "lng": -2.2569,   # ~55 m, unnamed
+                                "tags": {"man_made": "mineshaft"}}], self.now)
+        build_sites(self.store)
+        sites = {s["name"]: s for s in self.store.full_sites(min_score=0)}
+        gripwood = sites["Gripwood Quarry"]
+        self.assertEqual(gripwood["aliases"], ["Bethel Quarry"])
+        self.assertEqual([e["name"] or e["kind"] for e in gripwood["entrances"]],
+                         ["Bethel Quarry Air Shaft 1", "Gripwood Quarry Entrance 1", "Gripwood Quarry Main Entrance",
+                          "Shaft"])
+        self.assertEqual({e["kind"] for e in gripwood["entrances"]}, {"Air shaft", "Entrance", "Shaft"})
+        self.assertIn("Frome Road Tunnel Portal", sites)
+        self.assertIn("Unnamed cave entrance", sites)
+        # Its other name finds it.
+        total, rows = self.store.list_sites(q="Bethel")
+        self.assertEqual([r["name"] for r in rows], ["Gripwood Quarry"])
+        self.assertEqual(rows[0]["entrance_count"], 4)
+
+    def test_entrances_with_no_place_become_one(self):
+        self._notes(("Gripwood Quarry Main Entrance", "cave entrance", 0, 0, []),
+                    ("Gripwood Quarry Entrance 1", "cave entrance", -40, 90, []))
+        build_sites(self.store)
+        sites = self.store.full_sites(min_score=0)
+        self.assertEqual([s["name"] for s in sites], ["Gripwood Quarry"])
+        self.assertEqual(len(sites[0]["entrances"]), 2)
+
+    def test_a_real_name_beats_a_brownfield_address(self):
+        self.store.upsert_od([od("b1", 50.64, -4.36, name="22-23 High Street", weight=10, kind="brownfield land",
+                                 evidence="On the council's brownfield land register", dataset="brownfield"),
+                              od("h1", 50.64, -4.36, name="The Guildhall, High Street", weight=25, kind="listed building",
+                                 evidence="Historic England has it on the Heritage at Risk register (listed building)",
+                                 dataset="heritage_at_risk")], self.now)
+        build_sites(self.store)
+        site = self.store.full_sites(min_score=0)[0]
+        self.assertEqual((site["name"], site["aliases"]), ("The Guildhall, High Street", []))
+
+    def test_a_lone_entrance_is_just_a_place(self):
+        self._notes(("Swildon's Hole", "cave entrance", 0, 0, []))
+        build_sites(self.store)
+        self.assertEqual(self.store.full_sites(min_score=0)[0]["entrances"], [])
+
+    def test_exports_carry_each_entrance(self):
+        from bandobuddy import export
+        self._notes(("Gripwood Quarry", "quarry", 0, 0, ["Bethel Quarry"]),
+                    ("Air shaft", "air shaft", 100, 0, []),
+                    ("Gripwood Quarry Main Entrance", "cave entrance", -150, 40, []))
+        # the unnamed-ish "Air shaft" is 100 m off: named "Air shaft", which shares no name, so it stays apart
+        build_sites(self.store)
+        site = next(s for s in self.store.full_sites(min_score=0) if s["name"] == "Gripwood Quarry")
+        gpx = export.to_gpx([site])
+        self.assertEqual(gpx.count("<wpt"), 2)                                   # the quarry and its entrance
+        self.assertIn("<name>Gripwood Quarry Main Entrance</name>", gpx)
+        self.assertIn("Bethel Quarry", export.to_csv([site]))
+
     def test_a_weak_lead_on_top_of_a_site_is_that_site(self):
         self.store.upsert_osm([{"osm_id": "way/1", "lat": 51.5, "lng": -0.12,
                                 "tags": {"building": "ruins", "name": "Old Engine House"}}], self.now)
