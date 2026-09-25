@@ -15,14 +15,14 @@ const DATA = "bandobuddy-data";
 const TILE_LIMIT = 600;          // roughly a town at a few zoom levels
 const DATA_LIMIT = 3000;         // places and views: a few MB at most
 
-const SHELL_URLS = [
+// The app can't open without these, so a new version only takes over once it has all of them: if an
+// update half-downloads on a weak signal, the old version (and its complete copy) stays in charge.
+const ESSENTIAL = [
   "/",
-  "/manifest.webmanifest",
-  "/static/icon-192.png",
-  "/static/apple-touch-icon.png",
   "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css",
   "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js",
 ];
+const EXTRAS = ["/manifest.webmanifest", "/static/icon-192.png", "/static/apple-touch-icon.png"];
 
 const TILE_HOSTS = ["tile.openstreetmap.org", "tile.opentopomap.org", "server.arcgisonline.com",
                     "services-eu1.arcgis.com"];
@@ -32,7 +32,8 @@ const KEEPABLE = /^\/api\/(map|list|site\/|access)/;
 self.addEventListener("install", event => {
   event.waitUntil((async () => {
     const cache = await caches.open(SHELL);
-    await Promise.allSettled(SHELL_URLS.map(url => cache.add(new Request(url, { cache: "reload" }))));
+    await Promise.all(ESSENTIAL.map(url => cache.add(new Request(url, { cache: "reload" }))));  // or don't install
+    await Promise.allSettled(EXTRAS.map(url => cache.add(new Request(url, { cache: "reload" }))));
     await self.skipWaiting();
   })());
 });
@@ -111,16 +112,36 @@ async function networkFirst(request, cacheName) {
     if (hit) return hit;
     const nearby = await nearestKept(cache, request);
     if (nearby) return markStale(nearby);
-    throw err;
+    return offlineAnswer();
   }
 }
 
+const OFFLINE_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>bandobuddy</title>
+<style>body{margin:0;min-height:100vh;display:grid;place-items:center;font:16px system-ui,sans-serif;
+background:#1a1916;color:#ece8e1;text-align:center;padding:24px}button{margin-top:16px;padding:10px 18px;
+border:0;border-radius:10px;background:#fb923c;color:#1a1206;font:inherit;font-weight:700}</style></head>
+<body><div><h1>bandobuddy</h1><p>You're offline, and this phone doesn't have the app saved yet.<br>
+Open it once with a signal and it'll work offline after that.</p>
+<button onclick="location.reload()">Try again</button></div></body></html>`;
+
 async function page(request) {
+  const cache = await caches.open(SHELL);
   try {
-    return await fetch(request);
+    const response = await fetch(request);
+    // Keep the freshest copy of the app itself, so it opens offline as you last saw it.
+    if (response.ok && new URL(request.url).pathname === "/") await cache.put("/", response.clone());
+    return response;
   } catch (err) {
-    return (await caches.match("/", { cacheName: SHELL })) || Response.error();
+    return (await cache.match("/")) || (await caches.match("/"))
+      || new Response(OFFLINE_PAGE, { status: 503, headers: { "Content-Type": "text/html; charset=utf-8" } });
   }
+}
+
+// Asked for something that wasn't kept, with no signal: say so plainly, as the app's own error.
+function offlineAnswer() {
+  return new Response(JSON.stringify({ error: "You're offline, and this wasn't kept on your phone.", offline: true }),
+                      { status: 503, headers: { "Content-Type": "application/json", "X-Bandobuddy-Offline": "1" } });
 }
 
 self.addEventListener("fetch", event => {
@@ -138,5 +159,7 @@ self.addEventListener("fetch", event => {
     event.respondWith(cacheFirst(request, SHELL));
   } else if (url.origin === self.location.origin && KEEPABLE.test(url.pathname)) {
     event.respondWith(networkFirst(request, DATA));
+  } else if (url.origin === self.location.origin && url.pathname.startsWith("/api/")) {
+    event.respondWith(fetch(request).catch(offlineAnswer));
   }
 });

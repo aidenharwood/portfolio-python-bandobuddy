@@ -142,7 +142,10 @@ Once installed it keeps working where the signal doesn't:
   your saved places as GPX and open them in OsmAnd or Organic Maps
 - the screen stays awake while you're following your location, and sleeps as soon as you stop
 
-Updates and settings still need a connection, and the app tells you when you're offline. A new release retires the
+Updates and settings still need a connection, and the app tells you when you're offline. A place whose details
+weren't kept still opens with what the map knows (its name, what it was, Directions), and search still finds
+places the phone has seen. A new version only takes over once it has everything the app needs to open, so an
+update that half-downloads on a weak signal can't leave you with nothing offline. A new release retires the
 old caches automatically, because the service worker is stamped with the version.
 
 Phones only share their location with HTTPS sites, so the locate button won't work at a plain `http://192.168…`
@@ -176,7 +179,8 @@ each can be refreshed or paused on its own from the **Data** panel.
 The Mining Remediation Authority's record of **175,000 mine entries** (shafts and adits), past shallow coal
 workings and surface mining is published as a map service rather than as data, so those can't be listed or
 searched as places. They can be drawn on the map instead: switch them on under *Mining overlays* in the
-filters. Coal mining data © Mining Remediation Authority, under the Open Government Licence.
+filters. Their pictures are only drawn down to zoom 14, and mine entries and surface mining only from zoom 13,
+so zoomed in further the zoom-14 pictures are stretched, and zoomed out the app says to zoom in. Coal mining data © Mining Remediation Authority, under the Open Government Licence.
 
 Actual mine and quarry *places* still come from OpenStreetMap, Canmore and Coflein, which do publish
 their records as data.
