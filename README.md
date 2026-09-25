@@ -123,6 +123,22 @@ It answers requests addressed to an IP address, a machine name or a home-network
 `.home.arpa`…). Public domain names need `--allowed-host`, which stops websites using DNS-rebinding tricks to
 reach it.
 
+### Install it as an app
+
+bandobuddy is a progressive web app, so it installs from the browser without a store. On Android, Chrome offers
+**Install** (there's a button in the menu too); on iPhone it's **Share → Add to Home Screen**. It then opens full
+screen with its own icon.
+
+Once installed it keeps working where the signal doesn't:
+
+- the page, its icons and Leaflet are cached, so it opens with no connection at all
+- map tiles you've already looked at are kept (capped at 600, and only ever tiles you actually viewed)
+- places you've looked at are kept, so the nearby list and a shared link still open offline
+- the screen stays awake while you're following your location, and sleeps as soon as you stop
+
+Updates and settings still need a connection, and the app tells you when you're offline. A new release retires the
+old caches automatically, because the service worker is stamped with the version.
+
 Phones only share their location with HTTPS sites, so the locate button won't work at a plain `http://192.168…`
 address. To try location locally, use Chrome's USB port forwarding (`chrome://inspect/#devices` → *Port forwarding*,
 `8642` → `localhost:8642`) and open `http://localhost:8642` on the phone, or use the HTTPS deployment.

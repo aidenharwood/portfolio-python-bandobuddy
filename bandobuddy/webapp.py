@@ -43,6 +43,14 @@ CACHE_TTL_S = 24 * 3600
 LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "[::1]"})
 LAN_SUFFIXES = (".local", ".lan", ".home", ".home.arpa", ".internal", ".localdomain")
 CATEGORY_KEYS = [c[0] for c in CATEGORIES] + [OTHER_CATEGORY[0]]
+# Files the app itself needs. Anything not named here isn't served, so no path can be walked.
+STATIC = {
+    "/manifest.webmanifest": ("manifest.webmanifest", "application/manifest+json", "public, max-age=3600"),
+    "/static/icon-192.png": ("icon-192.png", "image/png", "public, max-age=604800"),
+    "/static/icon-512.png": ("icon-512.png", "image/png", "public, max-age=604800"),
+    "/static/icon-maskable-512.png": ("icon-maskable-512.png", "image/png", "public, max-age=604800"),
+    "/static/apple-touch-icon.png": ("apple-touch-icon.png", "image/png", "public, max-age=604800"),
+}
 
 
 class ApiError(Exception):
@@ -112,6 +120,15 @@ class App:
         self.read_only = read_only
         self._search_cache = TTLCache()
         self._photo_cache = TTLCache()
+
+    def static(self, path: str) -> tuple[bytes, str, str]:
+        name, ctype, cache = STATIC[path]
+        return resources.files("bandobuddy.static").joinpath(name).read_bytes(), ctype, cache
+
+    def worker(self) -> bytes:
+        """The service worker, stamped with this version so a release retires the old caches."""
+        js = resources.files("bandobuddy.static").joinpath("sw.js").read_text(encoding="utf-8")
+        return js.replace("__VERSION__", __version__).encode("utf-8")
 
     def page(self) -> bytes:
         boot = {
@@ -276,11 +293,12 @@ def make_handler(app: App, allowed_hosts: Iterable[str] = ()) -> type[BaseHTTPRe
         def log_message(self, *args):  # keep the terminal quiet
             pass
 
-        def _send(self, status: int, body: bytes, ctype: str, extra: dict | None = None) -> None:
+        def _send(self, status: int, body: bytes, ctype: str, extra: dict | None = None,
+                  cache: str = "no-store") -> None:
             self.send_response(status)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
+            self.send_header("Cache-Control", cache)
             self.send_header("X-Content-Type-Options", "nosniff")
             # Map tile servers (OpenStreetMap's included) require a Referer, so don't strip it.
             self.send_header("Referrer-Policy", "strict-origin-when-cross-origin")
@@ -347,6 +365,13 @@ def make_handler(app: App, allowed_hosts: Iterable[str] = ()) -> type[BaseHTTPRe
             path = url.path
             if path == "/":
                 self._send(200, app.page(), "text/html; charset=utf-8")
+            elif path in STATIC:
+                body, ctype, cache = app.static(path)
+                self._send(200, body, ctype, cache=cache)
+            elif path == "/sw.js":
+                # Never cached: it's what tells the browser everything else has changed.
+                self._send(200, app.worker(), "text/javascript; charset=utf-8",
+                           {"Service-Worker-Allowed": "/"}, cache="no-cache")
             elif path == "/api/map":
                 self._dispatch(lambda: app.map(qs))
             elif path == "/api/list":
