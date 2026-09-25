@@ -17,10 +17,11 @@ import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
 
-from .opendata import judge_record
+from .opendata import judge_record, sounds_gone
 
 SOURCE = "imported"
 DEFAULT_WEIGHT = 20                     # your own records: shown by default, below hard OSM evidence
+GONE_WEIGHT = 5                         # ...unless your notes say it's gone: kept, but a weak lead
 NAME_KEYS = ("name", "title", "site", "site_name", "label", "description")
 LAT_KEYS = ("lat", "latitude", "y", "ycoord", "northing_lat")
 LNG_KEYS = ("lng", "lon", "long", "longitude", "x", "xcoord")
@@ -165,6 +166,8 @@ def to_items(places: list[dict], label: str) -> list[dict]:
         described = " ".join(x for x in (place["kind"], place["note"], place["name"]) if x)
         verdict = judge_record(described)
         weight, kind = verdict if verdict else (DEFAULT_WEIGHT, place["kind"] or "place")
+        if sounds_gone(described):
+            weight = GONE_WEIGHT
         detail = place["kind"] or place["note"][:120]
         items.append({
             "dataset": SOURCE,

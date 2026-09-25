@@ -105,12 +105,22 @@ class JudgingTests(unittest.TestCase):
         self.assertIsNone(opendata.judge_record("CHURCH"))        # a register entry says nothing about use
         # Already a wreck by its own description: worth a little more.
         self.assertGreater(opendata.judge_record("QUARRY (DISUSED)")[0], opendata.judge_record("QUARRY")[0])
+        # But gone is gone: nothing to find, so not a lead at all.
+        self.assertIsNone(opendata.judge_record("MILL (SITE OF)"))
+        self.assertIsNone(opendata.judge_record("BRICKWORKS", "Glasgow, Garrowhill Brickworks (Site Of)"))
+        self.assertIsNone(opendata.judge_record("MILL", "Site of Trepuscodling Mill, Great House"))
+        self.assertIsNone(opendata.judge_record("COLLIERY (DEMOLISHED)"))
+        # "Site" alone is a place, not an absence.
+        self.assertIsNotNone(opendata.judge_record("MINE", "Wanlockhead, Bay Mine Site"))
+        self.assertIsNotNone(opendata.judge_record("BATTERY", "Burrow Head, Anti-Aircraft Battery And Domestic Site"))
 
     def test_the_register_describes_the_place_not_its_name(self):
         # "Manod Quarries, Track II" is a trackway, whatever its name says.
         self.assertIsNone(opendata.judge_segments("TRACKWAY", "Manod Granite Quarries, Track II"))
         verdict = opendata.judge_segments("FARMSTEAD (18TH CENTURY), OBSERVATION POST (20TH CENTURY)", "Vord Hill")
         self.assertEqual(verdict[1:], ("observation post", "observation post"))
+        # The register's brackets count: Canmore marks a vanished building "(SITE OF)".
+        self.assertIsNone(opendata.judge_segments("WINDMILL (SITE OF)", "Kirkwall"))
 
     def test_records_become_items(self):
         har = opendata.DATASETS["heritage_at_risk"].judge(
