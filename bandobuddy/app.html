@@ -133,6 +133,10 @@
   .mark.want { color:#ca8a04 } .mark.want .ico { fill:currentColor } .mark.been { color:#15803d }
   .act[aria-pressed="true"] { background:var(--raised); border-color:var(--accent) }
   .act.want[aria-pressed="true"] .ico { fill:currentColor }
+  .bearing { display:inline-flex; align-items:center; gap:6px; margin-top:6px; padding:4px 10px 4px 6px;
+    border:1px solid var(--line); border-radius:999px; background:var(--raised); color:var(--ink); font-size:14px; font-weight:600 }
+  .bearing .ico { width:18px; height:18px; fill:var(--me); stroke:var(--me); transition:transform .3s ease }
+  .bearing small { color:var(--muted); font-weight:400; font-size:12px }
   .way { display:grid; grid-template-columns:22px 1fr auto; gap:10px; align-items:center; width:100%; min-height:44px;
     padding:6px 0; border:0; border-bottom:1px solid var(--line); background:transparent; color:var(--ink); text-align:left }
   .way .ico { color:var(--muted) } .way small { color:var(--muted) }
@@ -449,6 +453,7 @@ const UI = {
   trail: '<path d="M6 21c1.5-3 4.5-4 6-7s3.5-5 6.5-7.5" stroke-dasharray="2.5 2.5"/><circle cx="18.5" cy="6" r="1.5"/>',
   parking: '<rect x="4" y="3" width="16" height="18" rx="3"/><path d="M10 17V7h3.2a3 3 0 0 1 0 6H10"/>',
   lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
+  arrow: '<path d="M12 2.5l6.5 17.5-6.5-4.2-6.5 4.2z"/>',
   check: '<path d="M4.5 12.5l4.5 4.5L19.5 7"/>',
   refresh: '<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/>',
 };
@@ -463,7 +468,7 @@ const S = {
   map: null, bases: null, overlays: {}, base: "Map", zoomCtl: null, markers: new Map(), version: -1, mapSeq: 0, listSeq: 0,
   list: null, listNear: null, selected: null, site: null, status: null, prevVisit: null,
   view: "list", listSnap: "peek", sort: "nearest",
-  wakeLock: null, installPrompt: null, saved: {}, savedTab: "want", lastMap: null,
+  wakeLock: null, installPrompt: null, heading: null, compassOn: false, saved: {}, savedTab: "want", lastMap: null,
   loc: { wanted: false, watch: null, pos: null, follow: false, first: false, quiet: false, auto: false, paused: false, warned: false },
   me: { dot: null, acc: null },
 };
@@ -590,6 +595,7 @@ function initSheetDrag() {
 
 function show(view, snap) {
   if (S.view === "list" && view !== "list") S.listSnap = Sheet.snap;
+  if (view !== "site") stopCompass();
   if (S.view === "site" && view !== "site" && S.selected) {  // e.g. straight from a place to the filters
     S.selected = null;
     S.site = null;
@@ -949,6 +955,7 @@ async function openSite(key, { pan = false, push = true } = {}) {
   if (pan) centerOn([site.lat, site.lng], Math.max(S.map.getZoom(), 16));
   else ensureVisible([site.lat, site.lng]);
   renderSite(site);
+  renderBearing();
   loadPhotos(site);
   loadAccess(site);
 }
@@ -959,6 +966,7 @@ function closeSite(popping = false) {
   S.selected = null;
   S.site = null;
   clearSelected();
+  stopCompass();
   if (S.view === "site") backToList();
 }
 
@@ -980,7 +988,6 @@ const SOURCE_NAMES = Object.fromEntries(BOOT.sources);
 
 function renderSite(site) {
   const lk = site.links;
-  const dist = S.loc.pos ? fmtDist(metres(S.loc.pos, site)) : "";
   const nav = directions(site);
   const strength = site.strength === "strong" ? '<span class="tag strong">Strong evidence</span>'
     : site.strength === "weak" ? '<span class="tag">Weak lead</span>' : "";
@@ -996,7 +1003,8 @@ function renderSite(site) {
     <div class="site-head" data-drag>
       ${badge(site.category, "big")}
       <div class="grow"><h2>${esc(site.name)}${site.added ? '<span class="new">NEW</span>' : ""}</h2>
-        <p>${esc(site.condition)} · ${esc(catLabel(site.category))}${dist ? ` · ${dist} away` : ""}</p></div>
+        <p>${esc(site.condition)} · ${esc(catLabel(site.category))}</p>
+        <button type="button" class="bearing" id="bearing" hidden>${svg(UI.arrow)}<span class="bearing-text"></span><small></small></button></div>
       ${closeButton()}
     </div>
     <div class="actions">
@@ -1091,6 +1099,74 @@ async function holdScreenAwake(wanted) {
   } catch (_) { /* refused (low battery, or not allowed): the map still works */ }
 }
 
+// ---------- which way: an arrow from you to the place ----------
+const COMPASS_POINTS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+
+function bearingTo(from, to) {  // degrees clockwise from north
+  const r = Math.PI / 180, p1 = from.lat * r, p2 = to.lat * r, dl = (to.lng - from.lng) * r;
+  const x = Math.sin(dl) * Math.cos(p2);
+  const y = Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(dl);
+  return (Math.atan2(x, y) / r + 360) % 360;
+}
+
+function renderBearing() {
+  const el = $("bearing");
+  if (!el || !S.site) return;
+  if (!S.loc.pos) { el.hidden = true; return; }
+  const deg = bearingTo(S.loc.pos, S.site);
+  // With a compass, point where to walk; without one, point as the map does, north up.
+  const turn = S.heading == null ? deg : deg - S.heading;
+  el.hidden = false;
+  el.querySelector("svg").style.transform = `rotate(${turn}deg)`;
+  el.querySelector(".bearing-text").textContent = `${fmtDist(metres(S.loc.pos, S.site))} ${COMPASS_POINTS[Math.round(deg / 45) % 8]}`;
+  el.querySelector("small").textContent = S.compassOn ? (S.heading == null ? "finding north…" : "this way") : "tap to use compass";
+  el.setAttribute("aria-label", S.compassOn ? "Stop using the compass" : "Point the arrow with your phone's compass");
+}
+
+let compassFrame = 0;
+function onOrientation(e) {
+  let heading = null;
+  if (typeof e.webkitCompassHeading === "number") heading = e.webkitCompassHeading;         // iPhone
+  else if (e.absolute && typeof e.alpha === "number") heading = 360 - e.alpha;               // Android
+  if (heading == null) return;
+  S.heading = (heading + ((screen.orientation && screen.orientation.angle) || 0) + 360) % 360;
+  if (!compassFrame) compassFrame = requestAnimationFrame(() => { compassFrame = 0; renderBearing(); });
+}
+
+async function startCompass() {
+  if (S.compassOn) return;
+  if (typeof DeviceOrientationEvent === "undefined") { toast("This device doesn't have a compass the browser can use."); return; }
+  try {
+    if (typeof DeviceOrientationEvent.requestPermission === "function"
+        && await DeviceOrientationEvent.requestPermission() !== "granted") {
+      toast("Compass access was declined, so the arrow stays north up.");
+      return;
+    }
+  } catch (_) {
+    toast("Couldn't use the compass here, so the arrow stays north up.");
+    return;
+  }
+  S.compassOn = true;
+  window.addEventListener("deviceorientationabsolute", onOrientation);
+  window.addEventListener("deviceorientation", onOrientation);
+  renderBearing();
+  setTimeout(() => {
+    if (S.compassOn && S.heading == null) {
+      stopCompass();
+      toast("No compass reading on this device, so the arrow stays north up.");
+    }
+  }, 4000);
+}
+
+function stopCompass() {
+  if (!S.compassOn) return;
+  S.compassOn = false;
+  S.heading = null;
+  window.removeEventListener("deviceorientationabsolute", onOrientation);
+  window.removeEventListener("deviceorientation", onOrientation);
+  renderBearing();
+}
+
 function renderLocBtn() {
   holdScreenAwake(S.loc.wanted);
   const st = !S.loc.wanted ? "off" : !S.loc.pos ? "searching" : S.loc.follow ? "follow" : "on";
@@ -1150,6 +1226,7 @@ function onPosition(pos) {
     if (Math.hypot(p.x - (r.x0 + r.x1) / 2, p.y - (r.y0 + r.y1) / 2) > 40) centerOn(ll);
   }
   renderLocBtn();
+  renderBearing();
   if (!prev || metres(prev, S.loc.pos) > 75) scheduleList();
 }
 
@@ -1187,6 +1264,7 @@ document.addEventListener("visibilitychange", () => {
     watchLocation();
   }
   holdScreenAwake(!document.hidden && S.loc.wanted);
+  if (document.hidden) stopCompass();
 });
 
 // Ask for the user's location as the page opens (the browser shows its own prompt the first time),
@@ -1390,6 +1468,7 @@ function initControls() {
     if (e.target.closest("[data-share]") && S.site) { shareSite(S.site); return; }
     const save = e.target.closest("[data-save]");
     if (save && S.site) { toggleSaved(S.site, save.dataset.save); return; }
+    if (e.target.closest("#bearing")) { S.compassOn ? stopCompass() : startCompass(); renderBearing(); return; }
     const way = e.target.closest("[data-point]");
     if (way) { const [lat, lng] = way.dataset.point.split(",").map(Number); showPoint(lat, lng, way.dataset.label); return; }
     const savedRow = e.target.closest("[data-saved-key]");
