@@ -28,7 +28,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 import requests
 
-from . import __version__, export, geocode, imagery, opendata
+from . import __version__, access, export, geocode, imagery, opendata
 from .config import CATEGORIES, DB_NAME, OTHER_CATEGORY, UK_BBOX, WEAK_BELOW
 from .geo import haversine_m
 from .sites import build_sites
@@ -120,6 +120,7 @@ class App:
         self.read_only = read_only
         self._search_cache = TTLCache()
         self._photo_cache = TTLCache()
+        self._access_cache = TTLCache(ttl=7 * 24 * 3600)  # paths and car parks rarely move
 
     def static(self, path: str) -> tuple[bytes, str, str]:
         name, ctype, cache = STATIC[path]
@@ -202,6 +203,22 @@ class App:
         except requests.RequestException as exc:
             raise ApiError(502, f"Panoramax unavailable: {type(exc).__name__}")
         self._photo_cache.put(key, result)
+        return result
+
+    def access(self, qs: dict) -> dict:
+        try:
+            lat, lng = float(qs["lat"][0]), float(qs["lng"][0])
+        except (KeyError, ValueError):
+            raise ApiError(400, "lat and lng required")
+        key = (round(lat, 4), round(lng, 4))
+        cached = self._access_cache.get(key)
+        if cached is not None:
+            return cached
+        try:
+            result = access.around(lat, lng, self.session_factory())
+        except (requests.RequestException, ValueError) as exc:
+            raise ApiError(502, f"OpenStreetMap's path data is unavailable: {type(exc).__name__}")
+        self._access_cache.put(key, result)
         return result
 
     def search(self, q: str) -> dict:
@@ -382,6 +399,8 @@ def make_handler(app: App, allowed_hosts: Iterable[str] = ()) -> type[BaseHTTPRe
                 self._dispatch(lambda: app.site(unquote(path[len("/api/site/"):])))
             elif path == "/api/photos":
                 self._dispatch(lambda: app.photos(qs))
+            elif path == "/api/access":
+                self._dispatch(lambda: app.access(qs))
             elif path == "/api/search":
                 self._dispatch(lambda: app.search((qs.get("q") or [""])[0]))
             elif path == "/api/status":
