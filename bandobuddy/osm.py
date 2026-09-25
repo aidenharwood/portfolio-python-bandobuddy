@@ -74,6 +74,31 @@ def in_use_as(tags: dict[str, str]) -> str | None:
     return None
 
 
+ALT_NAME_KEYS = ("alt_name", "old_name", "loc_name", "official_name", "short_name")
+
+
+def alt_names(tags: dict[str, str]) -> list[str]:
+    """The other names a feature goes by ("Bethel Quarry" for Gripwood Quarry)."""
+    names = []
+    for key in ALT_NAME_KEYS:
+        for name in (tags.get(key) or "").split(";"):
+            if name.strip() and name.strip() != tags.get("name") and name.strip() not in names:
+                names.append(name.strip())
+    return names
+
+
+def entrance_kind(tags: dict[str, str]) -> str | None:
+    """Is this feature a way in (a cave entrance, adit or shaft), and which?"""
+    if tags.get("natural") == "cave_entrance":
+        return "Cave entrance"
+    made = next((tags.get(k) for k in ("man_made", "disused:man_made", "abandoned:man_made") if tags.get(k)), None)
+    if made == "adit" or tags.get("historic") in ("mine_adit", "adit"):
+        return "Adit"
+    if made == "mineshaft" or tags.get("historic") in ("mine_shaft", "mineshaft"):
+        return "Air shaft" if tags.get("mineshaft_type") in ("air", "ventilation") else "Shaft"
+    return None
+
+
 def is_heritage_site(tags: dict[str, str]) -> bool:
     """Ruins that are a visitor attraction (castles, abbeys) rather than somewhere to explore."""
     return (tags.get("historic") in ("castle", "abbey", "monastery", "archaeological_site")

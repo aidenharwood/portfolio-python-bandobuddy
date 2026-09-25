@@ -28,6 +28,7 @@ LNG_KEYS = ("lng", "lon", "long", "longitude", "x", "xcoord")
 KIND_KEYS = ("type", "site_type", "category", "class", "monument_type", "kind")
 NOTE_KEYS = ("description", "notes", "note", "comment", "summary", "condition")
 URL_KEYS = ("url", "link", "website", "href")
+ALIAS_KEYS = ("alt_name", "alt_names", "aliases", "alias", "aka", "also_known_as", "other_names", "alternative_names")
 
 
 class BadFile(ValueError):
@@ -49,9 +50,10 @@ def _coords(row: dict) -> tuple[float, float] | None:
         return None
 
 
-def _place(name: str, lat: float, lng: float, kind: str = "", note: str = "", url: str = "") -> dict:
+def _place(name: str, lat: float, lng: float, kind: str = "", note: str = "", url: str = "",
+           aliases: str = "") -> dict:
     return {"name": name.strip(), "lat": lat, "lng": lng, "kind": kind.strip(), "note": note.strip(),
-            "url": url.strip()}
+            "url": url.strip(), "aliases": [a.strip() for a in re.split(r"[;|]", aliases or "") if a.strip()]}
 
 
 def read_csv(text: str) -> list[dict]:
@@ -62,7 +64,7 @@ def read_csv(text: str) -> list[dict]:
         if not point:
             continue
         places.append(_place(_pick(row, NAME_KEYS), *point, _pick(row, KIND_KEYS), _pick(row, NOTE_KEYS),
-                             _pick(row, URL_KEYS)))
+                             _pick(row, URL_KEYS), _pick(row, ALIAS_KEYS)))
     return places
 
 
@@ -128,7 +130,8 @@ def read_geojson(text: str) -> list[dict]:
             continue
         props = feature.get("properties") or {}
         places.append(_place(_pick(props, NAME_KEYS), float(coords[1]), float(coords[0]),
-                             _pick(props, KIND_KEYS), _pick(props, NOTE_KEYS), _pick(props, URL_KEYS)))
+                             _pick(props, KIND_KEYS), _pick(props, NOTE_KEYS), _pick(props, URL_KEYS),
+                             _pick(props, ALIAS_KEYS)))
     return places
 
 
@@ -165,7 +168,8 @@ def to_items(places: list[dict], label: str) -> list[dict]:
     for place in places:
         described = " ".join(x for x in (place["kind"], place["note"], place["name"]) if x)
         verdict = judge_record(described)
-        weight, kind = verdict if verdict else (DEFAULT_WEIGHT, place["kind"] or "place")
+        weight, judged = verdict if verdict else (DEFAULT_WEIGHT, "place")
+        kind = place["kind"] or judged   # what you called it says more than our guess ("cave entrance")
         if sounds_gone(described):
             weight = GONE_WEIGHT
         detail = place["kind"] or place["note"][:120]
@@ -179,6 +183,7 @@ def to_items(places: list[dict], label: str) -> list[dict]:
             "evidence": f"From your import \"{label}\"" + (f": {detail}" if detail else ""),
             "weight": weight,
             "url": place["url"] or None,
+            "aliases": place["aliases"],
         })
     return items
 

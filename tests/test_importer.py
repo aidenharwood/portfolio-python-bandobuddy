@@ -57,6 +57,12 @@ class ReadingTests(unittest.TestCase):
             self.assertTrue(all(p["lat"] and p["lng"] for p in places), name)  # rows without a position are dropped
         self.assertEqual(len(importer.read_file(self.tmp / "sites.csv")), 2)
 
+    def test_other_names_come_from_an_alias_column(self):
+        csv = "Name,Alt Name,Type,Latitude,Longitude\nBethel Quarry,Gripwood Quarry; Frome Road Quarry,quarry,51.34,-2.25\n"
+        place = importer.read_file(write(self.tmp, "names.csv", csv))[0]
+        self.assertEqual(place["aliases"], ["Gripwood Quarry", "Frome Road Quarry"])
+        self.assertEqual(importer.to_items([place], "notes")[0]["aliases"], ["Gripwood Quarry", "Frome Road Quarry"])
+
     def test_kmz_is_a_zipped_kml(self):
         path = self.tmp / "dob.kmz"
         buf = io.BytesIO()
@@ -76,10 +82,11 @@ class ReadingTests(unittest.TestCase):
     def test_records_are_judged_like_a_register(self):
         items = importer.to_items(importer.read_file(write(self.tmp, "sites.csv", CSV)), "defence-of-britain")
         roc, pillbox = items
-        self.assertEqual(roc["kind"], "observation post")     # "ROC Monitoring Post"
+        self.assertEqual(roc["kind"], "ROC Monitoring Post")  # your own words for it, kept
+        self.assertEqual(roc["weight"], 25)                   # weighed as an observation post
         self.assertEqual(roc["evidence"], 'From your import "defence-of-britain": ROC Monitoring Post')
         self.assertEqual(roc["url"], "https://example.org/1")
-        self.assertEqual(pillbox["kind"], "military structure")
+        self.assertEqual(pillbox["kind"], "Pillbox")
         self.assertTrue(all(i["dataset"] == "imported" for i in items))
         # Your notes saying it's gone keep the place, but only as a weak lead.
         gone = importer.to_items([importer._place("Old Mill", 51.0, -1.0, "mill", "demolished in 2003")], "notes")
