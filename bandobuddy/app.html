@@ -359,7 +359,9 @@
         <h3>Mining overlays</h3>
         <div class="checks" id="overlayChecks"></div>
         <p class="note" style="margin-top:8px">Coal mining data &copy; Mining Remediation Authority, under the
-          Open Government Licence. Drawn straight from their map service, so it isn't searchable or listed.</p>
+          Open Government Licence. Drawn straight from their map service, so it isn't searchable or listed.
+          Mine entries and surface mining show once you zoom in to village level.</p>
+        <p class="note" id="overlayHint" hidden></p>
       </div>
       <div class="sticky"><button type="button" class="btn accent block" id="applyFilters" data-close>Show places</button></div>
     </div>
@@ -655,16 +657,20 @@ function initMap() {
   };
   const mining = "https://services-eu1.arcgis.com/Qn4lKcPDVHNivEyr/arcgis/rest/services";
   const credit = 'Coal mining data &copy; <a href="https://www.gov.uk/guidance/access-coal-mining-information-and-data">Mining Remediation Authority</a>';
+  // Their service only has pictures drawn down to zoom 14 (and mine entries and surface mining only
+  // from 13); anything else comes back as a blank tile. So stretch the zoom-14 pictures when you zoom in
+  // further, and don't ask for levels that were never drawn.
+  const drawn = { maxZoom: 19, maxNativeZoom: 14, attribution: credit };
   S.overlays = {
-    mine_entries: { label: "Mine entries (shafts & adits)",
+    mine_entries: { label: "Mine entries (shafts & adits)", from: 13,
                     layer: L.tileLayer(`${mining}/Mine_Entries/MapServer/tile/{z}/{y}/{x}`,
-                                       { maxZoom: 19, opacity: 0.9, attribution: credit }) },
-    shallow_workings: { label: "Past shallow coal workings",
+                                       { ...drawn, minZoom: 13, opacity: 0.9 }) },
+    shallow_workings: { label: "Past shallow coal workings", from: 9,
                         layer: L.tileLayer(`${mining}/Past_Shallow_Coal_Mine_Workings/MapServer/tile/{z}/{y}/{x}`,
-                                           { maxZoom: 19, opacity: 0.55, attribution: credit }) },
-    surface_mining: { label: "Surface mining, past and present",
+                                           { ...drawn, minZoom: 9, opacity: 0.55 }) },
+    surface_mining: { label: "Surface mining, past and present", from: 13,
                       layer: L.tileLayer(`${mining}/Surface_Mining_Past_and_Current/MapServer/tile/{z}/{y}/{x}`,
-                                         { maxZoom: 19, opacity: 0.55, attribution: credit }) },
+                                         { ...drawn, minZoom: 13, opacity: 0.55 }) },
   };
   S.base = S.bases[prefs.base] ? prefs.base : "Map";
   S.bases[S.base].addTo(S.map);
@@ -682,6 +688,7 @@ function initMap() {
     savePrefs({ view: { center: S.map.getCenter(), zoom: S.map.getZoom() } });
     scheduleFetch();
   });
+  S.map.on("zoomend", () => renderOverlayHint());
   S.map.on("dragstart", () => {
     if (S.loc.follow) { S.loc.follow = false; renderLocBtn(); }
   });
@@ -699,11 +706,23 @@ function renderOverlays(on) {
   for (const key of on) S.overlays[key]?.layer.addTo(S.map);
 }
 
+function renderOverlayHint() {
+  const on = Object.values(S.overlays).filter(o => S.map.hasLayer(o.layer));
+  const hidden = on.filter(o => S.map.getZoom() < o.from);
+  $("overlayHint").hidden = !hidden.length;
+  if (hidden.length) $("overlayHint").textContent = `Zoom in to see ${hidden.map(o => o.label.toLowerCase()).join(" and ")}.`;
+  if (hidden.length && S.overlayToldAt !== S.map.getZoom() && S.view !== "filters") {
+    S.overlayToldAt = S.map.getZoom();
+    toast(`Zoom in to see ${hidden.map(o => o.label.split(" (")[0].toLowerCase()).join(" and ")}.`, 3000);
+  }
+}
+
 function toggleOverlay(key, wanted) {
   const overlay = S.overlays[key];
   if (!overlay) return;
   if (wanted) overlay.layer.addTo(S.map);
   else S.map.removeLayer(overlay.layer);
+  renderOverlayHint();
   savePrefs({ overlays: [...document.querySelectorAll("#overlayChecks input:checked")].map(i => i.dataset.overlay) });
 }
 
@@ -981,8 +1000,13 @@ async function openSite(key, { pan = false, push = true } = {}) {
   $("detail").innerHTML = `<div class="site-head" data-drag><div class="grow"><p>Loading…</p></div>${closeButton()}</div>`;
   let site;
   try { site = await api(`/api/site/${encodeURIComponent(key)}`); } catch (err) {
-    if (S.selected === key) $("detail").innerHTML = `<div class="site-head" data-drag><p class="err grow">${esc(err.message)}</p>${closeButton()}</div>`;
-    return;
+    if (S.selected !== key) return;
+    const known = knownPlace(key);
+    if (!known) {
+      $("detail").innerHTML = `<div class="site-head" data-drag><p class="err grow">${esc(err.message)}</p>${closeButton()}</div>`;
+      return;
+    }
+    site = { ...known, reasons: [], detail: {}, links: {}, entrances: [], aliases: known.aliases || [], partial: err.message };
   }
   if (S.selected !== key) return;
   S.site = site;
@@ -993,8 +1017,23 @@ async function openSite(key, { pan = false, push = true } = {}) {
   renderEntrances();
   drawEntrances(site);
   renderBearing();
+  if (site.partial) {  // offline, details not kept: say so where the details would be
+    for (const id of ["photos", "getThere"]) if ($(id)) $(id).innerHTML = `<p class="note">${esc(site.partial)}</p>`;
+    return;
+  }
   loadPhotos(site);
   loadAccess(site);
+}
+
+// What the map, the list and your saved places already know about a place: enough to show it and
+// head there when its full details weren't kept and there's no signal.
+function knownPlace(key) {
+  const rows = [...((S.list && S.list.sites) || []), ...((S.lastMap && S.lastMap.sites) || [])];
+  const row = rows.find(s => s.key === key);
+  if (row) return row;
+  const saved = S.saved[key];
+  return saved ? { key, name: saved.name, lat: saved.lat, lng: saved.lng, category: saved.category,
+                   condition: saved.condition || "", sources: "", first_seen: "" } : null;
 }
 
 function closeSite(popping = false) {
@@ -1062,6 +1101,7 @@ function renderSite(site) {
       <button type="button" class="act" data-copy="${coords}">${svg(UI.copy)}Copy location</button>
     </div>
     <div class="block"><h3>Why it's on the map${strength}</h3>
+      ${site.partial ? `<p class="note">${esc(site.partial)} The full details will load when you're back online.</p>` : ""}
       <ul class="reasons">${site.reasons.map(r => `<li>${esc(r)}</li>`).join("")}</ul></div>
     <div class="block"><h3>Street-level photos</h3><div class="photos" id="photos"><p class="note">Looking…</p></div></div>
     ${(site.entrances || []).length ? `<div class="block"><h3>${site.entrances.length} ways in</h3><div id="entrances"></div></div>` : ""}
@@ -1621,6 +1661,7 @@ function initInstall() {
   window.addEventListener("appinstalled", () => { $("installBox").hidden = true; });
 
   window.addEventListener("offline", () => toast("You're offline. The map shows what you looked at last.", 5000));
+  if (!navigator.onLine) setTimeout(() => toast("You're offline. Showing the places kept on this phone.", 5000), 800);
   window.addEventListener("online", () => { toast("Back online."); scheduleFetch(0); });
   document.addEventListener("visibilitychange", () => { if (!document.hidden) keepInView(); });
   navigator.serviceWorker?.addEventListener("controllerchange", keepInView);   // first visit: once the worker's in charge
@@ -1829,7 +1870,13 @@ async function suggest() {
   try {
     const p = new URLSearchParams({ q, weak: "1", limit: "6", near: nearOf(centre) });
     places = (await api(`/api/list?${p}`)).sites;
-  } catch (_) { /* offline or busy: the town row still works */ }
+  } catch (_) {  // offline: look through the places this phone already knows
+    const low = q.toLowerCase();
+    const seen = new Map([...((S.list && S.list.sites) || []), ...((S.lastMap && S.lastMap.sites) || []),
+                          ...Object.entries(S.saved).map(([key, e]) => ({ key, ...e }))].map(s => [s.key, s]));
+    places = [...seen.values()].filter(s => (s.name || "").toLowerCase().includes(low)
+      || (s.aliases || []).some(a => a.toLowerCase().includes(low))).slice(0, 6);
+  }
   if (seq !== suggestSeq || $("searchInput").value.trim() !== q) return;
   S.suggestions = places;
   const starts = n => n.toLowerCase().startsWith(q.toLowerCase());
@@ -1885,6 +1932,7 @@ function pickSuggestion(pick) {
 async function findTown(q) {
   if (!q) return;
   try {
+    if (!navigator.onLine) { toast("Searching for towns needs a signal. Places you've already seen still show as you type."); return; }
     const hit = await api(`/api/search?q=${encodeURIComponent(q)}`);
     if (S.loc.follow) { S.loc.follow = false; renderLocBtn(); }
     if (S.view === "site") closeSite();
