@@ -44,6 +44,21 @@ class ClassifyTests(unittest.TestCase):
         evidence, _ = classify({"disused:website": "http://example.org", "disused:amenity": "pub", "disused:building": "yes"})
         self.assertEqual(evidence, "OSM: disused:amenity=pub")
 
+    def test_old_road_alignments_arent_places(self):
+        self.assertIsNone(classify({"abandoned:highway": "primary", "name": "A344"}))
+        self.assertIsNotNone(classify({"abandoned:highway": "primary", "tunnel": "yes"}))  # a road tunnel still is
+
+    def test_what_a_place_is_in_use_as(self):
+        from bandobuddy.osm import in_use_as
+        self.assertEqual(in_use_as({"tourism": "museum", "name": "National Mining Museum Scotland"}), "Museum")
+        self.assertEqual(in_use_as({"tourism": "attraction"}), "Visitor attraction")
+        self.assertEqual(in_use_as({"railway": "station", "usage": "tourism"}), "Heritage railway")
+        self.assertEqual(in_use_as({"historic": "ruins", "operator": "English Heritage"}), "Heritage site")
+        self.assertIsNone(in_use_as({"railway": "station"}))                 # an ordinary station
+        self.assertIsNone(in_use_as({"building": "ruins"}))
+        # Kept by the extract even though it's no lead itself.
+        self.assertTrue(is_candidate([Tag("tourism", "museum")]))
+
     def test_heritage_ruins_and_shop_units_count_for_less(self):
         castle = {"building": "ruins", "historic": "castle", "name": "Old Wardour Castle", "operator": "English Heritage"}
         self.assertEqual(classify(castle)[1], 10)

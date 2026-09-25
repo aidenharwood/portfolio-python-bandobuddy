@@ -18,7 +18,7 @@ from typing import Iterable, Iterator
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS osm_items (
     osm_id TEXT PRIMARY KEY, lat REAL, lng REAL, tags TEXT,
-    first_seen TEXT, last_seen TEXT, gone_at TEXT
+    first_seen TEXT, last_seen TEXT, gone_at TEXT, extent_m REAL
 );
 CREATE TABLE IF NOT EXISTS wd_items (
     qid TEXT PRIMARY KEY, label TEXT, lat REAL, lng REAL, types TEXT, states TEXT, ended TEXT, wiki TEXT,
@@ -67,6 +67,8 @@ class Store:
             if columns and "condition" not in columns:
                 db.execute("DROP TABLE sites")  # derived data from an older version; rebuilt from raw items
             db.executescript(SCHEMA)
+            if "extent_m" not in {r["name"] for r in db.execute("PRAGMA table_info(osm_items)")}:
+                db.execute("ALTER TABLE osm_items ADD COLUMN extent_m REAL")  # filled in by the next extract
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
@@ -90,13 +92,14 @@ class Store:
 
     # -- raw items -----------------------------------------------------------------------
     def upsert_osm(self, items: Iterable[dict], seen_at: str) -> None:
-        rows = [(i["osm_id"], i["lat"], i["lng"], json.dumps(i["tags"], ensure_ascii=False), seen_at, seen_at)
-                for i in items]
+        rows = [(i["osm_id"], i["lat"], i["lng"], json.dumps(i["tags"], ensure_ascii=False), i.get("extent_m") or 0,
+                 seen_at, seen_at) for i in items]
         with self.connect() as db:
             db.executemany(
-                """INSERT INTO osm_items (osm_id, lat, lng, tags, first_seen, last_seen) VALUES (?, ?, ?, ?, ?, ?)
+                """INSERT INTO osm_items (osm_id, lat, lng, tags, extent_m, first_seen, last_seen)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(osm_id) DO UPDATE SET lat = excluded.lat, lng = excluded.lng, tags = excluded.tags,
-                   last_seen = excluded.last_seen, gone_at = NULL""",
+                   extent_m = excluded.extent_m, last_seen = excluded.last_seen, gone_at = NULL""",
                 rows,
             )
 
@@ -160,9 +163,9 @@ class Store:
 
     def active_osm(self) -> list[dict]:
         with self.connect() as db:
-            rows = db.execute("SELECT osm_id, lat, lng, tags, first_seen FROM osm_items WHERE gone_at IS NULL")
+            rows = db.execute("SELECT osm_id, lat, lng, tags, extent_m, first_seen FROM osm_items WHERE gone_at IS NULL")
             return [{"osm_id": r["osm_id"], "lat": r["lat"], "lng": r["lng"], "tags": json.loads(r["tags"]),
-                     "first_seen": r["first_seen"]} for r in rows]
+                     "extent_m": r["extent_m"] or 0, "first_seen": r["first_seen"]} for r in rows]
 
     def active_wd(self) -> list[dict]:
         with self.connect() as db:

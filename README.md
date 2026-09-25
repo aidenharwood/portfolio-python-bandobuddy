@@ -225,6 +225,13 @@ Places with only weak evidence are **weaker leads**: hidden unless you turn on *
 (or pass `--include-weak` to `bandobuddy export`). Stronger places win when the map is zoomed out, and are marked
 *Strong evidence*.
 
+**Museums and attractions are weaker leads too**, whatever the evidence says. A register saying a colliery was
+there doesn't say it's now the National Mining Museum. So a place inside the outline of something OpenStreetMap
+maps as a museum, gallery, visitor attraction, theme park, zoo or heritage railway station, or run by English
+Heritage, the National Trust, Cadw or Historic Environment Scotland (or within 40 m of one mapped as a point),
+is demoted and its condition says so. Wikidata items typed as museums count too. Outlines bigger than 1.5 km, like
+a country park, are ignored: they say nothing about one building.
+
 ## Data and credits
 
 - Places come from © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors (ODbL), [Wikidata](https://www.wikidata.org) (CC0) and [Wikipedia](https://en.wikipedia.org) (CC BY-SA).

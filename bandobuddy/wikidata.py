@@ -231,6 +231,24 @@ def wikipedia_title(wiki_url: str | None) -> str | None:
     return unquote(wiki_url.rsplit("/", 1)[1]).replace("_", " ") if wiki_url else None
 
 
+_ATTRACTION_TYPES = [
+    (re.compile(r"\bmuseum\b", re.I), "Museum"),
+    (re.compile(r"heritage railway|preserved railway", re.I), "Heritage railway"),
+    (re.compile(r"tourist attraction|visitor attraction|visitor centre", re.I), "Visitor attraction"),
+    (re.compile(r"art gallery|\bgallery\b", re.I), "Gallery"),
+    (re.compile(r"theme park|amusement park|\bzoo\b|aquarium", re.I), "Visitor attraction"),
+]
+
+
+def in_use_as(types: list[str]) -> str | None:
+    """"Museum" for a colliery Wikidata also types as a museum: open to visitors now."""
+    for t in types:
+        for rx, kind in _ATTRACTION_TYPES:
+            if rx.search(t or ""):
+                return kind
+    return None
+
+
 def evaluate(row: dict, intro: str | None) -> dict | None:
     """Turn a raw Wikidata row (plus its Wikipedia intro, if fetched) into site evidence, or None."""
     verdict = classify(row["label"], row["types"], row["states"], row["ended"])
@@ -248,6 +266,7 @@ def evaluate(row: dict, intro: str | None) -> dict | None:
     return {
         "qid": row["qid"],
         "name": row["label"],
+        "in_use": in_use_as(row["types"]),
         "kind": kind,
         "lat": row["lat"],
         "lng": row["lng"],

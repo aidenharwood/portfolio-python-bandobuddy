@@ -255,6 +255,56 @@ class StoreAndSitesTests(unittest.TestCase):
         manod = next(s for s in self.store.full_sites(min_score=0) if s["name"] == "Manod Granite Quarries")
         self.assertIn("Coflein (Wales) records 1 more part of it", manod["reasons"])
 
+    def test_museums_and_attractions_are_weak_leads(self):
+        # Lady Victoria Colliery: a Canmore colliery inside the museum that's there now.
+        self.store.upsert_od([od("1", 55.8727, -3.0569, name="Lady Victoria Colliery, Newtongrange", weight=22,
+                                 kind="old workings", evidence="Canmore records a colliery here")], self.now)
+        self.store.upsert_osm([{"osm_id": "way/1", "lat": 55.8730, "lng": -3.0575, "extent_m": 150,
+                                "tags": {"tourism": "museum", "name": "National Mining Museum Scotland"}},
+                               # A point-mapped attraction 200 m from another colliery: a different place.
+                               {"osm_id": "node/2", "lat": 55.9000, "lng": -3.1000,
+                                "tags": {"tourism": "attraction", "name": "Viewpoint Sculpture"}},
+                               # A country park tagged as an attraction is too big to say anything.
+                               {"osm_id": "way/3", "lat": 55.95, "lng": -3.20, "extent_m": 4000,
+                                "tags": {"tourism": "attraction", "name": "Big Country Park"}}], self.now)
+        self.store.upsert_od([od("2", 55.9018, -3.1000, name="Old Colliery", weight=22, kind="old workings",
+                                 evidence="Canmore records a colliery here"),
+                              od("3", 55.9500, -3.2010, name="Park Colliery", weight=22, kind="old workings",
+                                 evidence="Canmore records a colliery here")], self.now)
+        build_sites(self.store)
+        sites = {s["name"]: s for s in self.store.full_sites(min_score=0)}
+        museum = sites["Lady Victoria Colliery, Newtongrange"]
+        self.assertEqual((museum["condition"], museum["strength"], museum["category"]), ("Museum", "weak", "mines"))
+        self.assertEqual(museum["reasons"][0],
+                         "OpenStreetMap maps National Mining Museum Scotland as a museum, open to visitors")
+        self.assertEqual(sites["Old Colliery"]["strength"], "good")        # 200 m from a point: not it
+        self.assertEqual(sites["Park Colliery"]["strength"], "good")       # the park's outline is too big to trust
+
+    def test_a_gallery_on_the_high_street_doesnt_demote_the_pub_next_door(self):
+        self.store.upsert_osm([
+            {"osm_id": "node/10", "lat": 51.4580, "lng": -2.1160, "tags": {"disused:amenity": "pub", "name": "The Bear"}},
+            # Chippenham Museum, mapped as a point, 30 m along the street: a different building.
+            {"osm_id": "node/11", "lat": 51.4582, "lng": -2.1164,
+             "tags": {"tourism": "museum", "name": "Chippenham Museum & Heritage Centre"}},
+            # A disused mill with a museum inside it, mapped as a point on the same spot, does get demoted...
+            {"osm_id": "node/12", "lat": 51.0800, "lng": -1.8600, "tags": {"disused:man_made": "works", "name": "Carpet Factory"}},
+            {"osm_id": "node/13", "lat": 51.08005, "lng": -1.86005,
+             "tags": {"tourism": "museum", "name": "Wilton Royal Carpet Factory Museum"}},
+            # ...and so does a neighbour that shares its name, a little further off.
+            {"osm_id": "node/14", "lat": 51.0803, "lng": -1.8603, "tags": {"disused:man_made": "works", "name": "Royal Carpet Weaving Shed"}},
+        ], self.now)
+        build_sites(self.store)
+        sites = {s["name"]: s for s in self.store.full_sites(min_score=0)}
+        self.assertEqual(sites["The Bear"]["condition"], "Closed")   # still a shut pub, not a museum
+        self.assertEqual(sites["Carpet Factory"]["condition"], "Museum")
+        self.assertEqual(sites["Royal Carpet Weaving Shed"]["condition"], "Museum")
+
+    def test_a_wikidata_museum_demotes_itself(self):
+        from bandobuddy.wikidata import in_use_as
+        self.assertEqual(in_use_as(["colliery", "museum"]), "Museum")
+        self.assertEqual(in_use_as(["railway station", "heritage railway station"]), "Heritage railway")
+        self.assertIsNone(in_use_as(["colliery"]))
+
     def test_a_weak_lead_on_top_of_a_site_is_that_site(self):
         self.store.upsert_osm([{"osm_id": "way/1", "lat": 51.5, "lng": -0.12,
                                 "tags": {"building": "ruins", "name": "Old Engine House"}}], self.now)

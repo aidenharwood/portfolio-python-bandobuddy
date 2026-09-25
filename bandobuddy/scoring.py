@@ -17,6 +17,7 @@ from .config import (
     STRENGTHS,
     URBEX_NAME_WORDS,
     URBEX_TYPES,
+    WEAK_BELOW,
 )
 
 _CATEGORY_RX = [(key, label, re.compile(rx, re.I)) for key, label, rx in CATEGORIES]
@@ -66,7 +67,7 @@ def _condition_from(evidence: str) -> str | None:
     text = evidence.lower()
     if "heritage at risk" in text:
         return "At risk"
-    if "heritage site" in text:
+    if "heritage site open to visitors" in text:
         return "Heritage site"
     if "new use" in text:
         return "Reused"
@@ -100,7 +101,10 @@ _NAME_CONDITIONS = {"abandoned": "Abandoned", "derelict": "Abandoned", "disused"
 
 def condition_for(site: dict) -> str:
     """The state a site is in, judged from its strongest piece of evidence first. Registers often
-    say no more than what a place is, so the name has the last word ("Disused Quarry, Cwm Llwyd")."""
+    say no more than what a place is, so the name has the last word ("Disused Quarry, Cwm Llwyd").
+    A museum or attraction trumps all of it: whatever it was, it's open to visitors now."""
+    if site.get("in_use"):
+        return site["in_use"]["kind"]
     members = sorted(members_of(site), key=lambda m: -m["weight"])
     for m in members:
         found = _condition_from(m.get("evidence", ""))
@@ -228,4 +232,17 @@ def score_site(site: dict) -> tuple[int, list[str]]:
     if urbex_hit(site):
         score += 10  # ranking only: an explorable kind of building beats, say, a closed shop unit
 
+    use = site.get("in_use")
+    if use:  # Lady Victoria Colliery was a colliery; it's the National Mining Museum Scotland now
+        called = f"{use['name']} " if use.get("name") and use["name"] != site.get("name") else ""
+        verb = "lists" if use["source"] == "Wikidata" else "maps"
+        open_to = "" if use["kind"] == "Visitor attraction" else ", open to visitors"
+        reasons.insert(0, f"{use['source']} {verb} {called}{'it ' if not called else ''}as "
+                          f"{_article(use['kind'].lower())}{open_to}")
+        score = min(score, WEAK_BELOW - 1)
+
     return max(0, min(100, score)), reasons
+
+
+def _article(thing: str) -> str:
+    return f"{'an' if thing[:1] in 'aeiou' else 'a'} {thing}"
