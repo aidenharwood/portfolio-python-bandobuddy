@@ -121,8 +121,8 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(scores, sorted(scores, reverse=True))
         self.assertNotIn("distance_m", data["sites"][0])
 
-        _, data, _ = self.request("GET", f"/api/list?{view}&weak=1&categories=military")
-        self.assertEqual({s["category"] for s in data["sites"]}, {"military"})
+        _, data, _ = self.request("GET", f"/api/list?{view}&weak=1&categories=bunkers")
+        self.assertEqual({s["category"] for s in data["sites"]}, {"bunkers"})
         _, data, _ = self.request("GET", f"/api/list?{view}&weak=1&sources=wikidata")
         self.assertTrue(all("wikidata" in s["sources"] for s in data["sites"]))
         _, data, _ = self.request("GET", "/api/list?bbox=10,10,11,11&weak=1")

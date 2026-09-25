@@ -53,6 +53,15 @@
   .count { position:absolute; top:5px; right:4px; min-width:17px; height:17px; padding:0 4px; border-radius:9px;
     background:var(--accent); color:var(--accent-ink); font:700 11px/17px system-ui; text-align:center }
 
+  .suggest { position:fixed; z-index:1100; top:calc(68px + env(safe-area-inset-top)); left:10px; right:10px; max-height:60vh;
+    overflow-y:auto; margin:0; padding:6px 0; list-style:none; background:var(--panel); border-radius:16px; box-shadow:var(--shadow) }
+  .suggest button { display:grid; grid-template-columns:28px 1fr auto; gap:10px; align-items:center; width:100%; min-height:48px;
+    padding:6px 14px; border:0; background:transparent; color:var(--ink); text-align:left }
+  .suggest button[aria-selected="true"], .suggest button:hover { background:var(--raised) }
+  .suggest b { display:block; font-weight:600; overflow-wrap:anywhere } .suggest small { color:var(--muted); font-size:13px }
+  .suggest .town .ico { color:var(--muted); width:22px; height:22px; margin:3px }
+  .suggest .dist { font-size:13px; color:var(--muted); white-space:nowrap }
+  @media (min-width: 900px) { .suggest { top:70px; left:12px; right:auto; width:400px } }
   .toast { position:fixed; z-index:1200; left:50%; top:calc(74px + env(safe-area-inset-top)); transform:translateX(-50%);
     width:max-content; max-width:calc(100% - 32px); padding:10px 14px; border-radius:12px; background:var(--ink); color:var(--panel);
     box-shadow:var(--shadow); font-size:14px; opacity:0; pointer-events:none; transition:opacity .2s }
@@ -226,10 +235,12 @@
 
 <form class="topbar" id="topbar" role="search" autocomplete="off">
   <button type="button" class="icon-btn" id="menuBtn" aria-label="Data, updates and about"></button>
-  <input type="search" id="searchInput" enterkeyhint="search" placeholder="Search a town, postcode or place" aria-label="Search for a place">
+  <input type="search" id="searchInput" enterkeyhint="search" placeholder="Search a town, postcode or place" aria-label="Search for a place"
+         role="combobox" aria-autocomplete="list" aria-controls="suggest" aria-expanded="false">
   <button type="button" class="icon-btn" id="clearBtn" aria-label="Clear search" hidden></button>
   <button type="button" class="icon-btn" id="filterBtn" aria-label="Filters and map style"><i class="count" id="filterCount" hidden></i></button>
 </form>
+<ul class="suggest" id="suggest" role="listbox" aria-label="Suggestions" hidden></ul>
 
 <section class="sheet" id="sheet" aria-label="Places">
   <button type="button" class="grab" id="grab" aria-label="Expand or collapse the list"><span></span></button>
@@ -351,8 +362,10 @@ const LIST_LIMIT = 100;
 
 // ---------- icons (24x24, stroked) ----------
 const CAT_ICON = {
+  bunkers: '<path d="M2.5 19h19"/><path d="M4.5 19a7.5 6 0 0 1 15 0"/><path d="M9.5 13V9.5h5V13"/><path d="M12 9.5V6.5M10.5 6.5h3"/>',
   military: '<path d="M12 3l7 3v5c0 4.5-3 7.8-7 10-4-2.2-7-5.5-7-10V6z"/><path d="M9 10.5l3 2 3-2M9 14l3 2 3-2"/>',
-  underground: '<path d="M3 20h18"/><path d="M5 20v-8a7 7 0 0 1 14 0v8"/><path d="M9.5 20v-5.5a2.5 2.5 0 0 1 5 0V20"/>',
+  mines: '<path d="M3 8h18l-2.2 8H5.2z"/><path d="M7 8l2-3.5h6L17 8"/><circle cx="8" cy="19" r="1.6"/><circle cx="16" cy="19" r="1.6"/>',
+  tunnels: '<path d="M3 20h18"/><path d="M5 20v-8a7 7 0 0 1 14 0v8"/><path d="M9.5 20v-5.5a2.5 2.5 0 0 1 5 0V20"/>',
   rail: '<path d="M8 3 6 21M16 3l2 18"/><path d="M7.6 7h8.8M7 12h10M6.4 17h11.2"/>',
   industrial: '<path d="M3 21V11l5 3v-3l5 3v-3l5 3V4h3v17z"/>',
   religious: '<path d="M12 2v5M10 4h4"/><path d="M5 21v-9l7-5 7 5v9z"/><path d="M10 21v-4a2 2 0 0 1 4 0v4"/>',
@@ -363,7 +376,7 @@ const CAT_ICON = {
   other: '<circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.4 2.3c-.6.3-.9.8-.9 1.4v.3"/><path d="M12 17h.01"/>',
 };
 const CAT_COLOUR = {
-  military: "#4d7c0f", underground: "#7c4a1e", rail: "#475569", industrial: "#ea580c", religious: "#7c3aed",
+  bunkers: "#a16207", military: "#4d7c0f", mines: "#7c4a1e", tunnels: "#1f2937", rail: "#475569", industrial: "#ea580c", religious: "#7c3aed",
   institutional: "#0284c7", leisure: "#db2777", historic: "#0f766e", buildings: "#dc2626", other: "#6b7280",
 };
 const UI = {
@@ -373,6 +386,7 @@ const UI = {
   locate: '<circle cx="12" cy="12" r="7"/><circle class="dot" cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>',
   nav: '<path d="M3 11 21 3l-8 18-2-8z"/>',
   share: '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 13.5 6.8 4M15.4 6.5l-6.8 4"/>',
+  pin: '<path d="M12 21s-7-6.2-7-11.5a7 7 0 0 1 14 0C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/>',
   person: '<circle cx="12" cy="5" r="2.5"/><path d="M9 21v-6H7.5v-4a2 2 0 0 1 2-2h5a2 2 0 0 1 2 2v4H15v6"/>',
   copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/>',
   new: '<path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/>',
@@ -1152,9 +1166,27 @@ async function checkNewSinceVisit() {
 }
 
 // ---------- wiring ----------
+// The categories before "underground" split into mines and tunnels (and bunkers left military).
+const LEGACY_CATEGORIES = ["military", "underground", "rail", "industrial", "religious", "institutional", "leisure",
+                           "historic", "buildings", "other"];
+
+function initialCategories(prefs) {
+  const all = BOOT.categories.map(c => c[0]);
+  if (!prefs.categories) return new Set(all);
+  const known = new Set(prefs.knownCategories || LEGACY_CATEGORIES);
+  const on = new Set(prefs.categories.filter(k => all.includes(k)));
+  for (const key of all) if (!known.has(key)) on.add(key);   // new since you last chose: shown
+  if (!prefs.knownCategories) {                              // carry an old choice across the split
+    const was = new Set(prefs.categories);
+    if (!was.has("underground")) { on.delete("mines"); on.delete("tunnels"); }
+    if (!was.has("military")) on.delete("bunkers");
+  }
+  return on;
+}
+
 function initFilters() {
   const prefs = loadPrefs();
-  const on = new Set(prefs.categories || BOOT.categories.map(c => c[0]));
+  const on = initialCategories(prefs);
   $("catChips").innerHTML = BOOT.categories.map(([k, label]) =>
     `<button type="button" class="cat" data-cat="${esc(k)}" style="--c:${colour(k)}" aria-pressed="${on.has(k)}">${badge(k, "sm")}<span>${esc(label)}</span></button>`).join("");
   $("weak").checked = !!prefs.weak;
@@ -1163,7 +1195,8 @@ function initFilters() {
     `<label><input type="checkbox" value="${esc(key)}"${onSources.has(key) ? " checked" : ""}> ${esc(label)}</label>`).join("");
 
   const changed = () => {
-    savePrefs({ categories: selectedCats(), weak: $("weak").checked, sources: pickedSources() });
+    savePrefs({ categories: selectedCats(), knownCategories: BOOT.categories.map(c => c[0]), weak: $("weak").checked,
+                sources: pickedSources() });
     renderFilterCount();
     scheduleFetch(0);
   };
@@ -1233,27 +1266,36 @@ function initControls() {
     if (copy) copyText(copy.dataset.copy, "Location copied");
   });
 
-  $("searchInput").addEventListener("input", () => { $("clearBtn").hidden = !$("searchInput").value; });
+  $("searchInput").addEventListener("input", () => {
+    $("clearBtn").hidden = !$("searchInput").value;
+    suggestSoon();
+  });
+  $("searchInput").addEventListener("keydown", e => {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      moveSuggestion(e.key === "ArrowDown" ? 1 : -1);
+    } else if (e.key === "Escape") {
+      hideSuggestions();
+    }
+  });
+  $("searchInput").addEventListener("blur", () => setTimeout(hideSuggestions, 150));  // let a tap land first
+  $("suggest").addEventListener("pointerdown", e => e.preventDefault());               // keep focus while tapping
+  $("suggest").addEventListener("click", e => {
+    const row = e.target.closest("button[data-pick]");
+    if (row) pickSuggestion(row.dataset.pick);
+  });
   $("clearBtn").addEventListener("click", () => {
     $("searchInput").value = "";
     $("clearBtn").hidden = true;
+    hideSuggestions();
     $("searchInput").focus();
   });
-  $("topbar").addEventListener("submit", async e => {
+  $("topbar").addEventListener("submit", e => {
     e.preventDefault();
     const q = $("searchInput").value.trim();
     if (!q) return;
-    $("searchInput").blur();  // put the phone keyboard away
-    try {
-      const hit = await api(`/api/search?q=${encodeURIComponent(q)}`);
-      if (S.loc.follow) { S.loc.follow = false; renderLocBtn(); }
-      if (S.view === "site") closeSite();
-      else if (S.view !== "list") backToList();
-      if (!wide()) Sheet.set("peek");
-      const [w, s, ea, n] = hit.bbox;
-      if (n - s > 0.001) S.map.fitBounds([[s, w], [n, ea]], { ...mapPadding(), maxZoom: 15 });
-      else centerOn([hit.lat, hit.lng], 15);
-    } catch (err) { toast(err.message); }
+    const chosen = $("suggest").hidden ? null : $("suggest").querySelector('[aria-selected="true"]');
+    pickSuggestion(chosen ? chosen.dataset.pick : "town");
   });
 
   $("sources").addEventListener("click", async e => {
@@ -1323,6 +1365,84 @@ function initInstall() {
   if ("serviceWorker" in navigator && window.isSecureContext) {
     navigator.serviceWorker.register("/sw.js").catch(() => { /* fine: the app just won't work offline */ });
   }
+}
+
+// ---------- search: places in the database as you type; towns when you ask ----------
+// Nominatim's usage policy rules out searching it as you type, so the town row only asks on demand.
+let suggestTimer = null;
+let suggestSeq = 0;
+function suggestSoon() {
+  clearTimeout(suggestTimer);
+  suggestTimer = setTimeout(suggest, 220);
+}
+
+async function suggest() {
+  const q = $("searchInput").value.trim();
+  if (q.length < 2) { hideSuggestions(); return; }
+  const centre = S.loc.pos || S.map.getCenter();
+  const seq = ++suggestSeq;
+  let places = [];
+  try {
+    const p = new URLSearchParams({ q, weak: "1", limit: "6", near: nearOf(centre) });
+    places = (await api(`/api/list?${p}`)).sites;
+  } catch (_) { /* offline or busy: the town row still works */ }
+  if (seq !== suggestSeq || $("searchInput").value.trim() !== q) return;
+  S.suggestions = places;
+  const leads = places.length && places[0].name.toLowerCase().startsWith(q.toLowerCase());
+  $("suggest").innerHTML = places.map((s, i) => `
+    <li><button type="button" role="option" data-pick="${i}" aria-selected="${leads && i === 0}">
+      ${badge(s.category, "sm")}
+      <span><b>${esc(s.name)}</b><small>${esc(s.condition)} · ${esc(catLabel(s.category))}</small></span>
+      <span class="dist">${fmtDist(s.distance_m)}</span></button></li>`).join("")
+    + `<li><button type="button" role="option" class="town" data-pick="town" aria-selected="${!leads}">
+      ${svg(UI.pin)}<span><b>Find “${esc(q)}”</b><small>as a town, postcode or landmark</small></span><span></span></button></li>`;
+  $("suggest").hidden = false;
+  $("searchInput").setAttribute("aria-expanded", "true");
+}
+
+function hideSuggestions() {
+  clearTimeout(suggestTimer);
+  suggestSeq++;
+  $("suggest").hidden = true;
+  $("searchInput").setAttribute("aria-expanded", "false");
+}
+
+function moveSuggestion(step) {
+  if ($("suggest").hidden) { suggest(); return; }
+  const rows = [...$("suggest").querySelectorAll("button[data-pick]")];
+  const at = rows.findIndex(r => r.getAttribute("aria-selected") === "true");
+  const next = rows[(at + step + rows.length) % rows.length];
+  rows.forEach(r => r.setAttribute("aria-selected", String(r === next)));
+  next.scrollIntoView({ block: "nearest" });
+}
+
+function pickSuggestion(pick) {
+  const q = $("searchInput").value.trim();
+  hideSuggestions();
+  $("searchInput").blur();  // put the phone keyboard away
+  if (pick !== "town") {
+    const place = (S.suggestions || [])[Number(pick)];
+    if (place) {
+      if (S.loc.follow) { S.loc.follow = false; renderLocBtn(); }
+      openSite(place.key, { pan: true });
+    }
+    return;
+  }
+  findTown(q);
+}
+
+async function findTown(q) {
+  if (!q) return;
+  try {
+    const hit = await api(`/api/search?q=${encodeURIComponent(q)}`);
+    if (S.loc.follow) { S.loc.follow = false; renderLocBtn(); }
+    if (S.view === "site") closeSite();
+    else if (S.view !== "list") backToList();
+    if (!wide()) Sheet.set("peek");
+    const [w, s, ea, n] = hit.bbox;
+    if (n - s > 0.001) S.map.fitBounds([[s, w], [n, ea]], { ...mapPadding(), maxZoom: 15 });
+    else centerOn([hit.lat, hit.lng], 15);
+  } catch (err) { toast(err.message); }
 }
 
 // "New since last visit" compares against the previous session's visit time.

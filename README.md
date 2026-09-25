@@ -198,8 +198,8 @@ between you and whoever compiled it.
 
 ## How places are described
 
-Each place gets an **icon for what it was** (military, mines and tunnels, railways, industrial, churches, hospitals
-and schools, shops and leisure, ruins and castles, houses) and a **condition** taken from its strongest evidence:
+Each place gets an **icon for what it was** (bunkers and ROC posts, military, mines and quarries, tunnels and caves,
+railways, industrial, churches, hospitals and schools, shops and leisure, ruins and castles, houses) and a **condition** taken from its strongest evidence:
 *Abandoned*, *Ruin*, *Disused*, *Closed 1987*, *Old workings*, *Old military*, *Former*, *Reused*, and so on. The
 evidence itself is shown in plain English, e.g. "OpenStreetMap lists it as a disused hospital" or "Wikipedia
 describes it as disused".

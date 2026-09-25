@@ -99,7 +99,7 @@ class ImportCommandTests(unittest.TestCase):
         self.assertEqual(store.import_labels(), {"defence-of-britain": 2})
         sites = {s["name"]: s for s in store.full_sites(min_score=0)}
         roc = sites["Alderbury ROC Post"]
-        self.assertEqual((roc["sources"], roc["category"], roc["condition"]), ("imported", "military", "Old military"))
+        self.assertEqual((roc["sources"], roc["category"], roc["condition"]), ("imported", "bunkers", "Old military"))
         self.assertEqual(roc["reasons"], ['From your import "defence-of-britain": ROC Monitoring Post'])
 
         self.assertEqual(cli.main(["--data-dir", str(tmp), "import", "--list"]), 0)

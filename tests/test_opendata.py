@@ -114,6 +114,15 @@ class JudgingTests(unittest.TestCase):
         self.assertIsNotNone(opendata.judge_record("MINE", "Wanlockhead, Bay Mine Site"))
         self.assertIsNotNone(opendata.judge_record("BATTERY", "Burrow Head, Anti-Aircraft Battery And Domestic Site"))
 
+    def test_names_lead_with_the_thing(self):
+        self.assertEqual(opendata.tidy_name("Coetgae, Abertillery, Former Opencast Mine"),
+                         "Former Opencast Mine, Abertillery")
+        self.assertEqual(opendata.tidy_name("Lluest Colliery [Disused] , Pont-y-Rhyl"), "Lluest Colliery, Pont-y-Rhyl")
+        self.assertEqual(opendata.tidy_name("Disused Quarry, Cwm Llwyd,"), "Disused Quarry, Cwm Llwyd")
+        self.assertEqual(opendata.tidy_name("LOCH OF BRECK, NORSE MILL II", shouting=True), "Norse Mill II, Loch of Breck")
+        self.assertEqual(opendata.tidy_name("ST MARY'S ROC POST", shouting=True), "St Mary's ROC Post")
+        self.assertEqual(opendata.tidy_name("PONT-Y-RHYL, FETLAR", shouting=True), "Pont-y-Rhyl, Fetlar")
+
     def test_the_register_describes_the_place_not_its_name(self):
         # "Manod Quarries, Track II" is a trackway, whatever its name says.
         self.assertIsNone(opendata.judge_segments("TRACKWAY", "Manod Granite Quarries, Track II"))
@@ -133,7 +142,7 @@ class JudgingTests(unittest.TestCase):
             {"CANMOREID": 9218, "NMRSNAME": "ACKERGILL, OBSERVATION TOWER",
              "SITETYPE": "OBSERVATION POST (20TH CENTURY)", "URL": "https://trove/9218"})
         self.assertEqual(canmore["ref"], "9218")
-        self.assertEqual(canmore["name"], "Ackergill, Observation Tower")
+        self.assertEqual(canmore["name"], "Observation Tower, Ackergill")  # the thing first, then where
         self.assertEqual(canmore["evidence"], "Canmore records an observation post here")
 
         coflein = opendata.DATASETS["coflein"].judge(
@@ -193,7 +202,7 @@ class StoreAndSitesTests(unittest.TestCase):
         self.assertEqual(len(sites), 1)
         site = sites[0]
         self.assertEqual(site["sources"], "osm+canmore")
-        self.assertEqual(site["category"], "military")
+        self.assertEqual(site["category"], "bunkers")
         self.assertEqual(site["condition"], "Old military")
         self.assertIn("Canmore records an observation post here", site["reasons"])
         self.assertEqual(len(site["detail"]["open"]), 1)
@@ -204,7 +213,7 @@ class StoreAndSitesTests(unittest.TestCase):
         site = self.store.full_sites(min_score=0)[0]
         self.assertEqual(site["key"], "canmore:42")
         self.assertEqual((site["sources"], site["score"], site["strength"]), ("canmore", 25, "good"))
-        self.assertEqual(site["category"], "military")
+        self.assertEqual(site["category"], "bunkers")
 
     def test_two_registers_agreeing_are_said_once(self):
         self.store.upsert_od([od("1", 51.5, -0.12), od("2", 51.5, -0.12, dataset="coflein",
@@ -212,7 +221,49 @@ class StoreAndSitesTests(unittest.TestCase):
         build_sites(self.store)
         site = self.store.full_sites(min_score=0)[0]
         self.assertEqual(site["sources"], "canmore+coflein")
-        self.assertIn("1 other open register records it too", site["reasons"])
+        self.assertIn("Also recorded by Coflein (Wales)", site["reasons"])
+
+    def test_three_sources_agreeing_count_for_more_than_two(self):
+        self.store.upsert_osm([{"osm_id": "node/1", "lat": 51.5, "lng": -0.12,
+                                "tags": {"military": "bunker", "name": "Alderbury ROC Post"}}], self.now)
+        self.store.upsert_od([od("1", 51.5, -0.12)], self.now)
+        build_sites(self.store)
+        two = self.store.full_sites(min_score=0)[0]["score"]
+        self.store.upsert_od([od("2", 51.5, -0.12, dataset="coflein", evidence="Coflein records a bunker here")],
+                             self.now)
+        build_sites(self.store)
+        self.assertEqual(self.store.full_sites(min_score=0)[0]["score"], two + 5)
+
+    def test_the_parts_of_a_complex_are_one_place(self):
+        parts = [od("1", 52.9850, -3.9268, name="Track II, Manod Granite Quarries", kind="old workings",
+                    evidence="Coflein records a trackway here", dataset="coflein"),
+                 od("2", 52.9855, -3.9272, name="Incline III, Manod Granite Quarries", kind="old workings",
+                    evidence="Coflein records an incline here", dataset="coflein"),
+                 od("3", 52.9105, -3.8144, name="Quarry I, Bwlch y Bi", kind="old workings", dataset="coflein",
+                    evidence="Coflein records a quarry here"),
+                 od("4", 52.9110, -3.8150, name="Quarry II, Bwlch y Bi", kind="old workings", dataset="coflein",
+                    evidence="Coflein records a quarry here"),
+                 # Two pillboxes in the same village are two places, not one.
+                 od("5", 51.4900, -3.2200, name="Pillbox, Llandaff", kind="military structure", dataset="coflein",
+                    evidence="Coflein records a pillbox here"),
+                 od("6", 51.4905, -3.2210, name="Pillbox, Llandaff", kind="military structure", dataset="coflein",
+                    evidence="Coflein records a pillbox here")]
+        self.store.upsert_od(parts, self.now)
+        build_sites(self.store)
+        names = sorted(s["name"] for s in self.store.full_sites(min_score=0))
+        self.assertEqual(names, ["Manod Granite Quarries", "Pillbox, Llandaff", "Pillbox, Llandaff", "Quarry, Bwlch y Bi"])
+        manod = next(s for s in self.store.full_sites(min_score=0) if s["name"] == "Manod Granite Quarries")
+        self.assertIn("Coflein (Wales) records 1 more part of it", manod["reasons"])
+
+    def test_a_weak_lead_on_top_of_a_site_is_that_site(self):
+        self.store.upsert_osm([{"osm_id": "way/1", "lat": 51.5, "lng": -0.12,
+                                "tags": {"building": "ruins", "name": "Old Engine House"}}], self.now)
+        self.store.upsert_od([od("9", 51.5004, -0.12, name="Land at Mill Lane", weight=10, kind="brownfield land",
+                                 evidence="On the council's brownfield land register", dataset="brownfield")],
+                             self.now)  # ~45 m away, nothing alike in the name
+        build_sites(self.store)
+        sites = self.store.full_sites(min_score=0)
+        self.assertEqual([(s["name"], s["sources"]) for s in sites], [("Old Engine House", "osm+brownfield")])
 
 
 class UpdaterTests(unittest.TestCase):
@@ -229,7 +280,7 @@ class UpdaterTests(unittest.TestCase):
         with mock.patch.dict(opendata.DATASETS, {"canmore": dataset}):
             up = Updater(store, tmp, session_factory=lambda: None, log=lambda m: None, sources=("canmore",))
             up.run("canmore")
-        self.assertEqual([r["name"] for r in store.active_od()], ["Bratton Roc Post"])
+        self.assertEqual([r["name"] for r in store.active_od()], ["Bratton ROC Post"])
         self.assertEqual(store.last_finished("canmore")["status"], "done")
         self.assertIsNotNone(store.get_setting("baseline_canmore"))  # nothing counts as "new" first time
         self.assertEqual(json.loads(json.dumps(store.full_sites(min_score=0)[0]["detail"]))["open"][0]["ref"], "1")

@@ -167,6 +167,18 @@ def describe_wikidata(evidence: str) -> list[str]:
     return [first, *rest]
 
 
+def _source_label(key: str | None) -> str:
+    from .opendata import DATASETS
+
+    if key in DATASETS:
+        return DATASETS[key].label
+    return "your own imports" if key == "imported" else str(key)
+
+
+def _and(items: list[str]) -> str:
+    return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
+
+
 def score_site(site: dict) -> tuple[int, list[str]]:
     """Return (internal evidence score 0-100, the evidence in plain English)."""
     score = 0
@@ -193,10 +205,19 @@ def score_site(site: dict) -> tuple[int, list[str]]:
         best = max(registers, key=lambda r: r["weight"])
         score += best["weight"] if not (osm or wikidata) else best["weight"] // 2
         reasons.append(best["evidence"])
-        others = [r for r in registers if r is not best]
+        parts = sum(1 for r in registers if r is not best and r.get("source") == best.get("source"))
+        if parts:
+            reasons.append(f"{_source_label(best.get('source'))} records {parts} more part{'s' if parts > 1 else ''}"
+                           " of it")
+        others = sorted({r.get("source") for r in registers} - {best.get("source")})
         if others:
-            reasons.append(f"{len(others)} other open register{'s' if len(others) > 1 else ''} record"
-                           f"{'' if len(others) > 1 else 's'} it too")
+            reasons.append("Also recorded by " + _and([_source_label(s) for s in others]))
+
+    # Independent sources agreeing is the strongest evidence there is: each past the second adds some.
+    agreeing = ({"osm"} if osm else set()) | ({"wikidata"} if wikidata else set()) \
+        | {r.get("source") for r in registers}
+    if len(agreeing) > 2:
+        score += min(10, 5 * (len(agreeing) - 2))
 
     word = dead_name_hit(site.get("name"))
     if word:

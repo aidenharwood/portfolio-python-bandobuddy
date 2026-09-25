@@ -80,8 +80,8 @@ class UpdaterTests(unittest.TestCase):
         sites = {s["name"]: s for s in store.full_sites(min_score=0)}
         # OSM places, including the multipolygon hospital and the abandoned tunnel.
         self.assertIn("St Agnes Hospital", sites)
-        self.assertEqual(sites["Hill Tunnel"]["category"], "underground")
-        self.assertEqual(sites["Unnamed bunker"]["category"], "military")
+        self.assertEqual(sites["Hill Tunnel"]["category"], "tunnels")
+        self.assertEqual(sites["Unnamed bunker"]["category"], "bunkers")
         self.assertEqual(sites["Derelict Barn"]["score"], 40)  # name says derelict: 25 + 15
         self.assertEqual(sites["Derelict Barn"]["reasons"], ["Its name says 'derelict'"])  # said once
         # What state each place is in, in words rather than a number.
@@ -285,7 +285,12 @@ class ScoringTests(unittest.TestCase):
                          ["weak", "weak", "good", "good", "strong", "strong"])
         self.assertEqual(category_for({"name": "Old Chapel", "osm": [{"kind": "ruins", "evidence": "OSM: building=ruins"}]}),
                          "religious")
-        self.assertEqual(category_for({"name": "Box Tunnel", "osm": [{"kind": "railway", "evidence": ""}]}), "underground")
+        self.assertEqual(category_for({"name": "Box Tunnel", "osm": [{"kind": "railway", "evidence": ""}]}), "tunnels")
+        self.assertEqual(category_for({"name": "Gripwood Quarry", "wikidata": [{"kind": "quarry", "evidence": ""}]}),
+                         "mines")
+        self.assertEqual(category_for({"name": "Alderbury ROC Post"}), "bunkers")
+        self.assertEqual(category_for({"name": "RAF Zeals", "wikidata": [{"kind": "airfield", "evidence": ""}]}),
+                         "military")
         self.assertEqual(category_for({"name": "Mystery"}), "other")
 
 
