@@ -1,3 +1,4 @@
+import gzip
 import http.client
 import json
 import os
@@ -11,6 +12,7 @@ import time
 import unittest
 from pathlib import Path
 from unittest import mock
+from urllib.parse import quote
 
 from bandobuddy import __version__, cli, webapp
 
@@ -103,9 +105,71 @@ class WebAppTests(unittest.TestCase):
             self.assertTrue(body.startswith(b"\x89PNG"), path)
             self.assertIn("max-age", resp.getheader("Cache-Control"), path)
 
+        # The phone's copy of the map: loaded by the page and the worker at this version's address.
+        self.assertIn(f'src="/static/localdb.js?v={__version__}"'.encode(), self.request("GET", "/")[1])
+        self.assertIn(f"/static/localdb.js?v=${{VERSION}}".encode(), sw)
+        status, body, resp = self.request("GET", f"/static/localdb.js?v={__version__}")
+        self.assertEqual(status, 200)
+        self.assertTrue(resp.getheader("Content-Type").startswith("text/javascript"))
+        self.assertIn(b"self.LocalDB", body)
+
         # Nothing else is served from the package, however the path is dressed up.
         for path in ("/static/../webapp.py", "/static/sw.js", "/static/nope.png"):
             self.assertEqual(self.request("GET", path)[0], 404, path)
+
+    def test_index_keeps_every_place_in_brief(self):
+        status, data, resp = self.request("GET", "/api/index")
+        self.assertEqual(status, 200)
+        rows = [dict(zip(data["columns"], row)) for row in data["rows"]]
+        _, everything, _ = self.request("GET", "/api/list?weak=1&limit=500")
+        self.assertEqual(len(rows), everything["total"])            # weak leads too, so filters work offline
+        mill = next(r for r in rows if r["name"] == "Old Mill")
+        listed = next(s for s in everything["sites"] if s["name"] == "Old Mill")
+        for field in ("key", "category", "condition", "strength", "score", "summary"):
+            self.assertEqual(mill[field], listed[field], field)
+        self.assertAlmostEqual(mill["lat"], listed["lat"], places=5)
+        self.assertEqual(data["weak_below"], webapp.WEAK_BELOW)
+
+        # Asking again with the copy you have: nothing to send.
+        _, again, _ = self.request("GET", f"/api/index?have={quote(data['built'])}")
+        self.assertEqual(again, {"built": data["built"], "unchanged": True})
+        _, stale, _ = self.request("GET", "/api/index?have=something-older")
+        self.assertIn("rows", stale)
+
+    def test_details_come_a_page_at_a_time(self):
+        _, first, _ = self.request("GET", "/api/details?limit=3")
+        self.assertEqual(len(first["sites"]), 3)
+        self.assertEqual(first["next"], first["sites"][-1]["key"])
+        self.assertIn("links", first["sites"][0])                     # the same as /api/site/<key>
+        self.assertIn("detail", first["sites"][0])
+        keys, after = [], ""
+        while True:
+            _, page, _ = self.request("GET", f"/api/details?limit=3&after={after}")
+            keys += [s["key"] for s in page["sites"]]
+            if not page["next"]:
+                break
+            after = page["next"]
+        _, everything, _ = self.request("GET", "/api/list?weak=1&limit=500")
+        self.assertEqual(sorted(keys), sorted(s["key"] for s in everything["sites"]))
+        self.assertEqual(keys, sorted(keys))
+
+        _, area, _ = self.request("GET", "/api/details?bbox=-0.2,51.4,0.0,51.6")
+        _, listed, _ = self.request("GET", "/api/list?bbox=-0.2,51.4,0.0,51.6&weak=1")
+        self.assertEqual({s["key"] for s in area["sites"]}, {s["key"] for s in listed["sites"]})
+        self.assertIsNone(area["next"])
+        self.assertEqual(self.request("GET", "/api/details?limit=lots")[0], 400)
+
+    def test_compresses_when_asked(self):
+        plain = self.request("GET", "/api/index")[2]
+        self.assertIsNone(plain.getheader("Content-Encoding"))
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        conn.request("GET", "/api/index", headers={"Host": f"127.0.0.1:{self.port}", "Accept-Encoding": "gzip"})
+        resp = conn.getresponse()
+        packed = resp.read()
+        conn.close()
+        self.assertEqual(resp.getheader("Content-Encoding"), "gzip")
+        self.assertEqual(resp.getheader("Vary"), "Accept-Encoding")
+        self.assertIn("rows", json.loads(gzip.decompress(packed)))
 
     def test_list_nearest_first_with_filters(self):
         view = "bbox=-0.2,51.4,0.0,51.6"
