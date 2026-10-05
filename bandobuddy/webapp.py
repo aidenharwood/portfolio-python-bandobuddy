@@ -14,6 +14,7 @@ import gzip
 import ipaddress
 import json
 import os
+import re
 import signal
 import socket
 import threading
@@ -29,8 +30,8 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 import requests
 
-from . import __version__, access, export, geocode, imagery, opendata
-from .config import CATEGORIES, DB_NAME, OTHER_CATEGORY, UK_BBOX, WEAK_BELOW
+from . import __version__, access, export, geocode, imagery, lidar, opendata
+from .config import CATEGORIES, DATA_DIR, DB_NAME, OTHER_CATEGORY, UK_BBOX, WEAK_BELOW
 from .geo import haversine_m
 from .sites import build_sites
 from .store import INDEX_COLUMNS, Store
@@ -40,8 +41,10 @@ DEFAULT_PORT = 8642
 MAX_BODY_BYTES = 16_000
 LIST_LIMIT = 100
 DETAILS_LIMIT = 500        # places per page of /api/details: about 650 KB, 100 KB compressed
+DETAILS_BY_KEY = 200       # places asked for by name in one go
 GZIP_MIN_BYTES = 1400      # smaller than a packet: not worth compressing
 COMPRESSIBLE = ("application/json", "text/html", "text/javascript")
+LIDAR_TILE = re.compile(r"^/lidar/wales/(\d{1,2})/(\d{1,6})/(\d{1,6})\.png$")   # drawn here: see lidar.py
 SCHEDULE_CHECK_S = 300
 CACHE_TTL_S = 24 * 3600
 LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "[::1]"})
@@ -127,6 +130,9 @@ class App:
         self._search_cache = TTLCache()
         self._photo_cache = TTLCache()
         self._access_cache = TTLCache(ttl=7 * 24 * 3600)  # paths and car parks rarely move
+        # Welsh LiDAR tiles, drawn here and kept beside the database (nothing is read until one's asked for).
+        self.wales_lidar = lidar.WalesRelief(Path(getattr(updater, "data_dir", None) or DATA_DIR) / "lidar-wales",
+                                             session_factory)
         self._index: tuple[str, bytes] | None = None   # (built, gzipped JSON): 3 MB rather than 25
         self._index_lock = threading.Lock()
 
@@ -144,7 +150,7 @@ class App:
             "version": __version__,
             "categories": [[k, label] for k, label, _ in CATEGORIES] + [list(OTHER_CATEGORY)],
             "sources": [[s, SOURCE_LABELS[s]] for s in ALL_SOURCES],
-            "credits": [[d.label, d.home, d.attribution] for d in opendata.DATASETS.values()],
+            "credits": [[d.label, d.home, d.attribution, d.licence] for d in opendata.DATASETS.values() if d.enabled()],
             "uk_bbox": UK_BBOX,
             "read_only": self.read_only,
         }
@@ -213,7 +219,13 @@ class App:
             return self._index[1]
 
     def details(self, qs: dict) -> dict:
-        """Everything about the places in an area, a page at a time: what a phone keeps for offline."""
+        """Everything about the places in an area, a page at a time, or about particular places (key=...,
+        repeated, since a key can hold a comma): what a phone keeps for offline."""
+        if qs.get("key"):
+            sites = self.store.sites_by_key(qs["key"][:DETAILS_BY_KEY])
+            for site in sites:
+                site["links"] = export.links(site)
+            return {"built": self.store.sites_built(), "sites": sites, "next": None}
         bbox = parse_filters(qs).get("bbox")
         after = (qs.get("after") or [""])[0]
         try:
@@ -430,6 +442,16 @@ def make_handler(app: App, allowed_hosts: Iterable[str] = ()) -> type[BaseHTTPRe
             elif path in STATIC:
                 body, ctype, cache = app.static(path)
                 self._send(200, body, ctype, cache=cache)
+            elif LIDAR_TILE.match(path):
+                z, x, y = (int(v) for v in LIDAR_TILE.match(path).groups())
+                try:
+                    png = app.wales_lidar.tile(z, x, y)
+                except ValueError as exc:
+                    self._json(404, {"error": str(exc)})
+                except (lidar.LidarError, requests.RequestException, OSError) as exc:
+                    self._json(502, {"error": f"Welsh LiDAR unavailable: {type(exc).__name__}"})
+                else:   # the same picture for a month: browsers, Cloudflare and the phone can all keep it
+                    self._send(200, png, "image/png", cache="public, max-age=2592000")
             elif path == "/sw.js":
                 # Never cached: it's what tells the browser everything else has changed.
                 self._send(200, app.worker(), "text/javascript; charset=utf-8",

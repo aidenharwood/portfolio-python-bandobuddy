@@ -105,6 +105,14 @@ self.LocalDB = (() => {
     await finished(tx);
   }
 
+  /** Which of these places' details aren't kept yet. */
+  async function missing(keys) {
+    const db = await open();
+    const store = db.transaction("details").objectStore("details");
+    const have = await Promise.all(keys.map(key => answer(store.count(key))));
+    return keys.filter((_, i) => !have[i]);
+  }
+
   async function detail(key) {
     try { return ((await read("details", key)) || {}).site || null; } catch (_) { return null; }
   }
@@ -307,5 +315,5 @@ self.LocalDB = (() => {
     return result && { ...result, version: null, local: meta.built };
   }
 
-  return { putIndex, index, touchIndex, putDetails, detail, counts, once, clear, respond };
+  return { putIndex, index, touchIndex, putDetails, detail, missing, counts, once, clear, respond };
 })();

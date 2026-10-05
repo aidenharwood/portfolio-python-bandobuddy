@@ -21,12 +21,15 @@ from .geo import grid_boxes
 from .sites import build_sites
 from .store import Store
 
-SOURCES = ("osm", "wikidata", *opendata.DATASETS)          # everything that updates itself
+SOURCES = ("osm", "wikidata",                              # everything that updates itself
+           *(key for key, d in opendata.DATASETS.items() if d.enabled()))
+OPTIONAL = tuple(key for key, d in opendata.DATASETS.items() if not d.enabled())   # by hand, or switched on
 ALL_SOURCES = (*SOURCES, importer.SOURCE)                  # ...plus places you imported yourself
 SOURCE_LABELS = {"osm": "OpenStreetMap", "wikidata": "Wikidata & Wikipedia",
                  **{key: d.label for key, d in opendata.DATASETS.items()},
                  importer.SOURCE: "Your own imports"}
 OD_BATCH = 2000               # records held before writing them to the database
+INCREMENTAL_EVERY_DAYS = 7    # PlanIt asks for a fortnight of changes: weekly leaves a week to spare
 WIKIDATA_BOX_DEG = 0.5
 MAX_TILE_DEPTH = 5            # 0.5 deg -> ~1.7 km boxes at most
 MAX_BUSY_RETRIES = 8
@@ -148,7 +151,10 @@ class Updater:
                 continue
             last = self.store.last_finished(src)
             unfinished = self.store.unfinished_crawl(src)
-            if unfinished or not last or datetime.fromisoformat(last["finished_at"]) < now - timedelta(days=days):
+            dataset = opendata.DATASETS.get(src)
+            # One that only asks for what changed lately has to come back before that window closes.
+            every = INCREMENTAL_EVERY_DAYS if dataset and dataset.incremental else days
+            if unfinished or not last or datetime.fromisoformat(last["finished_at"]) < now - timedelta(days=every):
                 due.append(src)
         return due
 
@@ -192,8 +198,9 @@ class Updater:
         self.log(f"map updated: {n:,} sites")
 
     def _finish(self, source: str, crawl: dict, complete: bool) -> None:
-        if complete:
-            # Only a complete crawl can say what has disappeared.
+        dataset = opendata.DATASETS.get(source)
+        if complete and not (dataset and dataset.incremental):
+            # Only a complete crawl can say what has disappeared (one that only asks what's new can't).
             gone = self.store.mark_gone(source, crawl["started_at"])
             if gone:
                 self.log(f"{SOURCE_LABELS[source]}: {gone:,} items no longer in the source")
@@ -245,10 +252,13 @@ class Updater:
         seen_at = crawl["started_at"]
         batch: list[dict] = []
         kept = 0
+        # A slow, paced source (PlanIt: a minute between pages) saves each record as it comes, so
+        # stopping part-way keeps what it has; the rest save in big batches.
+        save_every = 1 if dataset.incremental else OD_BATCH
         try:
             for item in opendata.collect(dataset, session, progress, cancel):
                 batch.append(item)
-                if len(batch) >= OD_BATCH:
+                if len(batch) >= save_every:
                     self.store.upsert_od(batch, seen_at)
                     kept += len(batch)
                     batch = []

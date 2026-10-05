@@ -12,7 +12,7 @@ bandobuddy builds its own database of the whole country from **OpenStreetMap**, 
 - **Evidence, not scores.** Uses OpenStreetMap lifecycle tags (`abandoned:*`, `disused:*`, ruins, old mines, bunkers, dead railway tunnels), Wikidata state-of-use and closure dates, and wording in Wikipedia intros ("disused", "demolished", "converted to flats").
 - **Stays up to date.** Scheduled refreshes apply OpenStreetMap's daily change files instead of downloading the country again. Places are flagged **NEW** when they appear and dropped when they disappear from the data.
 - **Resumable.** Crawls survive restarts: downloads resume, and the Wikidata crawl remembers which areas are finished.
-- **Made for phones.** A full-screen map with a draggable bottom sheet (a side panel on wider screens). It asks for your location when it opens (or tap the locate button later) to show where you are and list places nearest first, then get directions or share a link to a place.
+- **Made for phones.** A full-screen map with a draggable bottom sheet (a side panel on wider screens). It asks for your location when it opens (or tap the location button later) to show where you are and list places nearest first, then get directions or share a link to a place. The location button always brings the map back to you; the floating layers button beside it holds the map style and the overlays.
 - **Live map.** Built with Leaflet and OpenStreetMap tiles, with category icons that group into counts when zoomed out and fill in while an update runs. It also has category and source filters, place search (via Nominatim), [Panoramax](https://panoramax.fr) photos, and CSV/KML/GPX exports.
 - **Two modes.** A personal mode with full update controls, and a read-only public mode for hosting.
 
@@ -24,7 +24,7 @@ flowchart LR
     GF["Geofabrik UK extract<br/>+ daily change files"]
     WD["Wikidata SPARQL<br/>(0.5° boxes, split on timeout)"]
     WP["Wikipedia intros"]
-    OD["Open registers<br/>(Historic England, Canmore,<br/>Coflein, brownfield)"]
+    OD["Open registers<br/>(Historic England, Canmore, Coflein,<br/>brownfield, schools, Scottish land,<br/>PlanIt if switched on)"]
   end
   subgraph App["bandobuddy container"]
     UP["Updater<br/>one thread per source,<br/>scheduled + resumable"]
@@ -87,6 +87,7 @@ docker build --target test .
 | `BANDOBUDDY_PUBLIC` | off | Read-only mode for visitors: update and settings controls are hidden and refused |
 | `BANDOBUDDY_ALLOWED_HOSTS` | *(none)* | Comma-separated public hostnames the site is served on, e.g. `bandobuddy.example.org` (IP addresses and local names are always allowed) |
 | `BANDOBUDDY_NO_AUTO_UPDATE` | off | Don't refresh the data on a schedule |
+| `BANDOBUDDY_PLANIT` | off (on in `run.bat`) | Also sweep UK PlanIt weekly for demolition applications (see below) |
 
 The refresh interval (7 days by default) is set in the app's **Data** panel, or with `bandobuddy update` from any scheduler. `/healthz` returns `{"ok": true, ...}` for container and Kubernetes health checks.
 
@@ -142,13 +143,13 @@ signal doesn't:
 - **everything about the places where you zoom in** (the evidence, what each source says, the ways in, the
   links): once the map settles at about town level, the details are fetched quietly in squares of a quarter of
   a degree, two at a time and each square once a week, holding off on data saver or a slow connection. A place
-  you open is kept in full too. **Keep everything** in the menu adds the full details of every place in the UK
+  you open, and every place that's been in your list at any zoom, is kept in full too. **Keep everything** in the menu adds the full details of every place in the UK
   (about 25 MB to download, about 130 MB on the phone) and carries on where it stopped if the signal drops
 - **every map tile you look at** (up to 40,000, about 1 GB), in each map style and the mining overlays. Zoom in
   further than you ever looked and the map fills in from the nearest zoomed-out tile you did see, blurrier but
   still there. Only tiles you've actually viewed: OpenStreetMap's tile policy rules out bulk-downloading them.
   For a full offline map, download your saved places as GPX and open them in OsmAnd or Organic Maps
-- "Getting there" and street photos you've opened
+- "Getting there", street photos and town or postcode searches, once you've used them
 - the screen stays awake while you're following your location, and sleeps as soon as you stop
 
 Tiles and photos are fetched with CORS, so the phone's storage counts them at their real size (browsers count
@@ -179,6 +180,9 @@ Wi-Fi is set to a *Private* network.
 | [Canmore](https://canmore.org.uk/) (Historic Environment Scotland) | Scotland | OGL v3 | Observation posts, pillboxes, collieries, quarries, mills and the rest of the national record |
 | [Coflein](https://coflein.gov.uk/) (RCAHMW) | Wales | OGL v2 | The same for the National Monuments Record of Wales |
 | [Brownfield registers](https://www.planning.data.gov.uk/dataset/brownfield-land) | England | OGL v3 | Vacant and derelict land councils have registered |
+| [Get Information about Schools](https://www.get-information-schools.service.gov.uk/) (DfE) | England | OGL v3 | Schools that closed for good, and when |
+| [Vacant and Derelict Land Survey](https://www.gov.scot/publications/the-scottish-vacant-and-derelict-land-survey-site-register/) | Scotland | OGL v3 | Derelict sites and empty buildings, what they used to be and since when |
+| [UK PlanIt](https://www.planit.org.uk/) (optional, off by default) | UK | Planning register data | Applications to demolish buildings described as derelict, empty or redundant |
 
 A national register saying a place exists isn't the same as saying it's abandoned, so most register
 entries are weak leads. Military and underground records are the exception: an observation post or a
@@ -188,16 +192,76 @@ rather than doubling it up, and each place links back to the register that liste
 Every register is fetched with its own updater, so one being slow or down never blocks the others, and
 each can be refreshed or paused on its own from the **Data** panel.
 
+**Closed schools.** The Department for Education's register lists every school in England, open or closed, in
+one daily download (about 65 MB, read as it arrives rather than saved). A closed school only counts if it shut
+for good: conversions to academies and changes of sponsor close a record but not the school, and anything with
+an open school within 100 m is still a school. Infant and junior schools that closed on one site are one place,
+named for the last to go. Recently closed schools are the ones most likely to be standing empty, so those closed
+within five years are shown by default and older closures are weaker leads.
+
+**Scotland's vacant and derelict land.** The Scottish Government's annual survey lists every vacant or derelict
+site of 0.1 ha or more, with what it used to be and since when. Derelict sites and empty buildings are shown
+(more so for old defence, mining, industrial, school, hospital and hotel sites); cleared vacant plots are weaker
+leads. Owners aren't kept. The register's page asks that councils, who own the data, are asked before any use that
+could infringe their copyright.
+
+**Demolition applications (UK PlanIt), optional.** PlanIt gathers planning applications from council websites. It's
+one person's free service and asks for no more than a request a minute, so bandobuddy asks only for applications to
+demolish something described as derelict, dilapidated, disused, vacant, redundant, fire damaged, abandoned, unsafe,
+empty or former: those made in the last fortnight, then decisions in the last fortnight on any made earlier. That's
+usually one page each, a minute apart (longer if PlanIt asks to wait), and it runs weekly, building up a picture
+rather than copying the archive. Each application is saved as it arrives, so stopping part-way keeps what came.
+Garages, extensions and house replacements are ignored, and so are pre-application advice and lawful-development
+certificates, which don't decide anything. An approved demolition shows as the place's condition; one approved more
+than 18 months ago, or a follow-up to an earlier approval (discharging its conditions, an amendment), is a weak lead
+because the building has probably gone or is going. `run.bat` switches it on; anywhere else it's off unless you set
+`BANDOBUDDY_PLANIT=1` (the Docker image and the public site leave it off), or run it by hand with
+`bandobuddy update --source planit`. A pilot sweep found 43 leads in a fortnight across the UK.
+
 ### Mining overlays
 
 The Mining Remediation Authority's record of **175,000 mine entries** (shafts and adits), past shallow coal
 workings and surface mining is published as a map service rather than as data, so those can't be listed or
-searched as places. They can be drawn on the map instead: switch them on under *Mining overlays* in the
-filters. Their pictures are only drawn down to zoom 14, and mine entries and surface mining only from zoom 13,
+searched as places. They can be drawn on the map instead: switch them on with the layers button on the
+map. Their pictures are only drawn down to zoom 14, and mine entries and surface mining only from zoom 13,
 so zoomed in further the zoom-14 pictures are stretched, and zoomed out the app says to zoom in. Coal mining data © Mining Remediation Authority, under the Open Government Licence.
 
 Actual mine and quarry *places* still come from OpenStreetMap, Canmore and Coflein, which do publish
 their records as data.
+
+### LiDAR relief
+
+**LiDAR relief** (from the layers button on the map) shades the shape of the ground from airborne laser surveys, with trees and
+buildings taken away, so filled shafts, spoil heaps, tramways, old railway cuttings and earthworks stand out,
+including ones in woods. It comes with a **slider**: the map to the left of the line, the LiDAR to the right,
+so you can sweep the shape of the ground against the roads and names. Drag the handle (or use the arrow keys on
+it); it remembers where you left it. Whichever map style is chosen, layers stack the same way (map style, LiDAR,
+then the mining overlays over both). It appears from village level (zoom 12), and tiles you've looked at are
+kept for offline like any other.
+
+| Where | From | How |
+|---|---|---|
+| England | [Environment Agency](https://environment.data.gov.uk/dataset/13787b9a-26a4-4775-8523-806d13af58fc) 1 m composite | Its map service draws the hillshade |
+| Scotland | [Scottish Remote Sensing Portal](https://remotesensingdata.gov.scot/) (phases 1-6 and the National LiDAR Programme) | Its map service only colours heights, so it's sent a shading style with each request. Only where Scotland has been surveyed |
+| Wales | [Welsh Government](https://datamap.gov.wales/maps/lidar-viewer/) 1 m terrain model, 2020-23 | Published only as one 48 GB cloud-optimised GeoTIFF with no map service, so bandobuddy draws the tiles itself (see below) |
+
+All three are under the Open Government Licence. Northern Ireland isn't included.
+
+**How sharp it gets.** England's finest published LiDAR is now 1 m: the Environment Agency has withdrawn its 50 cm
+and 25 cm composites. Wales's is 1 m too. Scotland's is 50 cm in many places and 25 cm on the Outer Hebrides,
+which are included, along with Orkney's survey. On phones' high-density screens the England and Scotland services
+draw twice the pixels, so that detail isn't smudged, and they're asked for detail down to zoom 19. Welsh tiles
+are drawn down to zoom 17 (about 0.7 m a pixel), blending neighbouring heights past the 1 m data so the shading
+stays smooth rather than stepped.
+
+**How the Welsh tiles are drawn.** `bandobuddy/lidar.py` reads only the parts of the Welsh Government's file a
+map tile needs, with HTTP range requests (the file's zoomed-out copies mean a tile never needs more than a few
+hundred kilobytes, however far out you are), shades them the same way as the other two (light from the
+north-west at 45 degrees, relief doubled so low banks show), and serves ordinary map tiles at
+`/lidar/wales/{z}/{x}/{y}.png`. Standard library only: the file is deflate-compressed 32-bit heights, and the
+grid references are converted with Ordnance Survey's own formulas. A tile takes about half a second the first
+time; tiles are then kept on disk (up to about 1 GB) and sent with a month's cache lifetime, so Cloudflare and
+phones keep them too. Tiles over the sea or England come back empty without reading anything.
 
 ### Bring your own records
 
@@ -262,6 +326,11 @@ Heritage, the National Trust, Cadw or Historic Environment Scotland (or within 4
 is demoted and its condition says so. Wikidata items typed as museums count too. Outlines bigger than 1.5 km, like
 a country park, are ignored: they say nothing about one building.
 
+**So are places that have gone.** OpenStreetMap maps demolished things with `demolished:*`, `razed:*` and
+`destroyed:*` tags, and building sites as `landuse=construction` or `building=construction`. A place inside one of
+those outlines (or within 15 m of one mapped as a point, 40 m if it shares the name) is demoted, its condition is
+*Demolished* or *Building site*, and the first reason says so.
+
 ## Data and credits
 
 - Places come from © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors (ODbL), [Wikidata](https://www.wikidata.org) (CC0) and [Wikipedia](https://en.wikipedia.org) (CC BY-SA).
@@ -269,7 +338,8 @@ a country park, are ignored: they say nothing about one building.
 - *Getting there* (the nearest public right of way, other paths, parking, and anything mapped as private right
   beside a place) is asked of OpenStreetMap's [Overpass API](https://overpass-api.de) for a few hundred metres
   around a place when someone opens it, one request at a time and cached for a week.
-- Map tiles come from OpenStreetMap and OpenTopoMap, plus Esri imagery (free to use, not open data).
+- Map tiles come from OpenStreetMap and OpenTopoMap, plus Esri imagery (free to use, not open data). LiDAR relief
+  comes from the Environment Agency, the Scottish Government and the Welsh Government (Open Government Licence).
 - The app queries these community services politely: one Wikidata query at a time with pauses, Nominatim at most once a second, and repeat look-ups cached.
 
 ## Limitations

@@ -62,6 +62,21 @@ ATTRACTIONS = {"museum": "Museum", "gallery": "Gallery", "attraction": "Visitor 
                "theme_park": "Theme park", "zoo": "Zoo", "aquarium": "Aquarium"}
 
 
+# Gone, or going: mapped with OpenStreetMap's "demolished:" and "razed:" lifecycle prefixes, or as a
+# building site now. Not leads themselves, but whatever they cover isn't worth the trip any more.
+GONE_PREFIXES = ("demolished", "razed", "destroyed")
+
+
+def gone_as(tags: dict[str, str]) -> str | None:
+    """"Demolished" or "Building site" if that's what's mapped here now, else None."""
+    for key, value in tags.items():
+        if key.split(":", 1)[0] in GONE_PREFIXES and value != "no":
+            return "Demolished"
+    if tags.get("landuse") == "construction" or tags.get("building") == "construction":
+        return "Building site"
+    return None
+
+
 def in_use_as(tags: dict[str, str]) -> str | None:
     """What a place is in use as today, if that's a visitor attraction ("Museum"), else None."""
     if tags.get("tourism") in ATTRACTIONS:
@@ -212,6 +227,8 @@ def is_candidate(tags) -> bool:
         if (k == "tourism" and tag.v in ATTRACTIONS) or (k == "usage" and tag.v == "tourism") \
                 or (k == "operator" and HERITAGE_OPERATORS.search(tag.v)):
             return True  # not a lead itself, but it tells us a lead nearby is open to the public
+        if k.split(":", 1)[0] in GONE_PREFIXES or (k in ("landuse", "building") and tag.v == "construction"):
+            return True  # nor this, but it says a lead here has gone
         if k in _TEXT_KEYS and _DEAD_WORDS.search(tag.v):
             return True
     return False
@@ -254,7 +271,7 @@ def extract_candidates(
         if not is_candidate(obj.tags):
             continue
         tags = {t.k: t.v for t in obj.tags}
-        if classify(tags) is None and in_use_as(tags) is None:
+        if classify(tags) is None and in_use_as(tags) is None and gone_as(tags) is None:
             continue
         kind = obj.type_str()
         if kind == "n":

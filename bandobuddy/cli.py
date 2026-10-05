@@ -19,7 +19,7 @@ from . import __version__, export, importer
 from .config import DATA_DIR, DB_NAME, WEAK_BELOW
 from .sites import build_sites
 from .store import Store
-from .updater import SOURCES, Updater
+from .updater import OPTIONAL, SOURCES, Updater
 
 
 def _env_flag(name: str) -> bool:
@@ -53,7 +53,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub = p.add_subparsers(dest="command", metavar="{update,export,import}")
     up = sub.add_parser("update", help="build or refresh the UK data now, then exit")
-    up.add_argument("--source", choices=[*SOURCES, "all"], default="all")
+    up.add_argument("--source", choices=[*SOURCES, *OPTIONAL, "all"], default="all",
+                    help="one source, or all of them (an optional one, such as planit, only by name)")
 
     im = sub.add_parser("import", help="add places from a file of your own (CSV, GPX, GeoJSON, KML, KMZ)")
     im.add_argument("file", nargs="?", type=Path, help="the file to read")
@@ -74,7 +75,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def run_update(args: argparse.Namespace) -> int:
     store = Store(args.data_dir / DB_NAME)
-    updater = Updater(store, args.data_dir)
+    updater = Updater(store, args.data_dir, sources=(*SOURCES, *OPTIONAL))
     sources = SOURCES if args.source == "all" else (args.source,)
     ok = True
     for src in sources:

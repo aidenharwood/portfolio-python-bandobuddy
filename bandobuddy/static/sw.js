@@ -6,7 +6,7 @@
  * - every place in brief, and the full details of places in the areas you've looked around, are kept
  *   in localdb.js; with no signal (or a very weak one) the map, the list, search and a place's page are
  *   answered from there, the same way the server would answer them
- * - "Getting there" and street photos you've opened are kept too
+ * - "Getting there", street photos and town or postcode searches are kept too, once you've used them
  *
  * __VERSION__ is filled in by the server, so a new release retires the old caches.
  */
@@ -37,7 +37,8 @@ const ESSENTIAL = [
 const EXTRAS = ["/manifest.webmanifest", "/static/icon-192.png", "/static/apple-touch-icon.png"];
 
 const TILE_HOSTS = ["tile.openstreetmap.org", "tile.opentopomap.org", "server.arcgisonline.com",
-                    "services-eu1.arcgis.com"];
+                    "services-eu1.arcgis.com",                                    // coal mining overlays
+                    "environment.data.gov.uk", "ows.remotesensing.data.gov.scot"];   // LiDAR, England and Scotland
 
 self.addEventListener("install", event => {
   event.waitUntil((async () => {
@@ -259,7 +260,7 @@ self.addEventListener("fetch", event => {
 
   if (request.mode === "navigate") {
     event.respondWith(page(request));
-  } else if (TILE_HOSTS.some(host => url.hostname.endsWith(host))) {
+  } else if (TILE_HOSTS.some(host => url.hostname.endsWith(host)) || (ours && url.pathname.startsWith("/lidar/"))) {
     event.respondWith(cacheFirst(request, TILES, TILE_LIMIT));
   } else if (url.hostname === "unpkg.com" || (ours && url.pathname.startsWith("/static/"))) {
     event.respondWith(cacheFirst(request, SHELL));
@@ -267,7 +268,7 @@ self.addEventListener("fetch", event => {
     event.respondWith(view(request));
   } else if (ours && url.pathname.startsWith("/api/site/")) {
     event.respondWith(place(request));
-  } else if (ours && (url.pathname === "/api/access" || url.pathname === "/api/photos")) {
+  } else if (ours && (url.pathname === "/api/access" || url.pathname === "/api/photos" || url.pathname === "/api/search")) {
     event.respondWith(networkFirst(request, DATA));
   } else if (ours && url.pathname.startsWith("/api/")) {
     // Status, search, exports, and the page filling the phone's copy: live only.
