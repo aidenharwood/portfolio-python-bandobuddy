@@ -54,8 +54,14 @@ def members_of(site: dict) -> list[dict]:
     return (site.get("osm") or []) + (site.get("wikidata") or []) + (site.get("open") or [])
 
 
+_SCHOOL_KIND = re.compile(r"\bschool|\bcollege\b|\bacademy\b", re.I)
+
+
 def category_for(site: dict) -> str:
     evidence = members_of(site)
+    # A school named for its church is a school ("St Mary's Church of England Primary School").
+    if evidence and _SCHOOL_KIND.search(max(evidence, key=lambda e: e.get("weight", 0)).get("kind") or ""):
+        return "institutional"
     text = " ".join([site.get("name") or ""] + [f"{e.get('kind', '')} {e.get('evidence', '')}" for e in evidence])
     for key, _, rx in _CATEGORY_RX:
         if rx.search(text):
@@ -69,6 +75,10 @@ def _condition_from(evidence: str) -> str | None:
         return "At risk"
     if "heritage site open to visitors" in text:
         return "Heritage site"
+    if "demolition approved" in text:
+        return "Demolition approved"
+    if "as cleared vacant land" in text:
+        return "Vacant land"
     if "new use" in text:
         return "Reused"
     if "single shop unit" in text:
@@ -80,7 +90,7 @@ def _condition_from(evidence: str) -> str | None:
     m = re.search(r"closed in (\d{4})", text)
     if m:
         return f"Closed {m.group(1)}"
-    if re.search(r"disused|decommission|mothball|out of use|\bclosed\b|vacant|inactive", text):
+    if re.search(r"disused|decommission|mothball|out of use|\bclosed\b|vacant|inactive|redundant", text):
         return "Disused"
     if "brownfield" in text:
         return "Brownfield"
@@ -88,7 +98,7 @@ def _condition_from(evidence: str) -> str | None:
         return "Cave"
     if re.search(r"old (mine|quarry|colliery)|adit|mineshaft|mine_shaft", text):
         return "Old workings"
-    if re.search(r"bunker|pillbox|observation post|observer corps|monitoring post|roc post", text):
+    if re.search(r"bunker|pillbox|observation post|observer corps|monitoring post|\broc\b post", text):
         return "Old military"
     if "former" in text:
         return "Former"
@@ -102,7 +112,10 @@ _NAME_CONDITIONS = {"abandoned": "Abandoned", "derelict": "Abandoned", "disused"
 def condition_for(site: dict) -> str:
     """The state a site is in, judged from its strongest piece of evidence first. Registers often
     say no more than what a place is, so the name has the last word ("Disused Quarry, Cwm Llwyd").
-    A museum or attraction trumps all of it: whatever it was, it's open to visitors now."""
+    A museum or attraction trumps all of it: whatever it was, it's open to visitors now. So does
+    being demolished, or a building site."""
+    if site.get("gone"):
+        return site["gone"]["kind"]
     if site.get("in_use"):
         return site["in_use"]["kind"]
     members = sorted(members_of(site), key=lambda m: -m["weight"])
@@ -239,6 +252,12 @@ def score_site(site: dict) -> tuple[int, list[str]]:
         open_to = "" if use["kind"] == "Visitor attraction" else ", open to visitors"
         reasons.insert(0, f"{use['source']} {verb} {called}{'it ' if not called else ''}as "
                           f"{_article(use['kind'].lower())}{open_to}")
+        score = min(score, WEAK_BELOW - 1)
+
+    gone = site.get("gone")
+    if gone:  # the mill's been knocked down, or houses are going up where it stood
+        reasons.insert(0, "OpenStreetMap maps it as demolished" if gone["kind"] == "Demolished"
+                       else "OpenStreetMap maps a building site here now")
         score = min(score, WEAK_BELOW - 1)
 
     return max(0, min(100, score)), reasons

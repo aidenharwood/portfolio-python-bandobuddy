@@ -307,6 +307,14 @@ class Store:
                               "json_array_length(entrances), json_extract(reasons, '$[0]') FROM sites ORDER BY key")
             return [[*r[:12], json.loads(r[12] or "[]"), r[13] or 0, r[14] or ""] for r in rows]
 
+    def sites_by_key(self, keys: list[str]) -> list[dict]:
+        """Everything about particular places (any that no longer exist are left out)."""
+        if not keys:
+            return []
+        with self.connect() as db:
+            rows = db.execute(f"SELECT * FROM sites WHERE key IN ({','.join('?' * len(keys))}) ORDER BY key", keys)
+            return [_decode_site(r) for r in rows]
+
     def details_page(self, bbox=None, after: str = "", limit: int = 500) -> list[dict]:
         """Everything about the places in an area (or everywhere), a page at a time in key order."""
         where, args = self._site_filter(bbox=bbox)

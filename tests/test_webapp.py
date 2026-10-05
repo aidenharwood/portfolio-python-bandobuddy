@@ -159,6 +159,22 @@ class WebAppTests(unittest.TestCase):
         self.assertIsNone(area["next"])
         self.assertEqual(self.request("GET", "/api/details?limit=lots")[0], 400)
 
+        # Particular places, as named in a list: repeated key=, since a key can hold a comma.
+        wanted = [k for k in keys[:2]]
+        _, named, _ = self.request("GET", "/api/details?" + "&".join(f"key={quote(k)}" for k in wanted + ["osm:node/0"]))
+        self.assertEqual(sorted(s["key"] for s in named["sites"]), sorted(wanted))   # the made-up one left out
+        self.assertIn("links", named["sites"][0])
+
+    def test_welsh_lidar_tiles(self):
+        # Over London: no Welsh data, so an empty tile, without reading anything.
+        status, body, resp = self.request("GET", "/lidar/wales/14/8186/5448.png")
+        self.assertEqual(status, 200)
+        self.assertEqual(resp.getheader("Content-Type"), "image/png")
+        self.assertIn("max-age", resp.getheader("Cache-Control"))
+        self.assertTrue(body.startswith(b"\x89PNG"))
+        self.assertEqual(self.request("GET", "/lidar/wales/9/250/170.png")[0], 404)    # too far out to draw
+        self.assertEqual(self.request("GET", "/lidar/wales/14/x/1.png")[0], 404)
+
     def test_compresses_when_asked(self):
         plain = self.request("GET", "/api/index")[2]
         self.assertIsNone(plain.getheader("Content-Encoding"))

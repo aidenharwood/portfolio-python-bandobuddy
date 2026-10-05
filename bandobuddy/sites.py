@@ -11,7 +11,7 @@ from collections import Counter, defaultdict
 from difflib import SequenceMatcher
 
 from .geo import haversine_m
-from .osm import alt_names, best_name, classify, describe_kind, entrance_kind, in_use_as
+from .osm import alt_names, best_name, classify, describe_kind, entrance_kind, gone_as, in_use_as
 from .config import WEAK_BELOW
 from .scoring import category_for, condition_for, score_site, strength_for
 from .store import Store
@@ -148,7 +148,8 @@ def _same_complex(item: dict, candidates: list[dict]) -> tuple[dict, str] | None
 
 
 class Attractions:
-    """Places in use as somewhere to visit, and how far each reaches."""
+    """Places in use as somewhere to visit, and how far each reaches. (Also used for what's been
+    demolished or is a building site now: the same question of what covers what.)"""
 
     def __init__(self):
         self.cells: dict[tuple[int, int], list[dict]] = defaultdict(list)
@@ -367,12 +368,16 @@ def build_sites(store: Store) -> int:
     # OSM: strongest evidence first, so a cluster is keyed by (and named after) its best element.
     osm_items = []
     attractions = Attractions()
+    demolished = Attractions()
     for item in store.active_osm():
         use = in_use_as(item["tags"])
+        gone = gone_as(item["tags"])
         extent = item.get("extent_m") or 0
+        reach = extent + ATTRACTION_EDGE_M if extent else None
         if use and extent <= ATTRACTION_MAX_M:
-            reach = extent + ATTRACTION_EDGE_M if extent else None
             attractions.add(item["lat"], item["lng"], reach, use, best_name(item["tags"]), "OpenStreetMap")
+        if gone and extent <= ATTRACTION_MAX_M:
+            demolished.add(item["lat"], item["lng"], reach, gone, best_name(item["tags"]), "OpenStreetMap")
         verdict = classify(item["tags"], item["osm_id"].split("/", 1)[0])
         if verdict:
             osm_items.append((verdict, item))
@@ -455,6 +460,7 @@ def build_sites(store: Store) -> int:
     for site in sites:
         site["name"] = _agreed_name(site)
         site["in_use"] = attractions.covering(site["lat"], site["lng"], site["name"])
+        site["gone"] = demolished.covering(site["lat"], site["lng"], site["name"])
         members = site["osm"] + site["wikidata"] + site["open"]
         score, reasons = score_site(site)
         first_seen = min(m["first_seen"] for m in members)

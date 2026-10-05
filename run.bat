@@ -4,6 +4,8 @@ setlocal
 cd /d "%~dp0"
 title bandobuddy
 
+set "BANDOBUDDY_PLANIT=1"
+
 if exist ".venv\Scripts\python.exe" goto :deps
 
 echo Setting up bandobuddy for the first time...

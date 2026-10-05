@@ -51,8 +51,9 @@
   .icon-btn { width:44px; height:44px; border:0; border-radius:50%; background:transparent; color:var(--muted);
     display:grid; place-items:center; position:relative; flex:none }
   .icon-btn:hover { background:var(--raised); color:var(--ink) }
-  .count { position:absolute; top:5px; right:4px; min-width:17px; height:17px; padding:0 4px; border-radius:9px;
-    background:var(--accent); color:var(--accent-ink); font:700 11px/17px system-ui; text-align:center }
+  /* a dot on the filters button: some places are hidden by your filters */
+  .count { position:absolute; top:8px; right:8px; width:9px; height:9px; border-radius:50%;
+    background:var(--accent); box-shadow:0 0 0 2px var(--panel) }
 
   .suggest { position:fixed; z-index:1100; top:calc(68px + env(safe-area-inset-top)); left:10px; right:10px; max-height:60vh;
     overflow-y:auto; margin:0; padding:6px 0; list-style:none; background:var(--panel); border-radius:16px; box-shadow:var(--shadow) }
@@ -79,6 +80,15 @@
   .fab.on .dot, .fab.follow .dot { fill:currentColor }
   .fab.follow { background:var(--me); color:#fff }
   .fab.searching svg { animation:pulse 1s ease-in-out infinite alternate }
+  .fab.lit { color:var(--accent) }   /* an overlay, or a map style other than the plain map, is on */
+  /* map style and overlays: a card beside the layers button */
+  .layers-panel { position:absolute; right:64px; bottom:0; width:min(300px, calc(100vw - 92px));
+    max-height:min(70vh, calc(100vh - var(--sheet-h) - 150px)); overflow-y:auto; padding:14px;
+    background:var(--panel); color:var(--ink); border-radius:16px; box-shadow:var(--shadow) }
+  .layers-panel h3 { margin:0 0 8px; font-size:12px; letter-spacing:.05em; text-transform:uppercase; color:var(--muted) }
+  .layers-panel h3 + .seg { margin-bottom:16px }
+  .layers-panel .checks { flex-direction:column; gap:0 }
+  .layers-panel .note { margin-top:8px; font-size:12px }
   @keyframes pulse { to { opacity:.3 } }
 
   /* the sheet: bottom sheet on phones, side panel on wide screens */
@@ -255,6 +265,17 @@
   .leaflet-container { font:inherit }
   /* A map tile, or with no signal a piece of a zoomed-out one you have seen, stretched to fit. */
   .kept-tile { overflow:hidden }
+  /* LiDAR shading darkens the map beneath rather than covering it: roads and names still show. */
+  /* the raw LiDAR slider: a line across the map with a handle; only the handle catches taps */
+  .swipe { position:fixed; z-index:500; top:0; bottom:0; left:0; width:0; pointer-events:none }
+  .swipe-line { position:absolute; top:0; bottom:0; left:-1px; width:2px; background:#fff; box-shadow:0 0 4px rgba(0,0,0,.55) }
+  .swipe-handle { position:absolute; left:-21px; top:var(--swipe-y, 50%); width:42px; height:42px; margin-top:-21px;
+    border:2px solid #fff; border-radius:50%; background:var(--accent); color:var(--accent-ink); box-shadow:var(--shadow);
+    display:grid; place-items:center; pointer-events:auto; touch-action:none; cursor:ew-resize }
+  .swipe-tag { position:absolute; top:var(--swipe-tag-y, 70px); padding:2px 7px; border-radius:6px; white-space:nowrap;
+    background:rgba(0,0,0,.6); color:#fff; font:600 11px/16px system-ui }
+  .swipe-tag.left { right:8px }
+  .swipe-tag.right { left:8px }
   .leaflet-container .leaflet-tile-pane .kept-tile img { position:absolute; left:0; top:0; width:100%; height:100%;
     user-select:none; -webkit-user-drag:none }
   .leaflet-bottom { bottom:var(--sheet-h); transition:bottom .25s ease }
@@ -265,13 +286,20 @@
 </head>
 <body>
 <div id="map" role="application" aria-label="Map"></div>
+<!-- The LiDAR slider: the map on the left of the line, the LiDAR on the right -->
+<div class="swipe" id="swipe" hidden>
+  <div class="swipe-line"></div>
+  <span class="swipe-tag left">Map</span><span class="swipe-tag right">LiDAR</span>
+  <button type="button" class="swipe-handle" id="swipeHandle" role="slider" aria-label="Compare the map with the LiDAR"
+          aria-valuemin="0" aria-valuemax="100"></button>
+</div>
 
 <form class="topbar" id="topbar" role="search" autocomplete="off">
   <button type="button" class="icon-btn" id="menuBtn" aria-label="Data, updates and about"></button>
   <input type="search" id="searchInput" enterkeyhint="search" placeholder="Search a town, postcode or place" aria-label="Search for a place"
          role="combobox" aria-autocomplete="list" aria-controls="suggest" aria-expanded="false">
   <button type="button" class="icon-btn" id="clearBtn" aria-label="Clear search" hidden></button>
-  <button type="button" class="icon-btn" id="filterBtn" aria-label="Filters and map style"><i class="count" id="filterCount" hidden></i></button>
+  <button type="button" class="icon-btn" id="filterBtn" aria-label="Filters"><i class="count" id="filterCount" hidden></i></button>
 </form>
 <ul class="suggest" id="suggest" role="listbox" aria-label="Suggestions" hidden></ul>
 
@@ -356,18 +384,6 @@
           <option value="90">In the last 90 days</option>
         </select>
       </div>
-      <div class="block">
-        <h3>Map style</h3>
-        <div class="seg" id="baseSeg"></div>
-      </div>
-      <div class="block">
-        <h3>Mining overlays</h3>
-        <div class="checks" id="overlayChecks"></div>
-        <p class="note" style="margin-top:8px">Coal mining data &copy; Mining Remediation Authority, under the
-          Open Government Licence. Drawn straight from their map service, so it isn't searchable or listed.
-          Mine entries and surface mining show once you zoom in to village level.</p>
-        <p class="note" id="overlayHint" hidden></p>
-      </div>
       <div class="sticky"><button type="button" class="btn accent block" id="applyFilters" data-close>Show places</button></div>
     </div>
 
@@ -385,6 +401,10 @@
         <div class="checks"><label><input type="checkbox" id="autoUpdate"> Keep the data up to date</label></div>
         <div class="row"><span class="note">Refresh every</span><input type="number" id="updateDays" min="1" max="90" style="width:72px"><span class="note">days</span></div>
         <p class="note" id="dataDir"></p>
+      </div>
+      <div class="source" id="locBox" hidden>
+        <h3><span>Your location</span><button type="button" class="btn small" id="locStop">Stop using it</button></h3>
+        <p class="note">Used to centre the map on you and sort places by distance. It stays in your browser.</p>
       </div>
       <div class="source" id="offlineBox" hidden>
         <h3><span>Kept on this phone</span><button type="button" class="btn small" id="keepAll">Keep everything</button></h3>
@@ -412,6 +432,20 @@
 </section>
 
 <div class="fabs" id="fabs">
+  <!-- Map style and overlays, opened from the layers button beside it -->
+  <div class="layers-panel" id="layersPanel" role="dialog" aria-label="Map layers" hidden>
+    <h3>Map style</h3>
+    <div class="seg" id="baseSeg"></div>
+    <h3>Overlays</h3>
+    <div class="checks" id="overlayChecks"></div>
+    <p class="note" id="overlayHint" hidden></p>
+    <p class="note"><b>LiDAR relief</b> is the shape of the ground from airborne laser surveys, with trees and
+      buildings taken away: filled shafts, spoil heaps, tramways and earthworks stand out. Drag the slider on the
+      map to sweep between it and the map. Environment Agency,
+      Scottish Government (where surveyed) and Welsh Government. <b>Coal mining</b> data &copy; Mining Remediation
+      Authority. All under the Open Government Licence; they show from village level.</p>
+  </div>
+  <button type="button" class="fab" id="layersBtn" aria-label="Map style and overlays" aria-expanded="false" aria-controls="layersPanel"></button>
   <button type="button" class="fab" id="locBtn" aria-label="Show my location"></button>
 </div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
@@ -455,6 +489,8 @@ const UI = {
   filter: '<path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>',
   close: '<path d="M6 6l12 12M18 6 6 18"/>',
   locate: '<circle cx="12" cy="12" r="7"/><circle class="dot" cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>',
+  layers: '<path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 12.5 9 5 9-5"/><path d="m3 17 9 5 9-5"/>',
+  swipe: '<path d="M9 7l-5 5 5 5M15 7l5 5-5 5"/>',
   nav: '<path d="M3 11 21 3l-8 18-2-8z"/>',
   share: '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 13.5 6.8 4M15.4 6.5l-6.8 4"/>',
   pin: '<path d="M12 21s-7-6.2-7-11.5a7 7 0 0 1 14 0C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/>',
@@ -552,6 +588,7 @@ const Sheet = {
     root.setProperty("--sheet-full", `${wide() ? 0 : this.full}px`);
     root.setProperty("--sheet-h", `${this.visible}px`);
     $("fabs").classList.toggle("hide", !wide() && this.visible > this.sizes().half + 40);
+    if (S.map) placeSwipe();
   },
   set(snap) {
     const s = this.sizes();
@@ -607,6 +644,7 @@ function initSheetDrag() {
 }
 
 function show(view, snap) {
+  if (!$("layersPanel").hidden) showLayers(false);
   if (S.view === "list" && view !== "list") S.listSnap = Sheet.snap;
   if (view !== "site") stopCompass();
   if (S.view === "site" && view !== "site" && S.selected) {  // e.g. straight from a place to the filters
@@ -663,7 +701,7 @@ function ensureVisible(latlng) {
 // Map tiles that, when one can't be fetched (no signal), show the matching piece of the nearest
 // zoomed-out tile that was kept instead: blurrier, but the map is still there at any zoom. Fetched with
 // CORS (every tile server here allows it), so the phone's storage counts them at their real size.
-const KeptTiles = window.L && L.TileLayer.extend({
+const keptTileMethods = {
   createTile(coords, done) {
     const tile = document.createElement("div");
     tile.className = "kept-tile";
@@ -679,11 +717,11 @@ const KeptTiles = window.L && L.TileLayer.extend({
   },
 
   async _fromFurtherOut(coords, img, tile, done) {
-    const z = this._getZoomForUrl();
+    const z = coords.z;
     const size = this.getTileSize();
     for (let up = 1; up <= 8 && z - up >= 0 && typeof caches !== "undefined"; up++) {
       const at = { x: coords.x >> up, y: coords.y >> up, z: z - up };
-      const url = L.Util.template(this._url, L.Util.extend({ s: this._getSubdomain(at), r: "", ...at }, this.options));
+      const url = this._urlAt(at);
       let kept = null;
       try { kept = await caches.match(url); } catch (_) { break; }
       if (!kept) continue;
@@ -698,27 +736,77 @@ const KeptTiles = window.L && L.TileLayer.extend({
     }
     done(new Error("Map tile unavailable"), tile);
   },
+};
+const KeptTiles = window.L && L.TileLayer.extend({
+  ...keptTileMethods,
+  _urlAt(at) {
+    return L.Util.template(this._url, L.Util.extend({ s: this._getSubdomain(at), r: "", ...at }, this.options));
+  },
+});
+// The same for map image services (WMS), which are asked for a box rather than a tile number.
+const KeptWMS = window.L && L.TileLayer.WMS.extend({
+  ...keptTileMethods,
+  _urlAt(at) { return this.getTileUrl(at); },
 });
 const keptTiles = (url, options) => new KeptTiles(url, options);
+
+// LiDAR relief: the shape of the ground from airborne laser surveys, with trees and buildings taken away,
+// so old shafts, spoil heaps, tramways and earthworks stand out. England's and Scotland's straight from
+// their governments' map services; Wales's drawn by bandobuddy from the Welsh Government's file (lidar.py).
+// Scotland's service only colours heights, so it's asked to shade them, with a style sent along.
+// Later layers draw over earlier ones: the newest national programme, then the islands' 25 cm and Orkney surveys.
+const SCOTTISH_LIDAR = [1, 2, 3, 4, 5, 6].map(n => `scotland:scotland-lidar-${n}-dtm`)
+  .concat("scotland:nlp-dtm", "scotland:outer-hebrides-2019-dtm-25cm", "scotland:orkney-islands-council-23-dtm");
+const SHADED = '<UserStyle><FeatureTypeStyle><Rule><RasterSymbolizer><ShadedRelief><BrightnessOnly>true</BrightnessOnly>'
+  + "<ReliefFactor>12</ReliefFactor></ShadedRelief></RasterSymbolizer></Rule></FeatureTypeStyle></UserStyle>";
+
+// Layers stack in a fixed order, whatever order they're switched on in: the map style at the bottom, the
+// LiDAR over it (shown to the right of the slider), and the mining overlays on top of both.
+const Z = { base: 1, lidar: 2, overlay: 3 };
+
+function lidarLayer() {
+  const common = { minZoom: 12, maxZoom: 19, className: "lidar", zIndex: Z.lidar };
+  const credit = text => ({ attribution: text });
+  // detectRetina: on a phone's dense screen the services draw twice the pixels, so 1 m (or 25 cm) detail
+  // isn't smudged; the tile grid stays the same.
+  const service = { ...common, format: "image/png", transparent: true, tileSize: 512, maxNativeZoom: 19,
+                    detectRetina: true };
+  return L.layerGroup([
+    new KeptWMS("https://environment.data.gov.uk/spatialdata/lidar-composite-digital-terrain-model-dtm-1m/wms", {
+      ...service, layers: "Lidar_Composite_Hillshade_DTM_1m", styles: "hillshade",
+      bounds: L.latLngBounds([49.8, -6.5], [55.9, 1.9]), ...credit("LiDAR &copy; Environment Agency") }),
+    new KeptWMS("https://ows.remotesensing.data.gov.scot/geoserver/ows", {
+      ...service, layers: SCOTTISH_LIDAR.join(","), styles: "",
+      SLD_BODY: '<StyledLayerDescriptor version="1.0.0" xmlns="http://www.opengis.net/sld">'
+        + SCOTTISH_LIDAR.map(name => `<NamedLayer><Name>${name}</Name>${SHADED}</NamedLayer>`).join("")
+        + "</StyledLayerDescriptor>",
+      bounds: L.latLngBounds([54.6, -8.7], [60.9, -0.7]),
+      ...credit("LiDAR &copy; Scottish Government (Remote Sensing Portal)") }),
+    keptTiles("/lidar/wales/{z}/{x}/{y}.png", {
+      ...common, maxNativeZoom: 17, bounds: L.latLngBounds([51.3, -5.4], [53.5, -2.6]),
+      ...credit("LiDAR &copy; Welsh Government (DataMapWales)") }),
+  ]);
+}
 
 function initMap() {
   const prefs = loadPrefs();
   S.map = L.map("map", { zoomControl: false, minZoom: 5, worldCopyJump: true });
   S.bases = {
     Map: keptTiles("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' }),
+      maxZoom: 19, zIndex: Z.base, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' }),
     Topo: keptTiles("https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png", {
-      maxZoom: 17, attribution: '&copy; OpenStreetMap, SRTM | <a href="https://opentopomap.org">OpenTopoMap</a> (CC-BY-SA)' }),
+      maxZoom: 17, zIndex: Z.base, attribution: '&copy; OpenStreetMap, SRTM | <a href="https://opentopomap.org">OpenTopoMap</a> (CC-BY-SA)' }),
     Satellite: keptTiles("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
-      maxZoom: 19, attribution: "Imagery &copy; Esri, Maxar, Earthstar Geographics" }),
+      maxZoom: 19, zIndex: Z.base, attribution: "Imagery &copy; Esri, Maxar, Earthstar Geographics" }),
   };
   const mining = "https://services-eu1.arcgis.com/Qn4lKcPDVHNivEyr/arcgis/rest/services";
   const credit = 'Coal mining data &copy; <a href="https://www.gov.uk/guidance/access-coal-mining-information-and-data">Mining Remediation Authority</a>';
   // Their service only has pictures drawn down to zoom 14 (and mine entries and surface mining only
   // from 13); anything else comes back as a blank tile. So stretch the zoom-14 pictures when you zoom in
   // further, and don't ask for levels that were never drawn.
-  const drawn = { maxZoom: 19, maxNativeZoom: 14, attribution: credit };
+  const drawn = { maxZoom: 19, maxNativeZoom: 14, zIndex: Z.overlay, attribution: credit };
   S.overlays = {
+    lidar: { label: "LiDAR relief (earthworks, shafts, old tracks)", short: "LiDAR relief", from: 12, layer: lidarLayer() },
     mine_entries: { label: "Mine entries (shafts & adits)", from: 13,
                     layer: keptTiles(`${mining}/Mine_Entries/MapServer/tile/{z}/{y}/{x}`,
                                        { ...drawn, minZoom: 13, opacity: 0.9 }) },
@@ -729,6 +817,7 @@ function initMap() {
                       layer: keptTiles(`${mining}/Surface_Mining_Past_and_Current/MapServer/tile/{z}/{y}/{x}`,
                                          { ...drawn, minZoom: 13, opacity: 0.55 }) },
   };
+  S.swipe = typeof prefs.swipe === "number" ? prefs.swipe : 0.6;   // where the slider sits, across the map
   S.base = S.bases[prefs.base] ? prefs.base : "Map";
   S.bases[S.base].addTo(S.map);
   L.control.scale({ imperial: false }).addTo(S.map);
@@ -750,11 +839,15 @@ function initMap() {
     if (S.loc.follow) { S.loc.follow = false; renderLocBtn(); }
   });
   S.map.on("click", () => {  // tapping empty map puts the map first
+    if (!$("layersPanel").hidden) { showLayers(false); return; }
     if (S.view === "site") closeSite();
     else if (!wide() && S.view === "list" && Sheet.snap !== "peek") Sheet.set("peek");
   });
+  S.map.on("dragstart", () => showLayers(false));
   renderBaseSeg();
   renderOverlays(new Set(prefs.overlays || []));
+  renderLayersBtn();
+  initSwipe();
 }
 
 function renderOverlays(on) {
@@ -763,14 +856,16 @@ function renderOverlays(on) {
   for (const key of on) S.overlays[key]?.layer.addTo(S.map);
 }
 
+const overlayName = o => o.short || o.label.split(" (")[0].toLowerCase();   // "LiDAR" keeps its capitals
+
 function renderOverlayHint() {
   const on = Object.values(S.overlays).filter(o => S.map.hasLayer(o.layer));
   const hidden = on.filter(o => S.map.getZoom() < o.from);
   $("overlayHint").hidden = !hidden.length;
-  if (hidden.length) $("overlayHint").textContent = `Zoom in to see ${hidden.map(o => o.label.toLowerCase()).join(" and ")}.`;
-  if (hidden.length && S.overlayToldAt !== S.map.getZoom() && S.view !== "filters") {
+  if (hidden.length) $("overlayHint").textContent = `Zoom in to see ${hidden.map(overlayName).join(" and ")}.`;
+  if (hidden.length && S.overlayToldAt !== S.map.getZoom() && $("layersPanel").hidden) {
     S.overlayToldAt = S.map.getZoom();
-    toast(`Zoom in to see ${hidden.map(o => o.label.split(" (")[0].toLowerCase()).join(" and ")}.`, 3000);
+    toast(`Zoom in to see ${hidden.map(overlayName).join(" and ")}.`, 3000);
   }
 }
 
@@ -780,6 +875,8 @@ function toggleOverlay(key, wanted) {
   if (wanted) overlay.layer.addTo(S.map);
   else S.map.removeLayer(overlay.layer);
   renderOverlayHint();
+  renderLayersBtn();
+  syncSwipe();
   savePrefs({ overlays: [...document.querySelectorAll("#overlayChecks input:checked")].map(i => i.dataset.overlay) });
 }
 
@@ -795,6 +892,82 @@ function setBase(name) {
   S.bases[name].addTo(S.map);
   savePrefs({ base: name });
   renderBaseSeg();
+  renderLayersBtn();
+}
+
+// The layers button: map style and overlays, in a card beside it. Lit while anything's on beyond the plain map.
+function renderLayersBtn() {
+  if (!S.map) return;
+  const lit = S.base !== "Map" || Object.values(S.overlays).some(o => S.map.hasLayer(o.layer));
+  const open = !$("layersPanel").hidden;
+  $("layersBtn").classList.toggle("lit", lit);
+  $("layersBtn").setAttribute("aria-expanded", String(open));
+}
+
+function showLayers(open) {
+  $("layersPanel").hidden = !open;
+  if (open) renderOverlayHint();
+  renderLayersBtn();
+}
+
+// ---------- the LiDAR slider ----------
+// With LiDAR on there's always a line to drag across the map: the map on the left, the LiDAR on the right,
+// so the shape of the ground can be swept against the roads and names. The LiDAR is drawn over the map and
+// clipped to the right of the line.
+function syncSwipe() {
+  if (!S.map) return;
+  const lidar = S.overlays.lidar;
+  $("swipe").hidden = !(S.map.hasLayer(lidar.layer) && S.map.getZoom() >= lidar.from);
+  placeSwipe();
+}
+
+function placeSwipe() {
+  if (!S.map || $("swipe").hidden) return;
+  const size = S.map.getSize(), r = visibleRect();
+  const x = Math.round(Math.min(r.x1 - 22, Math.max(r.x0 + 22, size.x * S.swipe)));
+  // Clip in the map's layer coordinates, which move as the map pans.
+  const nw = S.map.containerPointToLayerPoint([0, 0]), se = S.map.containerPointToLayerPoint(size);
+  const clip = `rect(${nw.y}px, ${se.x}px, ${se.y}px, ${nw.x + x}px)`;
+  S.overlays.lidar.layer.eachLayer(layer => { const c = layer.getContainer(); if (c) c.style.clip = clip; });
+  const el = $("swipe");
+  el.style.transform = `translateX(${x}px)`;
+  el.style.setProperty("--swipe-y", `${Math.round((r.y0 + r.y1) / 2)}px`);
+  el.style.setProperty("--swipe-tag-y", `${Math.round(r.y0 + 12)}px`);
+  $("swipeHandle").setAttribute("aria-valuenow", String(Math.round(S.swipe * 100)));
+}
+
+function initSwipe() {
+  const handle = $("swipeHandle");
+  handle.innerHTML = svg(UI.swipe);
+  let dragging = false;
+  const moveTo = clientX => {
+    const box = S.map.getContainer().getBoundingClientRect();
+    S.swipe = Math.min(1, Math.max(0, (clientX - box.left) / box.width));
+    placeSwipe();
+  };
+  handle.addEventListener("pointerdown", e => {
+    dragging = true;
+    handle.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+  handle.addEventListener("pointermove", e => { if (dragging) moveTo(e.clientX); });
+  const done = () => {
+    if (!dragging) return;
+    dragging = false;
+    savePrefs({ swipe: S.swipe });
+  };
+  handle.addEventListener("pointerup", done);
+  handle.addEventListener("pointercancel", done);
+  handle.addEventListener("keydown", e => {   // arrow keys move it too
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    e.preventDefault();
+    S.swipe = Math.min(1, Math.max(0, S.swipe + (e.key === "ArrowLeft" ? -0.05 : 0.05)));
+    placeSwipe();
+    savePrefs({ swipe: S.swipe });
+  });
+  S.map.on("move zoomend viewreset resize", placeSwipe);
+  S.map.on("zoomend", syncSwipe);
+  syncSwipe();
 }
 
 function renderSortSeg() {
@@ -967,11 +1140,15 @@ function pickedSources() {
   return [...document.querySelectorAll("#srcChecks input:checked")].map(i => i.value);
 }
 
+// A dot on the filters button while the filters are hiding places: some kinds, some sources, or only new
+// ones. (Showing weaker leads hides nothing, so it doesn't count.)
 function renderFilterCount() {
-  const n = (selectedCats().length < BOOT.categories.length) + $("weak").checked
-    + (pickedSources().length < BOOT.sources.length) + !!$("newMode").value;
-  $("filterCount").textContent = n;
-  $("filterCount").hidden = !n;
+  const hiding = selectedCats().length < BOOT.categories.length || pickedSources().length < BOOT.sources.length
+    || !!$("newMode").value;
+  $("filterCount").hidden = !hiding;
+  const label = hiding ? "Filters (some places are hidden)" : "Filters";
+  $("filterBtn").setAttribute("aria-label", label);
+  $("filterBtn").title = label;
 }
 
 async function fetchMap() {
@@ -1320,14 +1497,16 @@ function stopCompass() {
 }
 
 function renderLocBtn() {
-  holdScreenAwake(S.loc.wanted);
+  holdScreenAwake(S.loc.follow);   // awake while it's following you, asleep once you look around
   const st = !S.loc.wanted ? "off" : !S.loc.pos ? "searching" : S.loc.follow ? "follow" : "on";
   const b = $("locBtn");
   b.className = `fab ${st}`;
-  b.setAttribute("aria-pressed", String(st !== "off"));
-  const label = { off: "Show my location", searching: "Finding your location…", on: "Centre on my location", follow: "Stop showing my location" }[st];
+  b.setAttribute("aria-pressed", String(st === "follow"));
+  const label = { off: "Show my location", searching: "Finding your location…", on: "Back to my location",
+                  follow: "Following your location" }[st];
   b.setAttribute("aria-label", label);
   b.title = label;
+  $("locBox").hidden = !S.loc.wanted;
   renderLocCard();
 }
 
@@ -1396,14 +1575,15 @@ function onPositionError(err) {
   }
 }
 
+// The location button always brings the map back to you: the first tap finds you, any later tap centres
+// on you and follows you again (moving the map stops following). It never turns your location off: that's
+// in the menu.
 function onLocateButton() {
-  if (!S.loc.wanted) startLocate();
-  else if (!S.loc.pos) stopLocate();
-  else if (!S.loc.follow) {
-    S.loc.follow = true;
-    centerOn([S.loc.pos.lat, S.loc.pos.lng], Math.max(S.map.getZoom(), 14));
-    renderLocBtn();
-  } else stopLocate();
+  if (!S.loc.wanted) { startLocate(); return; }
+  if (!S.loc.pos) { toast("Still finding your location…"); return; }
+  S.loc.follow = true;
+  centerOn([S.loc.pos.lat, S.loc.pos.lng], Math.max(S.map.getZoom(), 14));
+  renderLocBtn();
 }
 
 // Don't run GPS in the background.
@@ -1416,7 +1596,7 @@ document.addEventListener("visibilitychange", () => {
     S.loc.paused = false;
     watchLocation();
   }
-  holdScreenAwake(!document.hidden && S.loc.wanted);
+  holdScreenAwake(!document.hidden && S.loc.follow);
   if (document.hidden) stopCompass();
 });
 
@@ -1507,6 +1687,19 @@ async function checkNewSinceVisit() {
 const LEGACY_CATEGORIES = ["military", "underground", "rail", "industrial", "religious", "institutional", "leisure",
                            "historic", "buildings", "other"];
 
+// The sources there were before the app remembered which ones you'd seen.
+const LEGACY_SOURCES = ["osm", "wikidata", "heritage_at_risk", "canmore", "coflein", "brownfield", "imported"];
+
+// Sources you chose, plus any added since: a new register shows until you say otherwise.
+function initialSources(prefs) {
+  const all = BOOT.sources.map(s => s[0]);
+  if (!prefs.sources) return new Set(all);
+  const known = new Set(prefs.knownSources || LEGACY_SOURCES);
+  const on = new Set(prefs.sources.filter(k => all.includes(k)));
+  for (const key of all) if (!known.has(key)) on.add(key);
+  return on;
+}
+
 function initialCategories(prefs) {
   const all = BOOT.categories.map(c => c[0]);
   if (!prefs.categories) return new Set(all);
@@ -1527,13 +1720,13 @@ function initFilters() {
   $("catChips").innerHTML = BOOT.categories.map(([k, label]) =>
     `<button type="button" class="cat" data-cat="${esc(k)}" style="--c:${colour(k)}" aria-pressed="${on.has(k)}">${badge(k, "sm")}<span>${esc(label)}</span></button>`).join("");
   $("weak").checked = !!prefs.weak;
-  const onSources = new Set(prefs.sources || BOOT.sources.map(s => s[0]));
+  const onSources = initialSources(prefs);
   $("srcChecks").innerHTML = BOOT.sources.map(([key, label]) =>
     `<label><input type="checkbox" value="${esc(key)}"${onSources.has(key) ? " checked" : ""}> ${esc(label)}</label>`).join("");
 
   const changed = () => {
     savePrefs({ categories: selectedCats(), knownCategories: BOOT.categories.map(c => c[0]), weak: $("weak").checked,
-                sources: pickedSources() });
+                sources: pickedSources(), knownSources: BOOT.sources.map(s => s[0]) });
     renderFilterCount();
     scheduleFetch(0);
   };
@@ -1587,12 +1780,15 @@ function initControls() {
   $("filterBtn").insertAdjacentHTML("afterbegin", svg(UI.filter));
   $("clearBtn").innerHTML = svg(UI.close);
   $("locBtn").innerHTML = svg(UI.locate);
+  $("layersBtn").innerHTML = svg(UI.layers);
   for (const b of document.querySelectorAll("[data-close]:empty")) b.innerHTML = svg(UI.close);
   $("versionText").textContent = `Version ${BOOT.version}.`;
-  $("registerCredits").innerHTML = "Places also come from open national registers: "
-    + (BOOT.credits || []).map(([label, home, attribution]) =>
-        `<a href="${safeUrl(home)}" target="_blank" rel="noopener" title="${esc(attribution)}">${esc(label)}</a>`).join(", ")
-    + ". Each is used under the Open Government Licence.";
+  const registerLink = ([label, home, attribution]) =>
+    `<a href="${safeUrl(home)}" target="_blank" rel="noopener" title="${esc(attribution)}">${esc(label)}</a>`;
+  const ogl = c => /^Open Government Licence/.test(c[3] || "");
+  $("registerCredits").innerHTML = "Places also come from open national registers, used under the Open Government "
+    + `Licence: ${(BOOT.credits || []).filter(ogl).map(registerLink).join(", ")}.`
+    + (BOOT.credits || []).filter(c => !ogl(c)).map(c => ` ${registerLink(c)}: ${esc(c[2])}.`).join("");
 
   $("menuBtn").addEventListener("click", () => (S.view === "data" ? backToList() : show("data", "full")));
   $("filterBtn").addEventListener("click", () => (S.view === "filters" ? backToList() : show("filters", "full")));
@@ -1615,6 +1811,11 @@ function initControls() {
     $("newCard").hidden = true;
   });
   $("locBtn").addEventListener("click", onLocateButton);
+  $("layersBtn").addEventListener("click", () => showLayers($("layersPanel").hidden));
+  $("locStop").addEventListener("click", () => {
+    stopLocate();
+    toast("Stopped using your location. The location button starts it again.");
+  });
 
   $("sheet").addEventListener("click", e => {
     const item = e.target.closest(".item[data-key]");
@@ -1686,6 +1887,7 @@ function initControls() {
 
   document.addEventListener("keydown", e => {
     if (e.key !== "Escape" || e.target === $("searchInput")) return;
+    if (!$("layersPanel").hidden) { showLayers(false); $("layersBtn").focus(); return; }
     if (S.view === "site") closeSite();
     else if (S.view !== "list") backToList();
   });
@@ -1712,7 +1914,7 @@ function initOffline() {
     keepInView();
     // The map on screen was drawn before the worker could keep it, and those zoomed-out tiles are what
     // fills in offline where you never zoomed in. Draw it again (from the browser's cache) so they're kept.
-    if (firstVisit && S.map) S.bases[S.base].redraw();
+    if (firstVisit && S.map) S.map.eachLayer(layer => { if (layer instanceof L.TileLayer) layer.redraw(); });
   });
 
   if ("serviceWorker" in navigator && window.isSecureContext) {
@@ -1829,12 +2031,30 @@ function keepInView() {
   clearTimeout(keepTimer);
   keepTimer = setTimeout(() => {
     keepIndex();
+    keepListed();
     renderKept();
     if (keepingBlocked() || S.map.getZoom() < KEEP_MIN_ZOOM) return;
     // Only what's in view now: moving on drops whatever was still waiting from before.
     keepQueue = areasInView().filter(area => !isKept(area));
     while (keepBusy < 2 && keepQueue.length) keepNext();
   }, KEEP_SETTLE_MS);
+}
+
+// The places in your list, kept in full whatever the zoom: anything you've seen listed opens offline with its
+// evidence and links. One request for the lot, and only for the ones not kept already.
+let listedBusy = false;
+async function keepListed() {
+  if (listedBusy || keepingBlocked() || !S.list || !S.list.sites.length) return;
+  listedBusy = true;
+  try {
+    const missing = await LocalDB.missing(S.list.sites.map(s => s.key));
+    for (let i = 0; i < missing.length && !keepingBlocked(); i += 50) {
+      const q = new URLSearchParams();
+      for (const key of missing.slice(i, i + 50)) q.append("key", key);
+      await LocalDB.putDetails((await api(`/api/details?${q}`)).sites);
+    }
+  } catch (_) { /* lost signal: next time */ }
+  listedBusy = false;
 }
 
 // Every page of /api/details for an area (or everywhere), into the phone's copy. Returns where it got to.
@@ -2131,8 +2351,8 @@ function pickSuggestion(pick) {
 async function findTown(q) {
   if (!q) return;
   try {
-    if (!navigator.onLine) { toast("Searching for towns needs a signal. Places you've already seen still show as you type."); return; }
-    const hit = await api(`/api/search?q=${encodeURIComponent(q)}`);
+    // Lower case, so "Bath" and "bath" are the same search, kept once.
+    const hit = await api(`/api/search?q=${encodeURIComponent(q.trim().toLowerCase())}`);
     if (S.loc.follow) { S.loc.follow = false; renderLocBtn(); }
     if (S.view === "site") closeSite();
     else if (S.view !== "list") backToList();
@@ -2140,7 +2360,10 @@ async function findTown(q) {
     const [w, s, ea, n] = hit.bbox;
     if (n - s > 0.001) S.map.fitBounds([[s, w], [n, ea]], { ...mapPadding(), maxZoom: 15 });
     else centerOn([hit.lat, hit.lng], 15);
-  } catch (err) { toast(err.message); }
+  } catch (err) {
+    toast(navigator.onLine ? err.message
+      : "No signal, and that search wasn't made here before. Places you've already seen still show as you type.");
+  }
 }
 
 // "New since last visit" compares against the previous session's visit time.
