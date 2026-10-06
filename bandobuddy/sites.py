@@ -306,6 +306,17 @@ def _entrances(site: dict) -> list[dict]:
     return sorted(ways_in, key=lambda w: (w["name"] == "", w["name"], w["kind"]))
 
 
+# "Dive Test Facility (Disused)": mappers put the state in the name. It's already the place's condition, so
+# show the name without it (once scored: the name saying so still counts as evidence).
+_STATE_IN_NAME = re.compile(r"\s*(?:[(\[]\s*(?:disused|derelict|abandoned|closed|ruined?|ruins)\s*[)\]]"
+                            r"|[-–,]\s*(?:disused|derelict|abandoned)\s*$)", re.I)
+
+
+def shown_name(name: str) -> str:
+    shown = _STATE_IN_NAME.sub("", name or "").strip()
+    return shown or name
+
+
 def _agreed_name(site: dict) -> str:
     """When sources disagree, the name most of them use: one record called "Bethel Quarry" that also
     goes by "Gripwood Quarry", and another called "Gripwood Quarry", make it Gripwood Quarry. A name
@@ -471,7 +482,7 @@ def build_sites(store: Store) -> int:
         sources = "+".join(sorted({m["source"] for m in members}, key=lambda s: (order.get(s, 2), s)))
         out.append({
             "key": site["key"],
-            "name": site["name"],
+            "name": shown_name(site["name"]),
             "lat": site["lat"],
             "lng": site["lng"],
             "score": score,
