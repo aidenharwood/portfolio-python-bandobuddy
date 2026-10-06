@@ -380,7 +380,8 @@ MOD_BUILDINGS = re.compile(r"\bbldgs\b|buildings", re.I)
 class MoDisposals:
     """The Ministry of Defence's list of sites it's disposing of, as it gives the House of Commons: barracks,
     airfields, ranges and depots, each with the year it goes. It gives no positions, so each is looked up by
-    name and town (OpenStreetMap's Nominatim, a second apart), and kept."""
+    name and town (OpenStreetMap's Nominatim, a second apart), and kept. If Nominatim can't answer (it's down,
+    or has asked for a pause), the rest wait for the next run: only a search that found nothing is remembered."""
 
     page = "https://www.gov.uk/government/publications/disposal-database-house-of-commons-report"
 
@@ -392,7 +393,7 @@ class MoDisposals:
         resp = session.get(url, headers=HEADERS, timeout=TIMEOUT)
         resp.raise_for_status()
         records = _records(ods_stream(io.BytesIO(resp.content), _first_sheet(resp.content)), "Primary Establishment Name")
-        rows, seen = [], set()
+        rows, seen, searching = [], set(), True
         for n, r in enumerate(records):
             _stop(cancel)
             progress("finding each MOD site", n, len(records))
@@ -402,9 +403,13 @@ class MoDisposals:
             if not ref or same in seen or (MOD_LAND.search(parcel) and not MOD_BUILDINGS.search(parcel)):
                 continue
             seen.add(same)
-            if ref not in places:
-                places[ref] = self._place(session, r)
-            if not places[ref]:
+            if ref not in places and searching:
+                try:
+                    places[ref] = self._place(session, r)
+                except (requests.RequestException, ValueError):
+                    searching = False
+                    progress("Nominatim isn't answering: the other MOD sites are looked up next time", n, len(records))
+            if not places.get(ref):
                 continue
             rows.append({"ref": ref, "establishment": (r.get("Primary Establishment Name") or "").strip(),
                          "parcel": (r.get("Primary Parcel Name") or "").strip(), "status": (r.get("Status") or "").strip(),
@@ -419,10 +424,7 @@ class MoDisposals:
         name, parcel = (r.get("Primary Establishment Name") or "").title(), (r.get("Primary Parcel Name") or "").title()
         town, county = r.get("Town") or "", r.get("County") or ""
         for q in (f"{name}, {town}", f"{parcel}, {town}", f"{r.get('Address') or ''}, {town}, {county}"):
-            try:
-                hit = geocode.search(q, session)
-            except (requests.RequestException, ValueError):
-                hit = None
+            hit = geocode.search(q, session)
             if hit:
                 return [hit["lat"], hit["lng"]]
         return None
