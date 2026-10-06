@@ -238,20 +238,27 @@ Most councils in England and Wales publish committee papers with ModernGov, whic
 document it holds. bandobuddy knows 195 councils whose ModernGov search answers (found by asking each of PlanIt's 455
 planning authorities' likely ModernGov addresses, then searching each once; 33 more turn searches away and aren't
 asked). For each, it asks for planning committee papers using the phrases officers use, such as "has not been occupied
-since", "has stood empty", "vacant and derelict", "fallen into disrepair", "boarded up" or "partially constructed dwelling",
-all in one search. It reads only the reports that match (a few hundred kilobytes each, with
+since", "has stood empty", "vacant since", "has been redundant", "poor state of repair", "dilapidated", "boarded up",
+"safety fencing" or "partially constructed dwelling", all in one search. It reads only the reports that match (a few hundred kilobytes each, with
 [pypdf](https://pypi.org/project/pypdf/)), and keeps the sentence where the phrase is said of the site itself. A
 sentence about a neighbour, about who may live there (agricultural ties, holiday lets), quoting a policy or a rule
 ("will only be permitted where... vacant for 12 months"), asked by a commenter, or saying the buildings have since
-been demolished is passed over. The place is found from the report's site address (the house itself where
-OpenStreetMap knows it, else the middle of its postcode, from [postcodes.io](https://postcodes.io)), and links to
-the report, open at the page that says so.
+been demolished is passed over. Reports are laid out differently from council to council: some label the reference
+("APPLICATION NO. 22/00362/FULLS"), others set it on a line of its own above the site and proposal. Where a report
+gives the site's grid reference ("Map Ref (E) 480388 (N) 104217"), that places it to the metre; otherwise the place is
+found from the site address (the house itself where OpenStreetMap knows it, else the middle of its postcode, from
+[postcodes.io](https://postcodes.io)). Each links to the report, open at the page that says so. Burnes Shipyard in
+Bosham came to light this way: OpenStreetMap only has its abandoned slipway, and its planning applications say no
+more than "demolition of existing buildings", but Chichester's planning officer wrote that "the site has been
+redundant for more than twenty years, with the buildings in a poor state of repair with the site enclosed with safety
+fencing" (boat building until about 1990, car repairs until 1993).
 
 The first run goes back to 2016, one search per planning committee. After that it asks for the last few weeks'
-papers each week, one search per council, a request a second and a council at a time. Which reports it has read is
-kept in `committee_reports.json` in the data folder, so nothing is read twice. A council that turns a request away
-is skipped until the next run. Reports more than five years old count for less, and more than ten years old are weak
-leads, as the building may have been done up or knocked down since. An empty shop unit or a cleared site is a weak
+papers each week, one search per council. Councils are separate websites, so eight are asked at once, each a
+request a second. Which reports it has read is kept in `committee_reports.json` in the data folder, so nothing is
+read twice. A council that turns a request away is skipped until the next run. Reports more than five years old
+count for less, and more than ten years old are weak leads, as the building may have been done up or knocked down
+since. An empty shop unit or a cleared site is a weak
 lead too. Pilots on a dozen councils' last few years of papers found a handful of places each time, among them
 Derry's Ebrington Square listed buildings ("vacant since 2002, are in a poor state of repair") and 7/9 London Road,
 Widley ("in a state of disrepair and has been unoccupied for some time"). `run.bat` switches it on; anywhere else set

@@ -85,7 +85,7 @@ def _condition_from(evidence: str) -> str | None:
         return "Closed"
     if re.search(r"\bruin", text):
         return "Ruin"
-    if re.search(r"abandoned|derelict|boarded up|disrepair", text):
+    if re.search(r"abandoned|derelict|boarded up|disrepair|dilapidated|poor state of repair", text):
         return "Abandoned"
     if re.search(r"unfinished|partially (?:constructed|built|completed)|part[- ]built|partly built|incomplete dwelling",
                  text):

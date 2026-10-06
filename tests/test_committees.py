@@ -70,7 +70,7 @@ class SearchTests(unittest.TestCase):
       <option value="12">Development Control (1998-2003)</select>"""
 
     def test_which_committees_decide_planning_applications(self):
-        self.assertEqual(committees.planning_committees(self.FORM), ["161", "160", "436", "12"])
+        self.assertEqual(committees.planning_committees(self.FORM), ["161", "160", "436"])   # not one wound up in 2003
         self.assertIsNone(committees.planning_committees("<p>No advanced search here</p>"))
         self.assertTrue(committees.is_planning("Plans Sub-Committee"))
         self.assertFalse(committees.is_planning("Planning Policy Task Group"))     # writes policy, not decisions
@@ -144,6 +144,28 @@ class ReadingTests(unittest.TestCase):
         land = opendata._committee({**JudgingTests.ROW, "phrase": "vacant and derelict",
                                     "sentence": "The scheme brings a vacant and derelict site back into use."})
         self.assertEqual((land["kind"], land["weight"]), ("vacant land", 8))
+
+    # Chichester sets the reference on a line of its own, and gives the site's grid reference.
+    BURNES = [" \nParish: \nBosham \n \nWard: \nHarbour Villages \nBO/21/00620/FUL \n \n"
+              "Proposal  Development comprising the demolition of existing B2 use shipyard \nbuildings and structures "
+              "and the erection of 3no. replacement C3 \ndwellings with access, parking, landscaping and associated works. "
+              "\n \nSite Burnes Shipyard  Westbrook Field Bosham PO18 8JN   \n \nMap Ref (E) 480388 (N) 104217 \n \n"
+              "Applicant Paul Peta Properties Ltd Agent Mr Paul White \n \n",
+              "2.0   The Site and Surroundings \n2.1  The application site, known as Burnes Shipyard is located to the "
+              "north of Windward Road. \n2.2  The site is occupied by a variety of commercial buildings. The site has "
+              "been redundant for more than twenty years, with the buildings in a poor state of repair with the site "
+              "enclosed with safety fencing. Vehicle access to the site is via Windward Road."]
+
+    def test_a_reference_on_its_own_line_and_a_grid_reference(self):
+        found = committees.find_statements(self.BURNES)
+        self.assertEqual({(f["ref"], f["site"], tuple(f["grid"])) for f in found},
+                         {("BO/21/00620/FUL", "Burnes Shipyard Westbrook Field Bosham PO18 8JN", (480388, 104217))})
+        self.assertEqual(found[0]["sentence"], "The site has been redundant for more than twenty years, with the "
+                                               "buildings in a poor state of repair with the site enclosed with safety "
+                                               "fencing.")
+        lead = opendata._committee({**JudgingTests.ROW, **found[0], "council": "Chichester"})
+        self.assertEqual((lead["kind"], lead["weight"]), ("shipyard", 22))      # what's there, not the new houses
+        self.assertEqual(_condition_from(lead["evidence"]), "Abandoned")
 
     def test_a_paper_covering_several_applications(self):
         pages = ["APPLICATION NO. 24/00001/FUL\nSITE Mill House, Lower Road, AB1 2CD\nPROPOSAL Extension\n"
@@ -296,11 +318,11 @@ class CrawlTests(unittest.TestCase):
         searches = [u for u in self.web.calls if "ieSearchResults2" in u and "tv.example" in u]
         # A search per planning committee (the policy group's papers aren't asked for), a page at a time.
         self.assertEqual([(u.split("CI=")[1].split("&")[0], u.rsplit("PG=", 1)[1]) for u in searches],
-                         [("161", "1"), ("161", "2"), ("160", "1"), ("0436", "1"), ("12", "1")])
+                         [("161", "1"), ("161", "2"), ("160", "1"), ("0436", "1")])
         self.assertIn("SD=01%2F01%2F2016", searches[0])                       # the first look goes back ten years
         saved = json.loads(path.read_text(encoding="utf-8"))
         self.assertEqual(saved["asked"], {"https://tv.example": "2026-10-07"})   # the council that turned us away isn't
-        self.assertEqual(saved["committees"]["https://tv.example"]["ids"], ["161", "160", "0436", "12"])
+        self.assertEqual(saved["committees"]["https://tv.example"]["ids"], ["161", "160", "0436"])
         self.assertEqual(len(saved["read"]), 3)
 
         self.web.calls.clear()
@@ -309,6 +331,54 @@ class CrawlTests(unittest.TestCase):
         asked = [u for u in self.web.calls if "tv.example" in u]
         self.assertTrue(asked and all("ieSearchResults2" in u for u in asked))   # nothing read twice, nor the form
         self.assertIn("SD=02%2F09%2F2026", [u for u in self.web.calls if "tv.example" in u][0])   # a week on, from 5 weeks back
+
+    def test_reads_everything_again_when_the_reader_changes(self):
+        path = Path(tempfile.mkdtemp()) / "committee_reports.json"
+        path.write_text(json.dumps({"read": {"https://tv.example/x.pdf": "2026-10-01"},
+                                    "asked": {"https://tv.example": "2026-10-01"},
+                                    "committees": {"https://tv.example": {"ids": ["161"], "at": "2026-10-01"}}}))
+        memory = committees.Memory(path)          # written before the reader had a version
+        self.assertFalse(memory.read("https://tv.example/x.pdf"))
+        self.assertIsNone(memory.asked("https://tv.example"))
+        self.assertEqual(memory.committees("https://tv.example", date(2026, 10, 7)), ["161"])   # still known
+        memory.mark_read("https://tv.example/x.pdf")
+        memory.save()
+        self.assertTrue(committees.Memory(path).read("https://tv.example/x.pdf"))   # same reader: kept
+
+    def test_placed_by_the_reports_own_grid_reference(self):
+        pdf = tiny_pdf([line for line in page.split("\n") if line.strip()] for page in ReadingTests.BURNES)
+        web = Web(lambda url: Answer(content=pdf, kind="application/pdf"))
+        hit = {"url": "https://chi.example/mgConvert2PDF.aspx?ID=22451&ISATT=1", "item": "", "committee": "Planning Committee",
+               "meeting": "2022-01-12"}
+        with mock.patch.object(committees, "locate", side_effect=AssertionError("no need to look the address up")):
+            [row] = list(committees._read_report(web, "Chichester", hit, {}))
+        self.assertAlmostEqual(row["lat"], 50.83191, places=4)
+        self.assertAlmostEqual(row["lng"], -0.85988, places=4)
+        self.assertEqual(row["ref"], "BO/21/00620/FUL")
+
+    def test_several_councils_at_once_and_stopping_them_all(self):
+        import threading
+        together = threading.Barrier(3, timeout=5)      # opens only when three councils are being asked at once
+
+        def answer(url):
+            if "ieDocSearch.aspx" in url:
+                together.wait()
+                return Answer(text=SearchTests.FORM)
+            return Answer(text="<p>No results found for your query</p>")
+        web = Web(answer)
+        sites = tuple((f"Council {n}", f"https://c{n}.example") for n in range(3))
+        self.assertEqual(list(committees.crawl(web, sites, lambda *a: None, gap_s=0, at_once=3)), [])
+        self.assertEqual(sum(1 for u in web.calls if "ieDocSearch" in u), 3)
+
+        stop = threading.Event()
+        slow = Web(lambda url: (stop.set(), Answer(text=SearchTests.FORM))[1])   # cancelled while it's asking
+        with self.assertRaises(committees.Cancelled):
+            list(committees.crawl(slow, sites, lambda *a: None, cancel=stop, gap_s=0.5, at_once=3))
+
+    def test_a_bug_isnt_mistaken_for_a_council_being_down(self):
+        broken = Web(lambda url: Answer(text=None))      # parsing fails: that's ours to fix, so it stops
+        with self.assertRaises(TypeError):
+            list(committees.crawl(broken, (("Council", "https://c.example"),), lambda *a: None, gap_s=0))
 
     def test_off_unless_switched_on_and_given_the_data_folder(self):
         self.assertFalse(opendata.DATASETS["committees"].enabled())

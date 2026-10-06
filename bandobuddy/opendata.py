@@ -716,6 +716,7 @@ _PLANNED_KINDS = [
     (re.compile(r"\bclub\b|social club|working men", re.I), "club"),
     (re.compile(r"care home|nursing home", re.I), "care home"),
     (re.compile(r"\bbank\b", re.I), "bank"),
+    (re.compile(r"shipyard|boatyard|dockyard", re.I), "shipyard"),
     (re.compile(r"farm|barns?\b", re.I), "farm buildings"),
     (re.compile(r"warehouse|industrial|commercial|offices?\b", re.I), "industrial building"),
 ]
@@ -843,6 +844,7 @@ class CommitteeReports:
 _UNIT = re.compile(r"\b(?:shop|retail|unit|office|premises|commercial)\b", re.I)
 _HOME = re.compile(r"dwelling|house|residence|bungalow|cottage|mansion|villa|\bhome\b", re.I)
 _LAND = re.compile(r"\b(?:site|land|plot)\b", re.I)
+_PROPOSED = re.compile(r"\b(?:erection|construction|into|to form|to create|to provide|replacement|new build)\b", re.I)
 _STANDING = re.compile(r"building|house|dwelling|residence|chapel|church|mill|hall|barn|\bpub\b|hotel|school|premises"
                        r"|\bunit\b|shop|office|factory|warehouse|property|structure|bank|\binn\b|cinema", re.I)
 
@@ -855,7 +857,10 @@ def _committee(row: dict) -> dict | None:
     """A council planning officer saying, in a committee report, that the site stands empty, unfinished or
     derelict: about as reliable as it gets, as the officer will have been to look."""
     said = row["sentence"]
-    kind = _kind_of(said) or _kind_of(row.get("proposal") or "") or "building"   # what the officer says first
+    # What the officer says it is, or what the proposal says is there now: "demolition of existing B2 use
+    # shipyard buildings" and not "...and the erection of 3no. replacement C3 dwellings".
+    existing = _PROPOSED.split(row.get("proposal") or "", 1)[0]
+    kind = _kind_of(said) or _kind_of(existing) or "building"
     if re.search(r"partially|unfinished", row["phrase"]):
         weight, kind = 16, "unfinished house" if kind == "house" else kind
     elif _UNIT.search(said) and kind in ("building", "industrial building"):
