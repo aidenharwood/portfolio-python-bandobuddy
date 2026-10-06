@@ -384,8 +384,11 @@ def make_handler(app: App, allowed_hosts: Iterable[str] = ()) -> type[BaseHTTPRe
             self.send_header("Referrer-Policy", "strict-origin-when-cross-origin")
             for k, v in extra.items():
                 self.send_header(k, v)
-            self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.end_headers()
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+                self.close_connection = True    # the page stopped waiting: panned on, and asked again
 
         def _json(self, status: int, data) -> None:
             self._send(status, json.dumps(data).encode("utf-8"), "application/json")

@@ -54,7 +54,7 @@ CATEGORIES = [
     ("industrial", "Industrial", r"\bmills?\b|windmill|watermill|sawmill|factory|\bworks\b|brewery|distillery|maltings"
                                  r"|power station|power plant|\bpower\b|gasworks|warehouse|foundry|kiln|chimney"
                                  r"|industrial|pumping|engine house|brickworks|reservoir|water tower|depot|\bdocks?\b"
-                                 r"|wharf|sewage|substation|brownfield|tannery"),
+                                 r"|wharf|sewage|substation|brownfield|tannery|shipyard|boatyard|dockyard"),
     ("religious", "Churches & chapels", r"church|chapel|place[ _]of[ _]worship|monastery|convent|abbey|priory|cathedral"
                                         r"|temple|mosque|synagogue|meeting house|methodist|baptist|wesleyan"
                                         r"|congregational|minster|mission hall"),

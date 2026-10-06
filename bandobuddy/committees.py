@@ -16,9 +16,10 @@ import html
 import io
 import json
 import logging
+import queue
 import re
 import threading
-import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Callable, Iterator
@@ -28,7 +29,7 @@ import requests
 
 from . import geocode
 from .config import USER_AGENT
-from .geo import haversine_m
+from .geo import bng_to_wgs84, haversine_m
 from .osm import Cancelled
 
 TIMEOUT = 60
@@ -38,17 +39,22 @@ Progress = Callable[[str, int, "int | None"], None]
 # together ("a" OR "b"...), so each council is one search a week, plus a page per ten papers found.
 PHRASES = (
     "has not been occupied since", "has never been occupied", "have never been occupied", "has not been lived in",
-    "has been vacant since", "has been vacant for", "has remained vacant", "has stood vacant", "have been vacant since",
+    "vacant since", "has been vacant for", "has remained vacant", "has stood vacant",
     "has been empty since", "has been empty for", "has remained empty", "has stood empty", "has been unoccupied",
     "vacant and derelict", "derelict and vacant", "in a derelict state", "in a derelict condition", "has become derelict",
-    "fallen into disrepair", "fallen into dereliction", "boarded up", "partially constructed dwelling",
-    "partially built dwelling", "unfinished dwelling",
+    "fallen into disrepair", "fallen into dereliction", "state of disrepair", "poor state of repair", "dilapidated",
+    "boarded up", "safety fencing", "has been redundant", "has been disused", "out of use since",
+    "has not been used since", "partially constructed dwelling", "partially built dwelling", "unfinished dwelling",
+    # Burnes Shipyard, Bosham: "The site has been redundant for more than twenty years, with the buildings in a
+    # poor state of repair with the site enclosed with safety fencing."
 )
 # Planning committees go by many names: "Southern Area Planning Committee", "Development Control",
 # "Plans Sub-Committee", "Regulatory Committee"... but not the ones that write planning policy.
 PLANNING_COMMITTEE = re.compile(r"plann|development|\bplans\b|applications|regulatory|\bDC\b", re.I)
 NOT_APPLICATIONS = re.compile(r"polic|task|framework|working|advisory|forum|steering|liaison|scrutiny|panel", re.I)
 COMMITTEES_EVERY_DAYS = 90       # how often to look again at which committees a council has
+COUNCILS_AT_ONCE = 8             # each a website of its own, asked a request a second
+READER = 2                       # raised when the phrases or the way reports are read change
 FIRST_SINCE = date(2016, 1, 1)   # a first look goes back ten years; older papers are mostly overtaken
 OVERLAP_DAYS = 35                # later looks go back a few weeks before the last, for papers published late
 MAX_PAGES = 40                   # ten results a page
@@ -86,7 +92,14 @@ def planning_committees(form: str) -> list[str] | None:
     select = _SELECT.search(form)
     if not select:
         return None
-    return [cid for cid, name in _OPTION.findall(select.group(1)) if cid != "0" and is_planning(html.unescape(name))]
+    return [cid for cid, name in _OPTION.findall(select.group(1))
+            if cid != "0" and is_planning(html.unescape(name)) and not _wound_up(name)]
+
+
+def _wound_up(name: str) -> bool:
+    """"Development Control (1998-2003)": a committee that ended before the papers worth reading begin."""
+    m = re.search(r"\b(?:19|20)\d\d\s*[-–]\s*((?:19|20)\d\d)\b", name)
+    return bool(m) and int(m.group(1)) < FIRST_SINCE.year
 
 
 _MEETING = re.compile(r'<a\s[^>]*href="ieListDocuments\.aspx\?CId=(\d+)&(?:amp;)?MI[Dd]=(\d+)"[^>]*>\s*'
@@ -130,6 +143,10 @@ _SITE = re.compile(r"(?:^|\n)[ \t]*(?:SITE(?:\s+ADDRESS)?|Site(?:\s+[Aa]ddress)?
                    r"[ \t]*[:\-]?[ \t]+(.+?)(?=\n[ \t]*" + _LABEL + r"\b|\n[ \t]*\n|$)", re.S)
 _PROPOSAL = re.compile(r"(?:^|\n)[ \t]*(?:PROPOSAL|Proposal|DESCRIPTION|Description(?: of [Dd]evelopment)?)"
                        r"[ \t]*[:\-]?[ \t]+(.+?)(?=\n[ \t]*" + _LABEL + r"\b|\n[ \t]*\n|$)", re.S)
+# A planning reference standing on its own: "BO/21/00620/FUL", "22/00362/FULLS", "P/2024/0156/OUT".
+_BARE_REF = re.compile(r"\b(?:[A-Z]{1,4}/)?\d{2,4}/\d{3,6}/[A-Z]{2,6}\b")
+# Where the site is, in grid metres: "Map Ref (E) 480388 (N) 104217", "Easting: 480388 Northing: 104217".
+_GRID = re.compile(r"(?:\(E\)|Easting:?)\s*(\d{6})\s*(?:\(N\)|Northing:?)\s*(\d{6,7})", re.I)
 _REF = re.compile(r"(?:APPLICATION|Application)\s*(?:NO\.?|No\.?|NUMBER|Number|REF(?:ERENCE)?|Ref(?:erence)?)"
                   r"\s*[:.]?\s*([A-Z0-9][A-Za-z0-9/._-]{4,})")
 # Said of something other than the site, or of who may live there rather than whether anyone does...
@@ -191,14 +208,23 @@ def find_statements(pages: list[str], phrases=PHRASES) -> list[dict]:
 
 
 def _header(text: str) -> dict:
-    """The application a passage belongs to: the last reference, site and proposal written before it."""
+    """The application a passage belongs to: the last reference, site and proposal written before it. Some
+    councils label the reference ("APPLICATION NO. 22/00362/FULLS"); others (Chichester) set it on a line
+    of its own above "Site" and "Proposal", with a grid reference below ("Map Ref (E) 480388 (N) 104217")."""
     refs = list(_REF.finditer(text))
-    head = text[refs[-1].start():] if refs else text[-20000:]
-    site, proposal = _SITE.search(head), _PROPOSAL.search(head)
+    if refs:
+        head, ref = text[refs[-1].start():], refs[-1].group(1)
+    else:
+        sites = list(_SITE.finditer(text))
+        start = max(0, sites[-1].start() - 1500) if sites else max(0, len(text) - 20000)
+        head = text[start:]
+        bare = _BARE_REF.search(head[:3000])
+        ref = bare.group(0) if bare else ""
+    site, proposal, grid = _SITE.search(head), _PROPOSAL.search(head), _GRID.search(head[:5000])
     clean = lambda m: re.sub(r"\s+", " ", m.group(1)).strip(" ,") if m else ""   # noqa: E731
     where = re.sub(r"^(?:Comments|Details)\s+", "", clean(site))   # a table's next column heading, read along
-    return {"ref": refs[-1].group(1).rstrip(".,") if refs else "", "site": where[:200],
-            "proposal": clean(proposal)[:300]}
+    return {"ref": ref.rstrip(".,"), "site": where[:200], "proposal": clean(proposal)[:300],
+            "grid": [int(grid.group(1)), int(grid.group(2))] if grid else None}
 
 
 def postcode_of(text: str) -> str | None:
@@ -257,24 +283,29 @@ class Memory:
     def __init__(self, path: Path | None):
         self.path = path
         self.data = {"read": {}, "asked": {}, "committees": {}}
+        self.lock = threading.Lock()      # several councils are asked at once
         if path and path.exists():
             try:
                 self.data.update(json.loads(path.read_text(encoding="utf-8")))
             except (OSError, ValueError):
                 pass
+        if self.data.get("reader") != READER:     # read with older phrases or layouts: read them all again
+            self.data.update({"read": {}, "asked": {}, "reader": READER})
 
     def read(self, url: str) -> bool:
         return url in self.data["read"]
 
     def mark_read(self, url: str) -> None:
-        self.data["read"][url] = date.today().isoformat()
+        with self.lock:
+            self.data["read"][url] = date.today().isoformat()
 
     def asked(self, base: str) -> date | None:
         when = self.data["asked"].get(base)
         return date.fromisoformat(when) if when else None
 
     def mark_asked(self, base: str, when: date) -> None:
-        self.data["asked"][base] = when.isoformat()
+        with self.lock:
+            self.data["asked"][base] = when.isoformat()
 
     def committees(self, base: str, today: date) -> list[str] | None:
         """The council's planning committees, if looked up lately ([] meaning its search has no list)."""
@@ -284,64 +315,105 @@ class Memory:
         return kept["ids"]
 
     def mark_committees(self, base: str, ids: list[str], today: date) -> None:
-        self.data["committees"][base] = {"ids": ids, "at": today.isoformat()}
+        with self.lock:
+            self.data["committees"][base] = {"ids": ids, "at": today.isoformat()}
 
     def save(self) -> None:
         if not self.path:
             return
-        tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(self.data, separators=(",", ":")), encoding="utf-8")
-        tmp.replace(self.path)
+        with self.lock:
+            text = json.dumps(self.data, separators=(",", ":"))
+            tmp = self.path.with_suffix(".tmp")
+            tmp.write_text(text, encoding="utf-8")
+            tmp.replace(self.path)
 
 
 def crawl(session: requests.Session, sites, progress: Progress, cancel=None, memory: Memory | None = None,
-          gap_s: float = 1.0, today: date | None = None) -> Iterator[dict]:
-    """Each site a council's planning papers say stands empty, unfinished or derelict, a council at a time
-    and a request a second, reading each paper once."""
+          gap_s: float = 1.0, today: date | None = None, at_once: int = COUNCILS_AT_ONCE) -> Iterator[dict]:
+    """Each site a council's planning papers say stands empty, unfinished or derelict. Councils are separate
+    websites, so several are asked at once; each one still gets a request a second, and each paper is read
+    once."""
     memory = memory or Memory(None)
     today = today or date.today()
-    headers = {"User-Agent": USER_AGENT}
-    for done, (council, base) in enumerate(sites):
-        _stop(cancel)
-        progress(f"asking {council}", done, len(sites))
-        last = memory.asked(base)
-        since = max(FIRST_SINCE, last - timedelta(days=OVERLAP_DAYS)) if last else FIRST_SINCE
-        until = today + timedelta(days=120)      # agendas go up a week or two before the meeting
+    halt = threading.Event()                  # stops every council's worker when the crawl stops
+    out: queue.Queue = queue.Queue()
+
+    def ask(council: str, base: str) -> None:
         try:
-            # Ten years of papers: one search per planning committee, so theirs aren't lost among Cabinet's.
-            # A few weeks' papers: one search of everything is a page or so. Either way, other committees'
-            # papers are set aside below.
-            committees = [None] if last else memory.committees(base, today)
-            if committees is None:          # which committees decide planning applications
-                r = session.get(f"{base}/ieDocSearch.aspx?ADV=1&bcr=1", headers=headers, timeout=TIMEOUT)
-                r.raise_for_status()
-                committees = planning_committees(r.text) or []
-                memory.mark_committees(base, committees, today)
-                _pause(gap_s, cancel)
-            hits = []
-            for committee in committees or [None]:
-                for page in range(1, MAX_PAGES + 1):
-                    _stop(cancel)
-                    r = session.get(search_url(base, since, until, page, committee), headers=headers, timeout=TIMEOUT)
-                    r.raise_for_status()
-                    found, more = parse_results(r.text, base, page)
-                    hits += found
-                    _pause(gap_s, cancel)
-                    if not more:
-                        break
-            for hit in hits:
-                if memory.read(hit["url"]) or not is_planning(hit["committee"]):
-                    continue
-                _stop(cancel)
-                yield from _read_report(session, council, hit, headers)
-                memory.mark_read(hit["url"])
-                _pause(gap_s, cancel)
-            memory.mark_asked(base, today)
-        except requests.RequestException:
-            pass        # one council's site being down doesn't stop the rest; it's asked again next time
+            for row in _ask_council(session, council, base, memory, halt, gap_s, today):
+                out.put(("row", row))
+        except Cancelled:
+            pass
+        except Exception as exc:              # a bug, not a council being down: stop and say so
+            out.put(("error", exc))
         finally:
             memory.save()
-    progress("asked every council", len(sites), len(sites))
+            out.put(("done", council))
+
+    pool = ThreadPoolExecutor(max_workers=max(1, at_once), thread_name_prefix="committees")
+    for council, base in sites:
+        pool.submit(ask, council, base)
+    done = 0
+    progress(f"asking {min(at_once, len(sites))} councils at a time", done, len(sites))
+    try:
+        while done < len(sites):
+            _stop(cancel)
+            try:
+                kind, value = out.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            if kind == "row":
+                yield value
+            elif kind == "error":
+                raise value
+            else:
+                done += 1
+                progress(f"asking {min(at_once, len(sites) - done) or 1} councils at a time", done, len(sites))
+    finally:
+        halt.set()
+        pool.shutdown(wait=False, cancel_futures=True)
+
+
+def _ask_council(session: requests.Session, council: str, base: str, memory: Memory, halt: threading.Event,
+                 gap_s: float, today: date) -> Iterator[dict]:
+    """One council: its planning papers since it was last asked, each read once."""
+    headers = {"User-Agent": USER_AGENT}
+    last = memory.asked(base)
+    since = max(FIRST_SINCE, last - timedelta(days=OVERLAP_DAYS)) if last else FIRST_SINCE
+    until = today + timedelta(days=120)      # agendas go up a week or two before the meeting
+    try:
+        # Ten years of papers: one search per planning committee, so theirs aren't lost among Cabinet's.
+        # A few weeks' papers: one search of everything is a page or so. Either way, other committees'
+        # papers are set aside below.
+        committees = [None] if last else memory.committees(base, today)
+        if committees is None:          # which committees decide planning applications
+            _stop(halt)
+            r = session.get(f"{base}/ieDocSearch.aspx?ADV=1&bcr=1", headers=headers, timeout=TIMEOUT)
+            r.raise_for_status()
+            committees = planning_committees(r.text) or []
+            memory.mark_committees(base, committees, today)
+            _pause(gap_s, halt)
+        hits = []
+        for committee in committees or [None]:
+            for page in range(1, MAX_PAGES + 1):
+                _stop(halt)
+                r = session.get(search_url(base, since, until, page, committee), headers=headers, timeout=TIMEOUT)
+                r.raise_for_status()
+                found, more = parse_results(r.text, base, page)
+                hits += found
+                _pause(gap_s, halt)
+                if not more:
+                    break
+        for hit in hits:
+            if memory.read(hit["url"]) or not is_planning(hit["committee"]):
+                continue
+            _stop(halt)
+            yield from _read_report(session, council, hit, headers)
+            memory.mark_read(hit["url"])
+            _pause(gap_s, halt)
+        memory.mark_asked(base, today)
+    except requests.RequestException:
+        pass        # one council's site being down doesn't stop the rest; it's asked again next time
 
 
 def _pause(seconds: float, cancel: threading.Event | None) -> None:
@@ -365,10 +437,11 @@ def _read_report(session: requests.Session, council: str, hit: dict, headers: di
     seen = set()
     for s in find_statements(pages):
         ref = s["ref"] or hit["item"] or hit["url"]
-        if ref in seen or not s["site"]:
+        if ref in seen or not (s["site"] or s["grid"]):
             continue
         seen.add(ref)
-        point = locate(session, s["site"], council)
+        # The report's own grid reference where it gives one (to the metre), else the address.
+        point = bng_to_wgs84(*s["grid"]) if s["grid"] else locate(session, s["site"], council)
         if not point:
             continue
         yield {**s, "ref": ref, "council": council, "committee": hit["committee"], "meeting": hit["meeting"],

@@ -55,6 +55,21 @@ class WebAppTests(unittest.TestCase):
         payload = json.loads(raw) if ctype.startswith("application/json") else raw
         return resp.status, payload, resp
 
+    def test_a_page_that_stopped_waiting(self):
+        # The browser drops a map request when the map moves on; that's not worth a stack trace.
+        import email.message
+        handler = webapp.make_handler(self.app).__new__(webapp.make_handler(self.app))
+        handler.request_version, handler.requestline, handler.command = "HTTP/1.1", "GET /api/map", "GET"
+        handler.client_address, handler.headers, handler._headers_buffer = ("127.0.0.1", 1), email.message.Message(), []
+        handler.log_message = lambda *a: None
+
+        class Gone:
+            def write(self, data):
+                raise ConnectionAbortedError(10053, "An established connection was aborted")
+        handler.wfile = Gone()
+        handler._json(200, {"sites": []})
+        self.assertTrue(handler.close_connection)
+
     def test_page(self):
         status, page, resp = self.request("GET", "/")
         self.assertEqual(status, 200)
