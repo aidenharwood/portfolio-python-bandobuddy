@@ -126,11 +126,29 @@ def is_heritage_site(tags: dict[str, str]) -> bool:
             or bool(HERITAGE_OPERATORS.search(tags.get("operator", ""))))
 
 
+# Not places to go and see, whatever state they're in: a disused phone box (or one turned into a book swap),
+# a post box, a cash machine, a capped well-head.
+NOT_PLACES = {"telephone", "public_bookcase", "post_box", "vending_machine", "atm", "bench", "waste_basket", "recycling",
+              "drinking_water", "charging_station", "bicycle_parking", "parking_space", "petroleum_well", "water_well",
+              "street_cabinet", "survey_point", "letter_box", "grit_bin", "fire_hydrant", "defibrillator", "clock",
+              "parcel_locker", "toilets", "shelter", "telephone_box"}
+
+
+def not_a_place(tags: dict[str, str]) -> bool:
+    for key in ("amenity", "man_made", "street_furniture"):
+        for prefix in ("", "disused:", "abandoned:"):
+            if tags.get(prefix + key) in NOT_PLACES:
+                return True
+    return False
+
+
 def classify(tags: dict[str, str], element: str | None = None) -> tuple[str, int] | None:
     """Return (evidence description, weight) or None if this element is just noise.
 
     `element` is "node", "way" or "relation" when known; it only changes a few weights.
     """
+    if not_a_place(tags):
+        return None
     verdict = _classify(tags)
     if not verdict:
         return None

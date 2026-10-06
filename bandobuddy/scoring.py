@@ -54,14 +54,24 @@ def members_of(site: dict) -> list[dict]:
     return (site.get("osm") or []) + (site.get("wikidata") or []) + (site.get("open") or [])
 
 
-_SCHOOL_KIND = re.compile(r"\bschool|\bcollege\b|\bacademy\b", re.I)
+# What the strongest evidence says a place is, when that settles its category whatever it's called.
+_KIND_CATEGORIES = [
+    (re.compile(r"\bschool|\bcollege\b|\bacademy\b|care home|nursing home|\bhospital\b|hospice|\bnhs\b", re.I),
+     "institutional"),
+    (re.compile(r"^railway tunnel$", re.I), "tunnels"),
+    (re.compile(r"^railway viaduct$", re.I), "rail"),
+]
 
 
 def category_for(site: dict) -> str:
     evidence = members_of(site)
-    # A school named for its church is a school ("St Mary's Church of England Primary School").
-    if evidence and _SCHOOL_KIND.search(max(evidence, key=lambda e: e.get("weight", 0)).get("kind") or ""):
-        return "institutional"
+    # A school named for its church is a school ("St Mary's Church of England Primary School"), and so is a care
+    # home called Mill House, or a railway tunnel under Colliery Lane.
+    if evidence:
+        kind = max(evidence, key=lambda e: e.get("weight", 0)).get("kind") or ""
+        for rx, key in _KIND_CATEGORIES:
+            if rx.search(kind):
+                return key
     text = " ".join([site.get("name") or ""] + [f"{e.get('kind', '')} {e.get('evidence', '')}" for e in evidence])
     for key, _, rx in _CATEGORY_RX:
         if rx.search(text):
@@ -90,12 +100,15 @@ def _condition_from(evidence: str) -> str | None:
     if re.search(r"unfinished|partially (?:constructed|built|completed)|part[- ]built|partly built|incomplete dwelling",
                  text):
         return "Unfinished"
-    if re.search(r"never (?:been )?occupied|not been occupied|unoccupied|stood empty|been empty|remained empty", text):
+    if re.search(r"never (?:been )?occupied|not been occupied|unoccupied|stood empty|stands? empty|been empty"
+                 r"|remained empty", text):
         return "Empty"
+    if "due to close" in text:
+        return "Closing"
     m = re.search(r"closed in (\d{4})", text)
     if m:
         return f"Closed {m.group(1)}"
-    if re.search(r"disused|decommission|mothball|out of use|\bclosed\b|vacant|inactive|redundant", text):
+    if re.search(r"disused|decommission|mothball|out of use|\bclosed\b|vacant|inactive|redundant|\bsurplus\b", text):
         return "Disused"
     if "brownfield" in text:
         return "Brownfield"
