@@ -1356,6 +1356,8 @@ function registerLinks(m) {
       return [/^\d+$/.test(ref) && ["Register entry", `https://www.planning.data.gov.uk/entity/${ref}`], ["Council's page", m.url]];
     case "planit":
       return [["Council's page", m.url], ref && ["On PlanIt", `https://www.planit.org.uk/planapplic/${ref.split("/").map(encodeURIComponent).join("/")}/`]];
+    case "committees":         // the officer's report, open at the page that says so
+      return [["The officer's report", m.url]];
     case "imported":
       return [["Where you got it", m.url]];
     default:

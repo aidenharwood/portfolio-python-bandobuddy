@@ -20,11 +20,13 @@ import xml.etree.ElementTree as ET
 import zipfile
 from dataclasses import dataclass
 from datetime import date, timedelta
+from pathlib import Path
 from typing import Callable, Iterator
 from urllib.parse import urljoin
 
 import requests
 
+from . import committees
 from .config import USER_AGENT
 from .geo import bng_to_wgs84
 from .osm import Cancelled
@@ -333,11 +335,27 @@ RUNDOWN_WORDS = ("derelict", "dilapidated", "disused", "vacant", "redundant", "f
                  "unsafe", "dangerous structure", "empty", "former")
 
 
-def _planit_search(words=RUNDOWN_WORDS) -> str:
+# ...and words that make any application worth knowing about, demolition or not: a derelict chapel up for
+# conversion is still standing, and falling down.
+STATE_WORDS = ("derelict", "dilapidated", "ruinous", "fire damaged", "abandoned")
+# A house begun and never finished, or finished and never lived in. Golden Hill, near Romsey: a replacement
+# mansion approved in 2004, never occupied, and applied for as flats four times since. Few enough (about
+# 120 since 2000) to ask for all of them each time.
+STALLED_PHRASES = ("unfinished dwelling", "unfinished house", "unfinished building", "partially constructed dwelling",
+                   "partially constructed house", "partially constructed building", "partially built dwelling",
+                   "partially built house", "part built dwelling", "partly built dwelling", "partially completed dwelling",
+                   "incomplete dwelling", "never been occupied", "never occupied")
+
+
+def _quoted(words) -> list[str]:
+    return [f'"{w}"' if " " in w else w for w in words]
+
+
+def _planit_search(words=RUNDOWN_WORDS, states=STATE_WORDS) -> str:
     """PlanIt reads "a b or c d" as (a and b) or (c and d): demolition next to one of the words, in
-    either form ("demolition" and "demolish" don't share a stem)."""
-    said = [f'"{w}"' if " " in w else w for w in words]
-    return " or ".join(f"{verb} {w}" for w in said for verb in ("demolition", "demolish"))
+    either form ("demolition" and "demolish" don't share a stem), or one of the state words alone."""
+    pairs = [f"{verb} {w}" for w in _quoted(words) for verb in ("demolition", "demolish")]
+    return " or ".join(pairs + _quoted(states))
 
 
 @dataclass
@@ -355,6 +373,7 @@ class PlanIt:
     search: str = _planit_search()
     days: int = 14                 # a fortnight: a weekly run with a week to spare
     windows: tuple = ("recent", "decided")   # made lately, and decided lately
+    stalled: str = " or ".join(_quoted(STALLED_PHRASES))   # asked for in full, every time: a page or so
     batch: int = 300
     gap_s: float = 61
 
@@ -380,16 +399,19 @@ class PlanIt:
 
     def __call__(self, session: requests.Session, progress: Progress, cancel=None) -> Records:
         asked = False
-        for window in self.windows:
+        asks = [(self.search, window) for window in self.windows] + ([(self.stalled, None)] if self.stalled else [])
+        for search, window in asks:
             page, done = 1, 0
             while True:
                 _stop(cancel)
                 if asked:
                     self._wait(cancel, self.gap_s)   # a minute between any two requests
                 asked = True
-                data = self._ask(session, {"search": self.search, window: self.days, "pg_sz": self.batch,
-                                           "page": page, "select": self.FIELDS, "sort": "-start_date",
-                                           "compress": "on"}, cancel)
+                params = {"search": search, "pg_sz": self.batch, "page": page, "select": self.FIELDS,
+                          "sort": "-start_date", "compress": "on"}
+                if window:
+                    params[window] = self.days
+                data = self._ask(session, params, cancel)
                 records = data.get("records") or []
                 total = data.get("total")
                 for row in records:
@@ -397,8 +419,8 @@ class PlanIt:
                         continue
                     yield {**row, "lat": float(row["location_y"]), "lng": float(row["location_x"])}
                 done += len(records)
-                progress(f"{'new applications' if window == 'recent' else 'decisions'}, a minute between pages",
-                         done, total if isinstance(total, int) else None)
+                what = {"recent": "new applications", "decided": "decisions"}.get(window, "unfinished buildings")
+                progress(f"{what}, a minute between pages", done, total if isinstance(total, int) else None)
                 if len(records) < self.batch or (isinstance(total, int) and done >= total):
                     break
                 page += 1
@@ -509,6 +531,7 @@ class Dataset:
     judge: Callable[[dict], dict | None]
     incremental: bool = False     # each run brings only what's new, so nothing it leaves out has gone
     opt_in: bool = False          # off unless BANDOBUDDY_<KEY>=1, or run by hand with `update --source`
+    remembers: bool = False       # keeps notes in the data folder between runs (which reports it has read)
 
     def enabled(self) -> bool:
         if not self.opt_in:
@@ -692,6 +715,7 @@ _PLANNED_KINDS = [
     (re.compile(r"cinema|theatre", re.I), "cinema"),
     (re.compile(r"\bclub\b|social club|working men", re.I), "club"),
     (re.compile(r"care home|nursing home", re.I), "care home"),
+    (re.compile(r"\bbank\b", re.I), "bank"),
     (re.compile(r"farm|barns?\b", re.I), "farm buildings"),
     (re.compile(r"warehouse|industrial|commercial|offices?\b", re.I), "industrial building"),
 ]
@@ -711,34 +735,81 @@ _NO_DECISION = re.compile(r"\bpre[- ]?app(?:lication)?\b|certificate of lawful|l
                           r"|screening opinion|scoping opinion", re.I)
 
 
+# A building begun and never finished, or finished and never lived in.
+_STALLED = re.compile(r"\b(?:unfinished|incomplete|partially (?:constructed|built|completed)|part[- ]built|partly built)"
+                      r"\s+(?:dwelling|house|home|building)s?\b|\bnever (?:been )?occupied\b", re.I)
+# Said of the building itself, with no demolition in sight.
+_STATE = re.compile(r"derelict|dilapidated|ruinous|fire[- ]damaged|abandoned|dangerous (?:structure|building)", re.I)
+# ...but not of something too small to go and see: the windows, a tree, a shed, a wall.
+_SMALL_THING = re.compile(r"(?:derelict|dilapidated|ruinous|fire[- ]damaged|abandoned)\s+(?:[\w-]+\s+){0,3}?"
+                          r"(?:windows?|doors?|sash\w*|trees?|hedges?|fences?|walls?|gates?|railings?|sheds?|garages?"
+                          r"|greenhouses?|outbuildings?|conservator(?:y|ies)|porch(?:es)?|roofs?|chimneys?|signs?"
+                          r"|kiosks?|canop(?:y|ies)|caravans?|vehicles?|boats?|cars?)\b", re.I)
+_TREE_WORK = re.compile(r"\btrees?\b|\bT\d+\b|\bTPO\b|\bfell\b|\bpollard|\bcrown (?:reduc|lift|thin)", re.I)
+
+
+def _excerpt(said: str, focus: re.Match | None, size: int = 160) -> str:
+    """The description, or the part of a long one that says why it's here."""
+    if len(said) <= size:
+        return said
+    start = 0 if focus is None or focus.end() <= size - 20 else max(0, focus.start() - 60)
+    return ("…" if start else "") + said[start:start + size] + ("…" if start + size < len(said) else "")
+
+
 def _planit(row: dict) -> dict | None:
-    """A demolition application: a lead when it says the building is derelict, empty or redundant."""
+    """A planning application worth knowing about: one to demolish something derelict, empty or
+    redundant; one that calls the building itself derelict or falling down; or one about a house begun
+    and never finished, or never lived in."""
     said = re.sub(r"\s+", " ", row.get("description") or "").strip()
-    if not re.search(r"demoli", said, re.I) or not _RUNDOWN.search(said) or _SMALL_JOB.search(said) \
-            or _NO_DECISION.search(said):
+    if _NO_DECISION.search(said):
         return None
-    verdict = judge_record(re.sub(r"demoli\w*", "", said, flags=re.I))   # "demolish" would read as gone
-    if verdict:
-        weight, kind = verdict
-    else:
-        weight = 20 if _FALLING_DOWN.search(said) else 12
-        kind = next((k for rx, k in _PLANNED_KINDS if rx.search(said)), "building")
+    demolition = bool(re.search(r"demoli", said, re.I))
+    weight = kind = None
+    stalled = _STALLED.search(said)
+    if stalled:
+        weight = 14
+        if "occupied" in stalled.group(0).lower():      # finished, never lived in: a house, or a gym unit
+            kind = _kind_of(said) or "building"
+        elif re.search(r"dwelling|house|home", stalled.group(0), re.I):
+            kind = "unfinished house"
+        else:
+            kind = "unfinished building"
+    elif demolition:
+        if not _RUNDOWN.search(said) or _SMALL_JOB.search(said):
+            return None
+    elif not _STATE.search(said) or _SMALL_THING.search(said) or _TREE_WORK.search(said):
+        return None
+    if kind is None:
+        verdict = judge_record(re.sub(r"demoli\w*", "", said, flags=re.I))   # "demolish" would read as gone
+        if verdict:
+            weight, kind = verdict
+        else:
+            weight = 20 if _FALLING_DOWN.search(said) else 12
+            kind = next((k for rx, k in _PLANNED_KINDS if rx.search(said)), "building")
+            if not demolition and kind == "farm buildings":
+                weight = 8          # a derelict barn up for conversion: there are a great many of those
     outcome = _PLANIT_DECIDED.get(row.get("app_state") or "", "")
     decided = (row.get("decided_date") or "")[:10]
     if _FOLLOW_UP.search(said):
-        state = "demolition approved earlier; this follows it up, so the work may be under way"
+        state = (f"{'demolition' if demolition else 'the work'} approved earlier; this follows it up, "
+                 "so the work may be under way")
         weight = 5
     elif outcome == "approved" and decided:
         try:
-            gone_soon = date.fromisoformat(decided) < date.today() - timedelta(days=548)
+            long_ago = date.fromisoformat(decided) < date.today() - timedelta(days=548)
         except ValueError:
-            gone_soon = False
-        state = f"demolition approved on {decided}" + (", so it may well be gone" if gone_soon else "")
-        weight = 5 if gone_soon else weight
+            long_ago = False
+        if demolition:
+            state = f"demolition approved on {decided}" + (", so it may well be gone" if long_ago else "")
+        else:
+            state = f"approved on {decided}" + (", so the work may well be done" if long_ago else "")
+        weight = 5 if long_ago else weight
     elif outcome:
-        state = f"demolition {outcome}" + (f" on {decided}" if decided else "")
+        state = (f"demolition {outcome}" if demolition else outcome) + (f" on {decided}" if decided else "")
     else:
-        state = f"applied to demolish it on {(row.get('start_date') or '')[:10]}, no decision yet"
+        started = (row.get("start_date") or "")[:10]
+        state = (f"applied to demolish it on {started}" if demolition else f"applied for on {started}") \
+            + ", no decision yet"
     # An address for a name: without its postcode, and not the whole of a long one with no commas.
     parts = [_POSTCODE.sub("", p).strip(" ,") for p in (row.get("address") or "").split(",")]
     name = ", ".join([p for p in parts if p][:2])
@@ -748,9 +819,71 @@ def _planit(row: dict) -> dict | None:
         "ref": str(row.get("name") or row.get("uid") or "").strip(),
         "name": name,
         "kind": kind,
-        "evidence": f"Planning application ({state}): \"{said[:160]}{'…' if len(said) > 160 else ''}\"",
+        "evidence": f"Planning application ({state}): \"{_excerpt(said, stalled or _STATE.search(said))}\"",
         "weight": weight,
         "url": row.get("url") or row.get("link"),
+    }
+
+
+@dataclass
+class CommitteeReports:
+    """Planning committee reports on the councils' ModernGov sites (committees.py): every report since 2016
+    the first time, then the last few weeks' each week, a request a second to each council."""
+
+    sites: tuple = committees.MODERNGOV_SITES
+    gap_s: float = 1.0
+
+    def __call__(self, session: requests.Session, progress: Progress, cancel=None,
+                 data_dir: Path | None = None) -> Records:
+        memory = committees.Memory(Path(data_dir) / "committee_reports.json" if data_dir else None)
+        yield from committees.crawl(session, self.sites, progress, cancel, memory, self.gap_s)
+
+
+# A shop or office unit standing empty is ordinary; a house, a chapel or a mill isn't.
+_UNIT = re.compile(r"\b(?:shop|retail|unit|office|premises|commercial)\b", re.I)
+_HOME = re.compile(r"dwelling|house|residence|bungalow|cottage|mansion|villa|\bhome\b", re.I)
+_LAND = re.compile(r"\b(?:site|land|plot)\b", re.I)
+_STANDING = re.compile(r"building|house|dwelling|residence|chapel|church|mill|hall|barn|\bpub\b|hotel|school|premises"
+                       r"|\bunit\b|shop|office|factory|warehouse|property|structure|bank|\binn\b|cinema", re.I)
+
+
+def _kind_of(text: str) -> str | None:
+    return next((k for rx, k in _PLANNED_KINDS if rx.search(text)), None) or ("house" if _HOME.search(text) else None)
+
+
+def _committee(row: dict) -> dict | None:
+    """A council planning officer saying, in a committee report, that the site stands empty, unfinished or
+    derelict: about as reliable as it gets, as the officer will have been to look."""
+    said = row["sentence"]
+    kind = _kind_of(said) or _kind_of(row.get("proposal") or "") or "building"   # what the officer says first
+    if re.search(r"partially|unfinished", row["phrase"]):
+        weight, kind = 16, "unfinished house" if kind == "house" else kind
+    elif _UNIT.search(said) and kind in ("building", "industrial building"):
+        weight = 8
+    elif _LAND.search(said) and not _STANDING.search(said):    # "a vacant and derelict site": nothing standing
+        weight, kind = 8, "vacant land"
+    else:
+        weight = 22
+    try:
+        years = (date.today() - date.fromisoformat(row["meeting"])).days / 365.25
+    except (KeyError, ValueError):
+        years = 0
+    if years > 10:          # long enough ago that it may well have been done up or knocked down since
+        weight = min(weight, 6)
+    elif years > 5:
+        weight -= 8
+    parts = committees.tidy_address(row["site"]).split(", ")
+    name = ", ".join(parts[:2])
+    if len(name) > 60:
+        name = name[:60].rsplit(" ", 1)[0]
+    when = f", {row['committee']}, {row['meeting']}" if row.get("meeting") else ""
+    return {
+        "ref": f"{row['council']}:{row['ref']}",
+        "name": name,
+        "kind": kind,
+        "evidence": f"{row['council']}'s planning report ({row['ref']}{when}): \"{said[:280]}\"",
+        "weight": weight,
+        "url": row["url"],
     }
 
 
@@ -829,6 +962,18 @@ DATASETS = {
             opt_in=True,
         ),
         Dataset(
+            key="committees",
+            label="Planning committee reports",
+            licence="Quoted from councils' committee papers, most published under the Open Government Licence",
+            attribution="A sentence from each council's own planning report, found through its ModernGov site",
+            home="https://github.com/aidenharwood/portfolio-python-bandobuddy#planning-committee-reports",
+            fetch=CommitteeReports(),
+            judge=_committee,
+            incremental=True,
+            opt_in=True,
+            remembers=True,
+        ),
+        Dataset(
             key="brownfield",
             label="Brownfield registers (England)",
             licence="Open Government Licence v3.0",
@@ -841,9 +986,12 @@ DATASETS = {
 }
 
 
-def collect(dataset: Dataset, session: requests.Session, progress: Progress, cancel=None) -> Iterator[dict]:
+def collect(dataset: Dataset, session: requests.Session, progress: Progress, cancel=None,
+            data_dir: Path | None = None) -> Iterator[dict]:
     """Every record from one register that's worth keeping, ready for the store."""
-    for row in dataset.fetch(session, progress, cancel):
+    rows = (dataset.fetch(session, progress, cancel, data_dir=data_dir) if dataset.remembers
+            else dataset.fetch(session, progress, cancel))
+    for row in rows:
         item = dataset.judge(row)
         if not item or not item["ref"]:
             continue

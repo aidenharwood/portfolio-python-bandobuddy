@@ -5,6 +5,7 @@ cd /d "%~dp0"
 title bandobuddy
 
 set "BANDOBUDDY_PLANIT=1"
+set "BANDOBUDDY_COMMITTEES=1"
 
 if exist ".venv\Scripts\python.exe" goto :deps
 

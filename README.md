@@ -25,7 +25,7 @@ flowchart LR
     GF["Geofabrik UK extract<br/>+ daily change files"]
     WD["Wikidata SPARQL<br/>(0.5° boxes, split on timeout)"]
     WP["Wikipedia intros"]
-    OD["Open registers<br/>(Historic England, Canmore, Coflein,<br/>brownfield, schools, Scottish land,<br/>PlanIt if switched on)"]
+    OD["Open registers<br/>(Historic England, Canmore, Coflein,<br/>brownfield, schools, Scottish land,<br/>PlanIt and committee reports if switched on)"]
   end
   subgraph App["bandobuddy container"]
     UP["Updater<br/>one thread per source,<br/>scheduled + resumable"]
@@ -89,6 +89,7 @@ docker build --target test .
 | `BANDOBUDDY_ALLOWED_HOSTS` | *(none)* | Comma-separated public hostnames the site is served on, e.g. `bandobuddy.example.org` (IP addresses and local names are always allowed) |
 | `BANDOBUDDY_NO_AUTO_UPDATE` | off | Don't refresh the data on a schedule |
 | `BANDOBUDDY_PLANIT` | off (on in `run.bat`) | Also sweep UK PlanIt weekly for demolition applications (see below) |
+| `BANDOBUDDY_COMMITTEES` | off (on in `run.bat`) | Also read councils' planning committee reports weekly (see below) |
 
 The refresh interval (7 days by default) is set in the app's **Data** panel, or with `bandobuddy update` from any scheduler. `/healthz` returns `{"ok": true, ...}` for container and Kubernetes health checks.
 
@@ -183,7 +184,8 @@ Wi-Fi is set to a *Private* network.
 | [Brownfield registers](https://www.planning.data.gov.uk/dataset/brownfield-land) | England | OGL v3 | Vacant and derelict land councils have registered |
 | [Get Information about Schools](https://www.get-information-schools.service.gov.uk/) (DfE) | England | OGL v3 | Schools that closed for good, and when |
 | [Vacant and Derelict Land Survey](https://www.gov.scot/publications/the-scottish-vacant-and-derelict-land-survey-site-register/) | Scotland | OGL v3 | Derelict sites and empty buildings, what they used to be and since when |
-| [UK PlanIt](https://www.planit.org.uk/) (optional, off by default) | UK | Planning register data | Applications to demolish buildings described as derelict, empty or redundant |
+| [UK PlanIt](https://www.planit.org.uk/) (optional, off by default) | UK | Planning register data | Applications to demolish buildings described as derelict, empty or redundant; applications that call a building derelict or falling down; houses begun and never finished |
+| Planning committee reports (optional, off by default) | 195 councils | Council papers, mostly OGL | A planning officer's own sentence saying the building on a site stands empty, unfinished or derelict |
 
 A national register saying a place exists isn't the same as saying it's abandoned, so most register
 entries are weak leads. Military and underground records are the exception: an observation post or a
@@ -206,18 +208,54 @@ site of 0.1 ha or more, with what it used to be and since when. Derelict sites a
 leads. Owners aren't kept. The register's page asks that councils, who own the data, are asked before any use that
 could infringe their copyright.
 
-**Demolition applications (UK PlanIt), optional.** PlanIt gathers planning applications from council websites. It's
+**Planning applications (UK PlanIt), optional.** PlanIt gathers planning applications from council websites. It's
 one person's free service and asks for no more than a request a minute, so bandobuddy asks only for applications to
 demolish something described as derelict, dilapidated, disused, vacant, redundant, fire damaged, abandoned, unsafe,
-empty or former: those made in the last fortnight, then decisions in the last fortnight on any made earlier. That's
-usually one page each, a minute apart (longer if PlanIt asks to wait), and it runs weekly, building up a picture
-rather than copying the archive. Each application is saved as it arrives, so stopping part-way keeps what came.
+empty or former, and for any application that calls the building itself derelict, dilapidated, ruinous, fire damaged
+or abandoned (a derelict chapel up for conversion is still standing): those made in the last fortnight, then
+decisions in the last fortnight on any made earlier. That's usually one page each, a minute apart (longer if PlanIt
+asks to wait), and it runs weekly, building up a picture rather than copying the archive. Separately, it asks each
+time for every application about a house begun and never finished, or never lived in ("partially built dwelling",
+"never occupied"): about 120 since 2000, a single page. Derelict barns up for conversion, of which there are a great
+many, and unfinished houses (most are self-builds that were finished later) are weaker leads; a description that
+uses those words of a tree, the windows or a shed is ignored. Each application is saved as it arrives, so stopping part-way keeps what came.
 Garages, extensions and house replacements are ignored, and so are pre-application advice and lawful-development
 certificates, which don't decide anything. An approved demolition shows as the place's condition; one approved more
 than 18 months ago, or a follow-up to an earlier approval (discharging its conditions, an amendment), is a weak lead
 because the building has probably gone or is going. `run.bat` switches it on; anywhere else it's off unless you set
 `BANDOBUDDY_PLANIT=1` (the Docker image and the public site leave it off), or run it by hand with
 `bandobuddy update --source planit`. A pilot sweep found 43 leads in a fortnight across the UK.
+
+### Planning committee reports
+
+Before a planning committee decides an application, an officer writes a report that describes the site, and says
+plainly when the building on it stands empty, unfinished or falling down. Golden Hill, near Romsey "was built as a
+substantial, single residence but has not been occupied since its construction in 2004"
+([Test Valley, 22/00362/FULLS](https://testvalley.moderngov.co.uk/documents/s25119/22_00362_FULLS%20SAPC%20Report%202.pdf)).
+No register records that; the report is the only place it's written down.
+
+Most councils in England and Wales publish committee papers with ModernGov, which has a free-text search over every
+document it holds. bandobuddy knows 195 councils whose ModernGov search answers (found by asking each of PlanIt's 455
+planning authorities' likely ModernGov addresses, then searching each once; 33 more turn searches away and aren't
+asked). For each, it asks for planning committee papers using the phrases officers use, such as "has not been occupied
+since", "has stood empty", "vacant and derelict", "fallen into disrepair", "boarded up" or "partially constructed dwelling",
+all in one search. It reads only the reports that match (a few hundred kilobytes each, with
+[pypdf](https://pypi.org/project/pypdf/)), and keeps the sentence where the phrase is said of the site itself. A
+sentence about a neighbour, about who may live there (agricultural ties, holiday lets), quoting a policy or a rule
+("will only be permitted where... vacant for 12 months"), asked by a commenter, or saying the buildings have since
+been demolished is passed over. The place is found from the report's site address (the house itself where
+OpenStreetMap knows it, else the middle of its postcode, from [postcodes.io](https://postcodes.io)), and links to
+the report, open at the page that says so.
+
+The first run goes back to 2016, one search per planning committee. After that it asks for the last few weeks'
+papers each week, one search per council, a request a second and a council at a time. Which reports it has read is
+kept in `committee_reports.json` in the data folder, so nothing is read twice. A council that turns a request away
+is skipped until the next run. Reports more than five years old count for less, and more than ten years old are weak
+leads, as the building may have been done up or knocked down since. An empty shop unit or a cleared site is a weak
+lead too. Pilots on a dozen councils' last few years of papers found a handful of places each time, among them
+Derry's Ebrington Square listed buildings ("vacant since 2002, are in a poor state of repair") and 7/9 London Road,
+Widley ("in a state of disrepair and has been unoccupied for some time"). `run.bat` switches it on; anywhere else set
+`BANDOBUDDY_COMMITTEES=1`, or run it by hand with `bandobuddy update --source committees`.
 
 ### Mining overlays
 
@@ -341,6 +379,8 @@ those outlines (or within 15 m of one mapped as a point, 40 m if it shares the n
   around a place when someone opens it, one request at a time and cached for a week.
 - Map tiles come from OpenStreetMap and OpenTopoMap, plus Esri imagery (free to use, not open data). LiDAR relief
   comes from the Environment Agency, the Scottish Government and the Welsh Government (Open Government Licence).
+- Planning committee reports are quoted a sentence at a time from councils' own papers, with a link to each.
+  Postcodes are located with [postcodes.io](https://postcodes.io) (ONS data, OGL).
 - The app queries these community services politely: one Wikidata query at a time with pauses, Nominatim at most once a second, and repeat look-ups cached.
 
 ## Limitations
