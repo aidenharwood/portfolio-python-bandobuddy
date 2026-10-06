@@ -1,2 +1,3 @@
 requests>=2.31,<3
 osmium>=4.3,<5
+pypdf>=6.1,<7

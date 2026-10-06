@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest import mock
 
 from bandobuddy import opendata, osm
+from bandobuddy.scoring import _condition_from
 from bandobuddy.geo import bng_to_wgs84, haversine_m
 from bandobuddy.sites import build_sites
 from bandobuddy.store import Store
@@ -202,21 +203,26 @@ class PlanItTests(unittest.TestCase):
         pages = [Resp(200, {"records": [self.record(1), self.record(2, location_x=None)], "total": 3}),
                  Resp(429, headers={"Retry-After": "90"}),
                  Resp(200, {"records": [self.record(3)], "total": 3}),
-                 Resp(200, {"records": [self.record(4, app_state="Permitted")], "total": 1})]
+                 Resp(200, {"records": [self.record(4, app_state="Permitted")], "total": 1}),
+                 Resp(200, {"records": [self.record(5, "Completion of partially built dwelling")], "total": 1})]
         service = Service(lambda url, params: pages.pop(0))
         waits = []
         fetch = opendata.PlanIt(batch=2)
         with mock.patch.object(opendata.PlanIt, "_wait", lambda self, cancel, s: waits.append(s)):
             rows = list(fetch(service, nothing))
-        self.assertEqual([r["name"] for r in rows], ["Area/1", "Area/3", "Area/4"])   # one had no position
-        self.assertEqual(waits, [61, 90, 61])                     # a minute between requests; longer when asked
+        self.assertEqual([r["name"] for r in rows], ["Area/1", "Area/3", "Area/4", "Area/5"])   # one had no position
+        self.assertEqual(waits, [61, 90, 61, 61])                 # a minute between requests; longer when asked
         asked = [c[1] for c in service.calls]
-        # New applications in the last fortnight, then decisions in it, never "everything that changed".
+        # New applications in the last fortnight, then decisions in it, never "everything that changed";
+        # then every unfinished house there's ever been, a page of them.
         self.assertEqual([(a.get("recent"), a.get("decided"), a["page"]) for a in asked],
-                         [(14, None, 1), (14, None, 2), (14, None, 2), (None, 14, 1)])
+                         [(14, None, 1), (14, None, 2), (14, None, 2), (None, 14, 1), (None, None, 1)])
         self.assertNotIn("different", asked[0])
         self.assertIn("demolition derelict or demolish derelict", asked[0]["search"])
         self.assertIn('demolish "fire damaged"', asked[0]["search"])
+        self.assertIn(' or derelict or dilapidated or ruinous or "fire damaged"', asked[0]["search"])   # demolition or not
+        self.assertIn('"partially built dwelling" or ', asked[4]["search"])
+        self.assertNotIn("demolition", asked[4]["search"])
 
     def test_what_counts_as_a_lead(self):
         judge = opendata._planit
@@ -229,7 +235,10 @@ class PlanItTests(unittest.TestCase):
         for small in ("Demolition of existing single storey rear extension",
                       "Demolition of existing dwelling and erection of replacement dwelling",
                       "Demolition of existing garage and erection of two storey side extension",
-                      "Change of use of derelict barn to dwelling"):     # nothing knocked down
+                      "Change of use of vacant shop to cafe",                    # empty, not falling down
+                      "Emergency Tree Works: T1, T2 Oak: Fell fire damaged tree.",
+                      "Replacement of 3 no. very dilapidated sash and case windows",
+                      "Removal of abandoned vehicles and caravans from the site"):
             self.assertIsNone(judge(self.record(3, small)), small)
         recent = (date.today() - timedelta(days=30)).isoformat()
         approved = judge(self.record(4, app_state="Permitted", decided_date=recent))
@@ -242,6 +251,30 @@ class PlanItTests(unittest.TestCase):
                                       "Application: Demolition of existing disused bus depot and construction of homes"))
         self.assertEqual(follow["weight"], 5)
         self.assertIn("demolition approved earlier", follow["evidence"])
+        # Falling down, with no demolition in sight: still standing, for now.
+        stables = judge(self.record(8, "Restoration and conversion of derelict stables to form estate shoot lodge"))
+        self.assertEqual((stables["kind"], stables["weight"]), ("building", 20))
+        self.assertIn("applied for on 2026-09-01, no decision yet", stables["evidence"])
+        self.assertEqual(_condition_from(stables["evidence"]), "Abandoned")
+        barn = judge(self.record(9, "Change of use of derelict barn to dwelling"))
+        self.assertEqual((barn["kind"], barn["weight"]), ("farm buildings", 8))     # a great many of those
+        done = judge(self.record(10, "Conversion of dilapidated chapel to dwelling", app_state="Conditions",
+                                 decided_date="2022-05-01"))
+        self.assertEqual(done["weight"], 5)
+        self.assertIn("approved on 2022-05-01, so the work may well be done", done["evidence"])
+        self.assertNotIn("demolition", done["evidence"])
+        # Begun and never finished, or finished and never lived in (Golden Hill, near Romsey).
+        shell = judge(self.record(11, "Completion of partially built dwelling for use as Holiday let",
+                                  app_state="Rejected", decided_date="2014-05-01"))
+        self.assertEqual((shell["kind"], shell["weight"]), ("unfinished house", 14))
+        self.assertEqual(_condition_from(shell["evidence"]), "Unfinished")
+        never = judge(self.record(12, "Change of use from Gym and Creche facility (Unit never occupied) to retail"))
+        self.assertEqual((never["kind"], _condition_from(never["evidence"])), ("building", "Empty"))
+        long_one = judge(self.record(13, "A FULL APPLICATION FOR: (1) DEMOLITION OF BUILDINGS AT PLOTS 3 & 4 (2) REMOVAL "
+                                         "OF CONTAINERS AND CARAVAN; (3) ERECTION OF NEW DWELLINGS AT PLOTS 3 & 4; (4) "
+                                         "OPERATIONAL WORKS AND RETENTION OF PARTLY BUILT DWELLING AT PLOT 2"))
+        self.assertIn("PARTLY BUILT DWELLING", long_one["evidence"])       # quoted around what matters
+        self.assertTrue(long_one["evidence"].split('"')[1].startswith("…"))
         for nothing_decided in ("Pre-application advice for demolition of the former Wesleyan school",
                                 "Certificate of lawfulness for proposed demolition of redundant farm buildings"):
             self.assertIsNone(judge(self.record(7, nothing_decided)), nothing_decided)

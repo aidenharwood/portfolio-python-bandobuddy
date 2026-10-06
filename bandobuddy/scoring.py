@@ -85,8 +85,13 @@ def _condition_from(evidence: str) -> str | None:
         return "Closed"
     if re.search(r"\bruin", text):
         return "Ruin"
-    if re.search(r"abandoned|derelict|boarded up", text):
+    if re.search(r"abandoned|derelict|boarded up|disrepair", text):
         return "Abandoned"
+    if re.search(r"unfinished|partially (?:constructed|built|completed)|part[- ]built|partly built|incomplete dwelling",
+                 text):
+        return "Unfinished"
+    if re.search(r"never (?:been )?occupied|not been occupied|unoccupied|stood empty|been empty|remained empty", text):
+        return "Empty"
     m = re.search(r"closed in (\d{4})", text)
     if m:
         return f"Closed {m.group(1)}"

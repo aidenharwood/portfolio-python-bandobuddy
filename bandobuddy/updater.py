@@ -261,7 +261,7 @@ class Updater:
         # stopping part-way keeps what it has; the rest save in big batches.
         save_every = 1 if dataset.incremental else OD_BATCH
         try:
-            for item in opendata.collect(dataset, session, progress, cancel):
+            for item in opendata.collect(dataset, session, progress, cancel, data_dir=self.data_dir):
                 batch.append(item)
                 if len(batch) >= save_every:
                     self.store.upsert_od(batch, seen_at)
