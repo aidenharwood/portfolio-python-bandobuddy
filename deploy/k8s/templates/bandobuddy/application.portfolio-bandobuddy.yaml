@@ -30,6 +30,10 @@ spec:
               value: "true"
             - name: BANDOBUDDY_ALLOWED_HOSTS
               value: bandobuddy.aidenharwood.uk
+            - name: BANDOBUDDY_PLANIT # weekly UK PlanIt sweep: derelict, demolished and unfinished buildings
+              value: "1"
+            - name: BANDOBUDDY_COMMITTEES # councils' planning committee reports, read weekly
+              value: "1"
           volumeMounts:
             - name: data
               mountPath: /data

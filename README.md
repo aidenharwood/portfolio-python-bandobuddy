@@ -99,7 +99,7 @@ This follows the same GitOps flow as the other portfolio apps. A push to `main` 
 
 One-off setup:
 
-1. Copy `deploy/k8s/templates/bandobuddy/` into `portfolio-helm-website/templates/bandobuddy/`. It contains a Deployment in read-only public mode with probes, a 15 Gi `local-path` disk claim, a Service and a Traefik Ingress for `bandobuddy.aidenharwood.uk`.
+1. Copy `deploy/k8s/templates/bandobuddy/` into `portfolio-helm-website/templates/bandobuddy/`. It contains a Deployment in read-only public mode with probes (and the PlanIt and committee-report sources switched on), a 15 Gi `local-path` disk claim, a Service and a Traefik Ingress for `bandobuddy.aidenharwood.uk`.
 2. Point DNS for `bandobuddy.aidenharwood.uk` at the cluster, the same way as the other subdomains.
 3. Add the `GHCR_USERNAME`, `GHCR_PAT` and `GH_PAT` secrets to this repository.
 4. After the first build, make the `portfolio/bandobuddy` package public on GHCR, or give the cluster a pull secret.
@@ -223,7 +223,7 @@ Garages, extensions and house replacements are ignored, and so are pre-applicati
 certificates, which don't decide anything. An approved demolition shows as the place's condition; one approved more
 than 18 months ago, or a follow-up to an earlier approval (discharging its conditions, an amendment), is a weak lead
 because the building has probably gone or is going. `run.bat` switches it on; anywhere else it's off unless you set
-`BANDOBUDDY_PLANIT=1` (the Docker image and the public site leave it off), or run it by hand with
+`BANDOBUDDY_PLANIT=1` (the Docker image leaves it off; the public site's Deployment sets it), or run it by hand with
 `bandobuddy update --source planit`. A pilot sweep found 43 leads in a fortnight across the UK.
 
 ### Planning committee reports
@@ -261,8 +261,9 @@ count for less, and more than ten years old are weak leads, as the building may 
 since. An empty shop unit or a cleared site is a weak
 lead too. Pilots on a dozen councils' last few years of papers found a handful of places each time, among them
 Derry's Ebrington Square listed buildings ("vacant since 2002, are in a poor state of repair") and 7/9 London Road,
-Widley ("in a state of disrepair and has been unoccupied for some time"). `run.bat` switches it on; anywhere else set
-`BANDOBUDDY_COMMITTEES=1`, or run it by hand with `bandobuddy update --source committees`.
+Widley ("in a state of disrepair and has been unoccupied for some time"). `run.bat` and the public site's Deployment
+switch it on; anywhere else set `BANDOBUDDY_COMMITTEES=1`, or run it by hand with
+`bandobuddy update --source committees`.
 
 ### Mining overlays
 
