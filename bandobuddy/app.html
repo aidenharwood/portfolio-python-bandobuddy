@@ -391,6 +391,10 @@
         <div class="cats" id="catChips" style="margin-top:8px"></div>
       </div>
       <div class="block">
+        <label class="switch"><input type="checkbox" id="best">
+          <span><b>Best spots only</b><small>Still standing, with good evidence it's empty or derelict, and somewhere to go and see: no bare land, capped shafts, shop units or places open to visitors.</small></span></label>
+      </div>
+      <div class="block" id="weakBlock">
         <label class="switch"><input type="checkbox" id="weak">
           <span><b>Show weaker leads</b><small>Closed shop units, heritage ruins, caves and brownfield land. There are lots of these and most aren't worth the trip.</small></span></label>
       </div>
@@ -1151,7 +1155,8 @@ function filterParams() {
   const p = new URLSearchParams();
   const cats = selectedCats();
   if (cats.length && cats.length < BOOT.categories.length) p.set("categories", cats.join(","));
-  if ($("weak").checked) p.set("weak", "1");
+  if ($("best").checked) p.set("best", "1");
+  else if ($("weak").checked) p.set("weak", "1");
   const srcs = pickedSources();
   if (srcs.length && srcs.length < BOOT.sources.length) p.set("sources", srcs.join(","));
   const mode = $("newMode").value;
@@ -1365,6 +1370,10 @@ function registerLinks(m) {
       return [["Council's page", m.url], ref && ["On PlanIt", `https://www.planit.org.uk/planapplic/${ref.split("/").map(encodeURIComponent).join("/")}/`]];
     case "committees":         // the officer's report, open at the page that says so
       return [["The officer's report", m.url]];
+    case "care_closures":
+      return [["CQC's page for it", m.url]];
+    case "mod_disposals":
+      return [["The MOD's disposals list", m.url]];
     case "imported":
       return [["Where you got it", m.url]];
     default:
@@ -1883,12 +1892,16 @@ function initFilters() {
   $("catChips").innerHTML = BOOT.categories.map(([k, label]) =>
     `<button type="button" class="cat" data-cat="${esc(k)}" style="--c:${colour(k)}" aria-pressed="${on.has(k)}">${badge(k, "sm")}<span>${esc(label)}</span></button>`).join("");
   $("weak").checked = !!prefs.weak;
+  $("best").checked = prefs.best !== false;     // on unless turned off
+  $("weakBlock").hidden = $("best").checked;
   const onSources = initialSources(prefs);
   $("srcChecks").innerHTML = BOOT.sources.map(([key, label]) =>
     `<label><input type="checkbox" value="${esc(key)}"${onSources.has(key) ? " checked" : ""}> ${esc(label)}</label>`).join("");
 
   const changed = () => {
+    $("weakBlock").hidden = $("best").checked;
     savePrefs({ categories: selectedCats(), knownCategories: BOOT.categories.map(c => c[0]), weak: $("weak").checked,
+                best: $("best").checked,
                 sources: pickedSources(), knownSources: BOOT.sources.map(s => s[0]) });
     renderFilterCount();
     scheduleFetch(0);
@@ -1905,6 +1918,7 @@ function initFilters() {
     changed();
   });
   $("weak").addEventListener("change", changed);
+  $("best").addEventListener("change", changed);
   $("srcChecks").addEventListener("change", e => {
     if (!pickedSources().length) e.target.checked = true;  // never filter out everything
     changed();
@@ -1913,6 +1927,7 @@ function initFilters() {
   $("resetFilters").addEventListener("click", () => {
     for (const c of document.querySelectorAll("#catChips .cat")) c.setAttribute("aria-pressed", "true");
     $("weak").checked = false;
+    $("best").checked = true;
     for (const box of document.querySelectorAll("#srcChecks input")) box.checked = true;
     $("newMode").value = "";
     changed();

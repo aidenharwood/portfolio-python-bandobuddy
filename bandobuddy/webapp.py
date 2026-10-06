@@ -31,7 +31,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 import requests
 
 from . import __version__, access, export, geocode, imagery, lidar, opendata
-from .config import CATEGORIES, DATA_DIR, DB_NAME, OTHER_CATEGORY, UK_BBOX, WEAK_BELOW
+from .config import BEST, CATEGORIES, DATA_DIR, DB_NAME, OTHER_CATEGORY, UK_BBOX, WEAK_BELOW
 from .geo import grid_ref, haversine_m, nation
 from .sites import build_sites
 from .store import INDEX_COLUMNS, Store
@@ -103,6 +103,8 @@ def parse_filters(qs: dict[str, list[str]]) -> dict:
         filters["bbox"] = (w, s, e, n)
     # Weak leads (closed shop units, heritage ruins, caves, brownfield...) only when asked for.
     filters["min_score"] = 0 if one("weak") in ("1", "true", "yes") else WEAK_BELOW
+    if one("best") in ("1", "true", "yes"):     # config.BEST: the places worth the trip
+        filters["best"] = True
     cats = [c for c in one("categories").split(",") if c in CATEGORY_KEYS]
     if cats:
         filters["categories"] = cats
@@ -223,7 +225,7 @@ class App:
             return gzip.compress(json.dumps({"built": built, "unchanged": True}).encode("utf-8"))
         with self._index_lock:   # built once per rebuild, however many phones ask
             if not self._index or self._index[0] != built:
-                body = json.dumps({"built": built, "weak_below": WEAK_BELOW, "columns": INDEX_COLUMNS,
+                body = json.dumps({"built": built, "weak_below": WEAK_BELOW, "best": BEST, "columns": INDEX_COLUMNS,
                                    "rows": self.store.index_rows()}, ensure_ascii=False,
                                   separators=(",", ":")).encode("utf-8")
                 self._index = (built, gzip.compress(body, 6))

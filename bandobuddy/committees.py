@@ -59,7 +59,6 @@ FIRST_SINCE = date(2016, 1, 1)   # a first look goes back ten years; older paper
 OVERLAP_DAYS = 35                # later looks go back a few weeks before the last, for papers published late
 MAX_PAGES = 40                   # ten results a page
 MAX_REPORT_BYTES = 15 << 20      # a report is a few hundred kilobytes; whole agenda packs (with plans) aren't read
-POSTCODES_IO = "https://api.postcodes.io"
 _POSTCODE = re.compile(r"\b([A-Z]{1,2}\d[A-Z\d]?) ?(\d[A-Z]{2})\b")
 
 
@@ -244,26 +243,11 @@ def tidy_address(site: str) -> str:
 
 # -- finding the place -------------------------------------------------------------------------------
 
-def _postcode_point(session: requests.Session, postcode: str) -> tuple[float, float] | None:
-    """postcodes.io (open data from the ONS): the middle of a postcode, or of one since retired."""
-    for path in ("postcodes", "terminated_postcodes"):
-        try:
-            r = session.get(f"{POSTCODES_IO}/{path}/{quote(postcode)}", headers={"User-Agent": USER_AGENT},
-                            timeout=TIMEOUT)
-        except requests.RequestException:
-            return None
-        if r.status_code == 200:
-            res = r.json().get("result") or {}
-            if res.get("latitude") is not None:
-                return res["latitude"], res["longitude"]
-    return None
-
-
 def locate(session: requests.Session, site: str, council: str) -> tuple[float, float] | None:
     """Where a report's site is: the address itself where OpenStreetMap knows it (a house name finds the
     house), else the middle of its postcode. An address match far from its own postcode is somewhere else."""
     postcode = postcode_of(site)
-    near = _postcode_point(session, postcode) if postcode else None
+    near = geocode.postcode_point(session, postcode) if postcode else None
     address = tidy_address(site)
     try:
         hit = geocode.search(f"{address}, {postcode}" if postcode else f"{address}, {council}", session)

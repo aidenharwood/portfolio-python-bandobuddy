@@ -26,7 +26,7 @@ from urllib.parse import urljoin
 
 import requests
 
-from . import committees
+from . import committees, registers
 from .config import USER_AGENT
 from .geo import bng_to_wgs84
 from .osm import Cancelled
@@ -466,7 +466,8 @@ _FEATURE = re.compile("|".join(rx for rx, _, _ in RECORD_TYPES)
                       + r"|\btrack\b|\bbridge\b|chapel|church|\bhouse\b", re.I)
 _SMALL_WORDS = {"of", "the", "and", "on", "in", "at", "by", "upon", "y", "yr"}
 _ROMAN = re.compile(r"(?:i{1,3}|iv|vi{0,3}|ix|x)", re.I)
-_ACRONYMS = {"roc", "raf", "mod", "nhs", "rc", "usaf", "ymca", "ywca", "gpo", "lms", "gwr", "lner"}
+_ACRONYMS = {"roc", "raf", "mod", "nhs", "rc", "usaf", "ymca", "ywca", "gpo", "lms", "gwr", "lner", "hms", "acf",
+             "atc", "hq", "ahq", "sfa", "ltpa", "dmc", "jscs", "jitg", "camhs", "cic"}
 
 
 def _cased(word: str, first: bool) -> str:
@@ -896,6 +897,105 @@ def _a(thing: str) -> str:
     return f"{'an' if thing[:1].lower() in 'aeiou' else 'a'} {thing}"
 
 
+# -- closed care homes and hospitals, empty NHS sites, closed railways, MOD disposals --
+
+def _title(text: str) -> str:
+    """A name a register gives in capitals, as it'd be written: "ST GEORGE'S BARRACKS" -> "St George's Barracks"."""
+    if not text.isupper():
+        return text
+    return re.sub(r"[^\W\d_]+(?:['’][^\W\d_]+)?", lambda m: _cased(m.group(0), m.start() == 0), text.strip())
+
+
+def _years_since(day: str) -> float | None:
+    try:
+        return (date.today() - date.fromisoformat(day[:10])).days / 365.25
+    except (TypeError, ValueError):
+        return None
+
+
+def _cqc(row: dict) -> dict | None:
+    """A care home or hospital the Care Quality Commission no longer regulates, with nothing registered there
+    since: the building's empty, or turned into something else (the more years, the likelier)."""
+    said = f"{row['name']} {row['category']}"
+    if row["care_home"]:
+        kind = "nursing home" if re.search(r"nursing", said, re.I) else "care home"
+        weight, what = (20 if row["beds"] >= 40 else 16), f"{_a(kind)} with {row['beds']} beds"
+    else:
+        kind = "hospice" if re.search(r"hospice", said, re.I) else "hospital"
+        weight, what = 20, _a(kind)
+    years = _years_since(row["ended"])
+    if years is not None and years <= 5:
+        weight += 4
+    elif years is not None and years > 12:
+        weight = min(weight, 8)
+    elif years is not None and years > 8:
+        weight -= 6
+    return {"ref": row["ref"], "name": row["name"], "kind": kind, "weight": weight,
+            "evidence": f"The Care Quality Commission records it as closed in {row['ended'][:4]} ({what}); "
+                        "no care service is registered there now",
+            "url": f"https://www.cqc.org.uk/location/{row['ref']}"}
+
+
+def _nhs_estate(row: dict) -> dict | None:
+    """An NHS site its trust reports as wholly unoccupied, or mostly standing empty."""
+    name = _title(row["name"])
+    if re.match(r"other reportable sites?$", name, re.I):     # unnamed in the return: say whose it is
+        name = f"Empty site of {_title(row['trust'])}"[:80]
+    kind = "hospital" if re.search(r"hospital|infirmary|asylum|sanatori", name, re.I) else "NHS building"
+    if row["whole"]:
+        area = row["unoccupied_m2"] or row["floor_m2"]
+        said = f"NHS estates return ({row['year']}): the whole site{f' ({int(area):,} m²)' if area else ''} is unoccupied"
+        weight = 22 + (4 if row.get("pre_1948", 0) >= 50 else 0)
+    else:
+        said = (f"NHS estates return ({row['year']}): {int(row['empty_m2']):,} of its {int(row['floor_m2']):,} m² "
+                "stand empty")
+        weight = 18
+    return {"ref": row["ref"], "name": name, "kind": kind, "weight": weight, "evidence": said, "url": None}
+
+
+def _railway_estate(row: dict) -> dict | None:
+    """A tunnel or viaduct on a closed railway, looked after by National Highways."""
+    tunnel = row["kind"] == "tunnel"
+    kind = "railway tunnel" if tunnel else "railway viaduct"
+    line = f" ({row['line']})" if row.get("line") else ""
+    name = row["name"] or f"{kind.capitalize()}{line}"
+    reused = row.get("path") in ("Railway Path", "Sustrans")
+    said = f"National Highways' Historical Railways Estate: {_a(row['kind'])} on a closed railway{line}"
+    if reused:
+        said += "; the line is now a path, so it has a new use"
+    weight = 10 if reused else 26 if tunnel else 14
+    return {"ref": row["ref"], "name": name, "kind": kind, "weight": weight, "evidence": said, "url": None}
+
+
+_MOD_KINDS = [(re.compile(p, re.I), k) for p, k in (
+    (r"\bmess(?:es)?\b", "officers' mess"), (r"\bacf\b|\batc\b|cadet", "cadet hut"), (r"barracks", "barracks"),
+    (r"\braf\b|airfield|air station|aerodrome", "airfield"), (r"\branges?\b", "firing range"),
+    (r"camp\b", "military camp"), (r"depot|distribution|stores?\b", "military depot"),
+    (r"school|college|academy", "military school"), (r"married quarters|\bhousing\b|\bsfa\b", "military housing"),
+    (r"hospital", "military hospital"), (r"\bfort\b|citadel", "fort"))]
+
+
+def _mod(row: dict) -> dict | None:
+    """A site the Ministry of Defence is disposing of: given up already, or due to be."""
+    establishment, parcel = _title(row["establishment"]), _title(row["parcel"])
+    name = establishment if not parcel or parcel.lower() in (establishment.lower(), "various parcels") \
+        else parcel if establishment.lower() in parcel.lower() else f"{parcel}, {establishment}"
+    kind = next((k for text in (parcel, establishment) for rx, k in _MOD_KINDS if rx.search(text)), "military site")
+    year = int(row["year"]) if (row.get("year") or "").isdigit() else None
+    if year and year <= date.today().year:
+        said, weight = f"The Ministry of Defence lists it as surplus, to be sold from {year}", 18
+    elif year:
+        said, weight = f"The Ministry of Defence is due to close it and sell it from {year}", 8
+    else:
+        said, weight = "The Ministry of Defence lists it as surplus, to be sold", 8
+    if kind == "cadet hut":         # a hut in a town: not much to see
+        weight = min(weight, 8)
+    status = (row.get("status") or "").strip().lower()
+    return {"ref": row["ref"], "name": name[:90], "kind": kind, "weight": weight,
+            "evidence": said + (f" (stage: {status})" if status else ""),
+            "url": "https://www.gov.uk/government/publications/disposal-database-house-of-commons-report"}
+
+
 CANMORE_TERMS = ("OBSERVATION POST", "BUNKER", "PILLBOX", "BATTERY", "AIRFIELD", "AERODROME", "COLLIERY",
                  "MINE", "QUARR", "ADIT", "TUNNEL", "VIADUCT", "RAILWAY STATION", "MILL", "FACTORY", "FOUNDRY",
                  "BREWERY", "DISTILLERY", "ENGINE HOUSE", "IRONWORKS", "BRICKWORKS", "GASWORKS", "STEELWORKS",
@@ -976,6 +1076,48 @@ DATASETS = {
             judge=_committee,
             incremental=True,
             opt_in=True,
+            remembers=True,
+        ),
+        Dataset(
+            key="care_closures",
+            label="Closed care homes & hospitals (England)",
+            licence="Open Government Licence v3.0",
+            attribution="Contains Care Quality Commission data © CQC",
+            home="https://www.cqc.org.uk/about-us/transparency/using-cqc-data",
+            fetch=registers.CqcClosures(),
+            judge=_cqc,
+            remembers=True,
+        ),
+        Dataset(
+            key="nhs_estates",
+            label="Empty NHS sites (England)",
+            licence="Open Government Licence v3.0",
+            attribution="Contains NHS England data (Estates Returns Information Collection)",
+            home="https://digital.nhs.uk/data-and-information/publications/statistical/"
+                 "estates-returns-information-collection",
+            fetch=registers.NhsEstates(),
+            judge=_nhs_estate,
+            remembers=True,
+            opt_in=True,       # its file host's robots.txt turns away every robot: the owner's call to make
+        ),
+        Dataset(
+            key="railway_estate",
+            label="Closed railway tunnels & viaducts",
+            licence="Published by National Highways (Historical Railways Estate)",
+            attribution="Contains National Highways information (Historical Railways Estate structures)",
+            home="https://nationalhighways.co.uk/our-work/historical-railways-estate/about-the-hre/",
+            fetch=registers.RailwayEstate(),
+            judge=_railway_estate,
+            remembers=True,
+        ),
+        Dataset(
+            key="mod_disposals",
+            label="MOD sites being disposed of",
+            licence="Open Government Licence v3.0",
+            attribution="Contains Ministry of Defence data (Disposal Database)",
+            home="https://www.gov.uk/government/publications/disposal-database-house-of-commons-report",
+            fetch=registers.MoDisposals(),
+            judge=_mod,
             remembers=True,
         ),
         Dataset(

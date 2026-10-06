@@ -46,8 +46,8 @@ CATEGORIES = [
     # A hatch in a field: ROC monitoring posts, bunkers and pillboxes are their own kind of trip.
     ("bunkers", "Bunkers & ROC posts", r"bunker|pillbox|\broc\b|observation post|observer corps|monitoring post"
                                        r"|blockhouse|air[- ]raid shelter|nuclear"),
-    ("military", "Military", r"military|barracks|\bfort\b|air[- ]raid|anti[- ]aircraft|aeroway|aerodrome|airfield"
-                             r"|\braf\b|firing range|searchlight|gun emplacement|decoy|\bbattery\b"),
+    ("military", "Military", r"military|ministry of defence|barracks|\bfort\b|air[- ]raid|anti[- ]aircraft|aeroway"
+                             r"|aerodrome|airfield|air force|air base|\braf\b|firing range|searchlight|gun emplacement|decoy|\bbattery\b"),
     ("mines", "Mines & quarries", r"\bmines?\b|\badit|shaft|quarr|colliery|workings"),
     ("tunnels", "Tunnels & caves", r"tunnel|\bcaves?\b|cave entrance|catacomb|underground"),
     ("rail", "Railways", r"railway|train station|\bhalt\b|viaduct|signal box|platform|\brail\b|tramway"),
@@ -60,7 +60,7 @@ CATEGORIES = [
                                         r"|congregational|minster|mission hall"),
     ("institutional", "Hospitals & schools", r"hospital|asylum|sanator|infirmary|\bschool|college|university|prison"
                                              r"|gaol|\bjail|workhouse|orphanage|courthouse|police|fire station|town hall"
-                                             r"|library|institute|clinic|nursing|care home|almshouse"),
+                                             r"|library|institute|clinic|nursing|care home|almshouse|\bnhs\b|hospice"),
     ("leisure", "Shops & leisure", r"\bshop|\bpub\b|\binn\b|hotel|motel|cinema|movie|theat|lido|swimming|\bpool\b"
                                    r"|bowling|amusement|casino|night ?club|restaurant|\bcafe|\bbank\b|supermarket"
                                    r"|\bmall\b|retail|commercial|office|fuel|petrol|filling station|toilets|\bclub\b"
@@ -76,3 +76,23 @@ OTHER_CATEGORY = ("other", "Other")
 # the map is zoomed out.
 STRENGTHS = [(35, "strong"), (20, "good"), (0, "weak")]
 WEAK_BELOW = 20
+
+# "Best spots": somewhere still standing to go and see, with good evidence it's empty or derelict. Not bare land,
+# a capped shaft or a quarry hole, a shop unit, a place open to visitors, or a register entry that only says what
+# something is. Unnamed places only where that's normal (bunkers, tunnels, military sites, caves). The phone's copy
+# of the map is sent these too, so it answers exactly as the server does.
+BEST = {
+    "min_score": WEAK_BELOW,
+    "conditions": ["Abandoned", "Disused", "Ruin", "At risk", "Empty", "Unfinished", "Old military", "Cave",
+                   "Demolition approved", "Closing"],      # ...and "Closed 1998" and the like
+    "skip_kinds": ["brownfield land", "brownfield", "vacant land", "telephone", "public bookcase", "petroleum well",
+                   "old workings", "spoil heap", "mine shaft", "mineshaft", "shaft", "air shaft", "quarry", "mine dump",
+                   "slag heap", "heap", "pit", "retail", "kiosk", "restaurant", "cafe", "fast food", "bank", "newsagent",
+                   "convenience", "supermarket", "clothes", "hairdresser", "beauty", "estate agent", "bookmaker",
+                   "betting", "takeaway", "charity", "butcher", "bakery", "florist", "pharmacy", "chemist", "optician",
+                   "travel agency", "mobile phone", "shoes", "furniture", "jewelry", "gift", "books", "laundry",
+                   "dry cleaning", "car repair", "tyres", "car parts", "doityourself", "hardware", "variety store",
+                   "department store", "electronics", "pet", "tattoo", "nails", "massage", "greengrocer", "deli",
+                   "alcohol", "off licence", "ice cream", "cafe;restaurant", "vacant"],
+    "unnamed_ok": ["bunkers", "tunnels", "military"],
+}

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import re
 
 EARTH_RADIUS_M = 6_371_008.8
 
@@ -132,6 +133,26 @@ def grid_ref(lat: float, lng: float, digits: int = 8) -> str | None:
     half = digits // 2
     e, n = int(easting % 100_000) // 10 ** (5 - half), int(northing % 100_000) // 10 ** (5 - half)
     return f"{_GRID_LETTERS[first]}{_GRID_LETTERS[second]} {e:0{half}d} {n:0{half}d}"
+
+
+def grid_ref_to_bng(ref: str) -> tuple[float, float] | None:
+    """"SN693694" or "HT 97429 38889" to grid metres (easting, northing): the middle of the square the
+    reference names, so a six-figure one is placed to within 50 m. None if it isn't a grid reference."""
+    m = re.fullmatch(r"([A-HJ-Z]{2})\s*(\d+)\s*(\d*)", (ref or "").strip().upper())
+    if not m:
+        return None
+    letters, a, b = m.groups()
+    if not b:
+        a, b = a[:len(a) // 2], a[len(a) // 2:]
+    if len(a) != len(b) or not 1 <= len(a) <= 5:
+        return None
+    first, second = _GRID_LETTERS.index(letters[0]), _GRID_LETTERS.index(letters[1])
+    e100k = ((first - 2) % 5) * 5 + second % 5
+    n100k = (19 - first // 5 * 5) - second // 5
+    if not (0 <= e100k < 7 and 0 <= n100k < 13):
+        return None
+    size = 10 ** (5 - len(a))
+    return e100k * 100_000 + int(a) * size + size / 2, n100k * 100_000 + int(b) * size + size / 2
 
 
 # Rough outlines, (longitude, latitude), good to a kilometre or two along the borders: enough to pick

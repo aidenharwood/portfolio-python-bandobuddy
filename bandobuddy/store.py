@@ -16,6 +16,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Iterator
 
+from .config import BEST
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS osm_items (
     osm_id TEXT PRIMARY KEY, lat REAL, lng REAL, tags TEXT,
@@ -332,8 +334,18 @@ class Store:
                               [*args, after, limit])
             return [_decode_site(r) for r in rows]
 
-    def _site_filter(self, bbox=None, min_score=0, categories=None, sources=None, added_since=None, q=None):
-        where, args = ["score >= ?"], [min_score]
+    def _site_filter(self, bbox=None, min_score=0, categories=None, sources=None, added_since=None, q=None,
+                     best=False):
+        where, args = ["score >= ?"], [max(min_score, BEST["min_score"]) if best else min_score]
+        if best:   # config.BEST: standing, empty or derelict, and somewhere to go and see
+            where.append(f"(condition IN ({','.join('?' * len(BEST['conditions']))})"
+                         " OR condition GLOB 'Closed [0-9][0-9][0-9][0-9]')")
+            args += BEST["conditions"]
+            where.append(f"LOWER(kind) NOT IN ({','.join('?' * len(BEST['skip_kinds']))})")
+            args += BEST["skip_kinds"]
+            where.append(f"(name NOT LIKE 'Unnamed %' OR kind = 'cave entrance'"
+                         f" OR category IN ({','.join('?' * len(BEST['unnamed_ok']))}))")
+            args += BEST["unnamed_ok"]
         if bbox:
             w, s, e, n = bbox
             where += ["lat BETWEEN ? AND ?", "lng BETWEEN ? AND ?"]

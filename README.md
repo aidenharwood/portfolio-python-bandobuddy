@@ -90,6 +90,7 @@ docker build --target test .
 | `BANDOBUDDY_NO_AUTO_UPDATE` | off | Don't refresh the data on a schedule |
 | `BANDOBUDDY_PLANIT` | off (on in `run.bat`) | Also sweep UK PlanIt weekly for demolition applications (see below) |
 | `BANDOBUDDY_COMMITTEES` | off (on in `run.bat`) | Also read councils' planning committee reports weekly (see below) |
+| `BANDOBUDDY_NHS_ESTATES` | off | Also read NHS England's estates return for empty NHS sites (see below: its file host asks robots to stay away) |
 
 The refresh interval (7 days by default) is set in the app's **Data** panel, or with `bandobuddy update` from any scheduler. `/healthz` returns `{"ok": true, ...}` for container and Kubernetes health checks.
 
@@ -182,13 +183,17 @@ Wi-Fi is set to a *Private* network.
 | Source | Covers | Licence | What it brings |
 |---|---|---|---|
 | [OpenStreetMap](https://www.openstreetmap.org/copyright) | UK | ODbL | Lifecycle tags (`abandoned:*`, `disused:*`, ruins), old mines, bunkers, dead railway tunnels |
-| [Wikidata / Wikipedia](https://www.wikidata.org) | UK | CC0 / CC BY-SA | State of use, closure dates, and what the article says about a place |
+| [Wikidata / Wikipedia](https://www.wikidata.org) | UK | CC0 / CC BY-SA | State of use, closure dates, barracks and airfields, and what the article says about a place |
 | [Heritage at Risk](https://opendata-historicengland.hub.arcgis.com/) (Historic England) | England | OGL v3 | Listed buildings and scheduled monuments recorded as at risk |
 | [Canmore](https://canmore.org.uk/) (Historic Environment Scotland) | Scotland | OGL v3 | Observation posts, pillboxes, collieries, quarries, mills and the rest of the national record |
 | [Coflein](https://coflein.gov.uk/) (RCAHMW) | Wales | OGL v2 | The same for the National Monuments Record of Wales |
 | [Brownfield registers](https://www.planning.data.gov.uk/dataset/brownfield-land) | England | OGL v3 | Vacant and derelict land councils have registered |
 | [Get Information about Schools](https://www.get-information-schools.service.gov.uk/) (DfE) | England | OGL v3 | Schools that closed for good, and when |
 | [Vacant and Derelict Land Survey](https://www.gov.scot/publications/the-scottish-vacant-and-derelict-land-survey-site-register/) | Scotland | OGL v3 | Derelict sites and empty buildings, what they used to be and since when |
+| [Care Quality Commission](https://www.cqc.org.uk/about-us/transparency/using-cqc-data) closed locations | England | OGL v3 | Care homes and hospitals that closed, with nothing registered at the address since |
+| [Historical Railways Estate](https://nationalhighways.co.uk/our-work/historical-railways-estate/about-the-hre/) (National Highways) | Great Britain | Published by National Highways | Tunnels and viaducts on railway lines closed long ago |
+| [MOD disposals](https://www.gov.uk/government/publications/disposal-database-house-of-commons-report) | UK | OGL v3 | Barracks, airfields, ranges and depots the Ministry of Defence has given up or is giving up |
+| [NHS estates return (ERIC)](https://digital.nhs.uk/data-and-information/publications/statistical/estates-returns-information-collection) (optional, off by default) | England | OGL v3 | NHS sites standing wholly or mostly empty |
 | [UK PlanIt](https://www.planit.org.uk/) (optional, off by default) | UK | Planning register data | Applications to demolish buildings described as derelict, empty or redundant; applications that call a building derelict or falling down; houses begun and never finished |
 | Planning committee reports (optional, off by default) | 195 councils | Council papers, mostly OGL | A planning officer's own sentence saying the building on a site stands empty, unfinished or derelict |
 
@@ -212,6 +217,32 @@ site of 0.1 ha or more, with what it used to be and since when. Derelict sites a
 (more so for old defence, mining, industrial, school, hospital and hotel sites); cleared vacant plots are weaker
 leads. Owners aren't kept. The register's page asks that councils, who own the data, are asked before any use that
 could infringe their copyright.
+
+**Closed care homes and hospitals.** The Care Quality Commission publishes, monthly, every care home, hospital
+and clinic it has stopped regulating (a 27 MB spreadsheet, read as it streams in), beside its directory of everything
+registered now. A closure only counts if the building closed: a change of owner ends one registration and starts
+another at the same address, so anything with a service registered there now is left out, and of several
+registrations at one building only the last counts. Care homes with fewer than 20 beds, ordinary houses that go back
+to being homes, are left out too. Recent closures are the strongest leads; a care home that closed more than twelve
+years ago has usually been converted or knocked down, so it's a weak one. That's about 2,800 places. The files are
+read again only when CQC publishes new ones.
+
+**Closed railways' tunnels and viaducts.** National Highways looks after what's left of railway lines closed long
+ago (the Historical Railways Estate) and publishes a list of the structures with grid references. Its tunnels and
+viaducts are kept, about 150 and 90, but not the road bridges. Those on a line that's a cycle path now are weaker
+leads. Many of the tunnels are sealed or partly filled in, and the list doesn't say which.
+
+**The MOD's disposals.** The Ministry of Defence gives Parliament a list of the sites it's disposing of, each with the
+year it's released: barracks, airfields, ranges, depots and officers' messes. The list has no positions, so each is
+found by its name and town with Nominatim, a second apart, and only once. Bare land (fields, training areas, playing
+fields) is left out. Sites already released are leads; those due to go in a later year are weak until then and show
+as *Closing*. Wikidata's barracks and airfields are read too, as faint leads for their Wikipedia articles to settle.
+
+**Empty NHS sites, optional.** NHS England's yearly estates return lists every NHS site with how much of it is
+unoccupied. Sites reported as wholly unoccupied, and those where at least half the floor (and 1,000 m² or more)
+stands empty, are placed by postcode: about 50, old ones built before 1948 counting for more. The file is on
+files.digital.nhs.uk, whose robots.txt asks every robot to stay away, so it's off unless you set
+`BANDOBUDDY_NHS_ESTATES=1` or run `bandobuddy update --source nhs_estates` yourself. That's one download a year.
 
 **Planning applications (UK PlanIt), optional.** PlanIt gathers planning applications from council websites. It's
 one person's free service and asks for no more than a request a minute, so bandobuddy asks only for applications to
@@ -359,6 +390,18 @@ Places with only weak evidence are **weaker leads**: hidden unless you turn on *
 (or pass `--include-weak` to `bandobuddy export`). Stronger places win when the map is zoomed out, and are marked
 *Strong evidence*.
 
+**Best spots only**, on by default, narrows the map to places worth the trip. That means somewhere still standing,
+with good evidence it's abandoned, disused, ruined, empty, unfinished, at risk, closed (*Closed 2019*) or closing,
+or an old military site or a cave. It leaves out:
+
+- bare land: brownfield and cleared plots
+- capped shafts, spoil heaps and quarry holes
+- shop units and kiosks, phone boxes and book swaps
+- unnamed places, except bunkers, tunnels, military sites and caves, which often have no name
+
+Turn it off to see everything again, including *Show weaker leads*. The rules are in `config.BEST`, and the phone's
+copy of the map applies the same ones.
+
 **A place can have several ways in.** Cave entrances, adits and shafts that belong to a place are listed with it
 rather than as pins of their own: one joins a place within 400 m that shares a distinctive part of its name (or of
 one of its other names), and an unnamed one joins only what it's right beside. Open a place and each entrance is
@@ -392,6 +435,9 @@ those outlines (or within 15 m of one mapped as a point, 40 m if it shares the n
   around a place when someone opens it, one request at a time and cached for a week.
 - Map tiles come from OpenStreetMap and OpenTopoMap, plus Esri imagery (free to use, not open data). LiDAR relief
   comes from the Environment Agency, the Scottish Government and the Welsh Government (Open Government Licence).
+- Closed care homes and hospitals, the MOD's disposals and empty NHS sites contain public sector information
+  from the Care Quality Commission, the Ministry of Defence and NHS England, licensed under the Open Government
+  Licence v3.0. The Historical Railways Estate list is published by National Highways.
 - Planning committee reports are quoted a sentence at a time from councils' own papers, with a link to each.
   Postcodes are located with [postcodes.io](https://postcodes.io) (ONS data, OGL).
 - The app queries these community services politely: one Wikidata query at a time with pauses, Nominatim at most once a second, and repeat look-ups cached.

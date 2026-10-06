@@ -76,7 +76,7 @@ self.LocalDB = (() => {
     const tx = db.transaction(["squares", "meta"], "readwrite");
     tx.objectStore("squares").clear();
     for (const [key, rows] of squares) tx.objectStore("squares").put(rows, key);
-    tx.objectStore("meta").put({ built: data.built, weak_below: data.weak_below, columns: data.columns,
+    tx.objectStore("meta").put({ built: data.built, weak_below: data.weak_below, best: data.best || null, columns: data.columns,
                                  count: data.rows.length, squares: [...squares.keys()], at: Date.now() }, "index");
     await finished(tx);
     held.clear();
@@ -200,7 +200,10 @@ self.LocalDB = (() => {
   function filterOf(meta, params) {
     const c = Object.fromEntries(meta.columns.map((name, i) => [name, i]));
     const weak = ["1", "true", "yes"].includes((params.get("weak") || "").trim());
-    const minScore = weak ? 0 : meta.weak_below;
+    const best = ["1", "true", "yes"].includes((params.get("best") || "").trim()) && meta.best;
+    const minScore = best ? Math.max(weak ? 0 : meta.weak_below, best.min_score) : weak ? 0 : meta.weak_below;
+    const bestConditions = best && new Set(best.conditions);
+    const skipKinds = best && new Set(best.skip_kinds);
     const bbox = parseBbox(params.get("bbox"));
     const cats = (params.get("categories") || "").split(",").filter(Boolean);
     const srcs = (params.get("sources") || "").split(",").filter(Boolean);
@@ -217,6 +220,13 @@ self.LocalDB = (() => {
       if (since && !(row[c.added] && row[c.added] > since)) return false;
       if (q && !(row[c.name] || "").toLowerCase().includes(q)
           && !(row[c.aliases] || []).some(a => a.toLowerCase().includes(q))) return false;
+      if (best) {   // store.py's best spots (config.BEST)
+        const cond = row[c.condition] || "";
+        if (!bestConditions.has(cond) && !/^Closed \d{4}$/.test(cond)) return false;
+        if (skipKinds.has((row[c.kind] || "").toLowerCase())) return false;
+        if ((row[c.name] || "").startsWith("Unnamed ") && row[c.kind] !== "cave entrance"
+            && !best.unnamed_ok.includes(row[c.category])) return false;
+      }
       return true;
     };
     return { c, bbox, test };
@@ -326,6 +336,7 @@ self.LocalDB = (() => {
     }
     const meta = await index();
     if (!meta) return null;
+    if (searchParams.get("best") && !meta.best) return null;   // kept before best spots: ask the server
     const result = pathname === "/api/map" ? await mapView(meta, searchParams)
       : pathname === "/api/list" ? await list(meta, searchParams) : null;
     return result && { ...result, version: null, built: meta.built, local: meta.built };

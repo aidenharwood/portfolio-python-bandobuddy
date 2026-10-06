@@ -4,6 +4,8 @@ from __future__ import annotations
 import threading
 import time
 
+from urllib.parse import quote
+
 import requests
 
 from .config import USER_AGENT
@@ -11,6 +13,23 @@ from .config import USER_AGENT
 NOMINATIM = "https://nominatim.openstreetmap.org/search"
 _lock = threading.Lock()
 _last = 0.0
+
+
+POSTCODES_IO = "https://api.postcodes.io"
+
+
+def postcode_point(session: requests.Session, postcode: str) -> tuple[float, float] | None:
+    """postcodes.io (open data from the ONS): the middle of a postcode, or of one since retired."""
+    for path in ("postcodes", "terminated_postcodes"):
+        try:
+            r = session.get(f"{POSTCODES_IO}/{path}/{quote(postcode)}", headers={"User-Agent": USER_AGENT}, timeout=30)
+        except requests.RequestException:
+            return None
+        if r.status_code == 200:
+            res = r.json().get("result") or {}
+            if res.get("latitude") is not None:
+                return res["latitude"], res["longitude"]
+    return None
 
 
 def search(q: str, session: requests.Session) -> dict | None:

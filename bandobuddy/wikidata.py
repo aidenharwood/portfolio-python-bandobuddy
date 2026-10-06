@@ -20,9 +20,12 @@ INTRO_BATCH = 20  # the extracts API only returns intros for 20 pages per reques
 
 # Server-side prefilter, so dense towns (thousands of listed buildings) don't blow the row limit.
 NAME_RX = (r"quarr|\bmines?\b|colliery|tunnel|bunker|pillbox|\bfort\b|asylum|sanatori|workhouse|\bmills?\b"
-           r"|factory|brewery|\bruins?\b|former|disused|abandoned|derelict|\bcaves?\b|\badit\b|\bshafts?\b")
+           r"|factory|brewery|\bruins?\b|former|disused|abandoned|derelict|\bcaves?\b|\badit\b|\bshafts?\b"
+           r"|barracks|airfield|aerodrome|\braf\b|air base")
 TYPE_RX = (r"quarr|\bmines?\b|colliery|tunnel|bunker|pillbox|\bfort\b|asylum|sanatori|workhouse|\bmill"
-           r"|factory|brewery|ruin|abandon|former|disused|decommission|\bcaves?\b")
+           r"|factory|brewery|ruin|abandon|former|disused|decommission|\bcaves?\b"
+           r"|barracks|air base|airfield|aerodrome|military base|military installation|army camp|naval base"
+           r"|royal air force station")
 
 # --- classification -------------------------------------------------------------------------
 
@@ -50,7 +53,11 @@ FORMER = re.compile(r"^former\b|\(former|\bformerly\b", re.I)
 BUILDINGISH = re.compile(
     r"mill|factory|brewery|\bworks\b|school|hospital|asylum|sanatori|workhouse|chapel|church|cinema|movie theater"
     r"|theatre|station|institute|\bstore\b|warehouse|engine house|drying house|pump(?:ing)? house|boiler house"
-    r"|barracks|prison|gaol|hotel|colliery|power station|tunnel", re.I)
+    r"|barracks|prison|gaol|hotel|colliery|power station|tunnel|air base|airfield|aerodrome|military base"
+    r"|military installation|royal air force station|naval base|army camp", re.I)
+# A barracks or airfield with no closing date or state: a faint lead, for its Wikipedia article to settle.
+MILITARY = re.compile(r"barracks|air base|airfield|aerodrome|military base|military installation"
+                      r"|royal air force station|naval base|army camp", re.I)
 MILL_TYPES = re.compile(r"mill|factory|brewery|industrial building|\bworks\b", re.I)
 
 # Wikipedia intro language
@@ -70,7 +77,8 @@ WIKI_DEAD = re.compile(
     r"\b(?:disused|abandoned|derelict|now[- ]closed|closed down|ruined|ruins of|lies in ruins"
     r"|vacant|mothballed|decommissioned|out of use|no longer used|fell into disuse"
     r"|was an? (?:railway station|station|school|hospital|mine|quarry|factory|mill|brewery|cinema|church|chapel"
-    r"|colliery|asylum|workhouse))\b", re.I)
+    r"|colliery|asylum|workhouse|royal air force station|raf station|airfield|air base|military base|barracks))\b",
+    re.I)
 
 
 def classify(label: str, types: list[str], states: list[str], ended: str | None) -> tuple[str, int, str] | None:
@@ -106,6 +114,8 @@ def classify(label: str, types: list[str], states: list[str], ended: str | None)
         return "Wikidata: tunnel", 10, kind or "tunnel"
     if MILL_TYPES.search(joined):
         return "Wikidata: historic mill or factory", 10, kind
+    if MILITARY.search(joined):
+        return "Wikidata: military site", 5, kind or "military site"
     return None
 
 
