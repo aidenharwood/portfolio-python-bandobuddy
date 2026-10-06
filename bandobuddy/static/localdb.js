@@ -18,6 +18,7 @@ self.LocalDB = (() => {
   const LIST_LIMIT = 100;       // webapp.py
   const EARTH_RADIUS_M = 6371008.8;
   const HELD_SQUARES = 60;      // 1° squares of the index held in memory between questions
+  const CURRENT_FOR_MS = 30 * 60e3;   // how long the server's last word on its map is trusted for
   const LISTED = ["key", "name", "lat", "lng", "score", "strength", "category", "condition", "kind", "sources",
                   "added", "aliases", "entrance_count"];
 
@@ -133,6 +134,21 @@ self.LocalDB = (() => {
     tx.objectStore("meta").put(Date.now(), key);
     await finished(tx);
     return true;
+  }
+
+  /** What the server last said its map was built from (the page notes it with every status check). */
+  async function noteServer(built) {
+    if (!built) return;
+    const db = await open();
+    const tx = db.transaction("meta", "readwrite");
+    tx.objectStore("meta").put({ built, at: Date.now() }, "server");
+    await finished(tx);
+  }
+
+  /** The copy on the phone is the server's map as it stands: answer from it first, it's quicker. */
+  async function current() {
+    const [meta, server] = await Promise.all([index(), read("meta", "server")]);
+    return !!(meta && server && meta.built === server.built && Date.now() - server.at < CURRENT_FOR_MS);
   }
 
   async function clear() {
@@ -312,8 +328,8 @@ self.LocalDB = (() => {
     if (!meta) return null;
     const result = pathname === "/api/map" ? await mapView(meta, searchParams)
       : pathname === "/api/list" ? await list(meta, searchParams) : null;
-    return result && { ...result, version: null, local: meta.built };
+    return result && { ...result, version: null, built: meta.built, local: meta.built };
   }
 
-  return { putIndex, index, touchIndex, putDetails, detail, missing, counts, once, clear, respond };
+  return { putIndex, index, touchIndex, putDetails, detail, missing, counts, once, clear, respond, noteServer, current };
 })();

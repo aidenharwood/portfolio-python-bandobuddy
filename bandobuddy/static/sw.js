@@ -4,8 +4,10 @@
  * - every map tile you've looked at is kept (tens of thousands of them: only ever what you actually
  *   viewed, which is what OpenStreetMap's tile policy allows)
  * - every place in brief, and the full details of places in the areas you've looked around, are kept
- *   in localdb.js; with no signal (or a very weak one) the map, the list, search and a place's page are
- *   answered from there, the same way the server would answer them
+ *   in localdb.js; the map, the list, search and a place's page are answered from there, the same way
+ *   the server would answer them: first, whenever that copy matches the server's map (it's quicker than
+ *   asking), and with no signal (or a very weak one) whatever its age
+ * - the app itself opens from its kept copy, and checks for a newer one behind the scenes
  * - "Getting there", street photos and town or postcode searches are kept too, once you've used them
  *
  * __VERSION__ is filled in by the server, so a new release retires the old caches.
@@ -159,8 +161,26 @@ async function haveIndex() {
   try { return !!(await LocalDB.index()); } catch (_) { return false; }
 }
 
-// The map and the list: the server when it answers, otherwise the copy of every place on the phone.
+async function copyIsCurrent() {
+  try { return await LocalDB.current(); } catch (_) { return false; }
+}
+
+// Answered from the phone, and it's as new as the server's: say so, so the page treats it as the real thing.
+async function fromPhoneFirst(url) {
+  const answer = await fromPhone(url);
+  if (!answer) return null;
+  const headers = new Headers(answer.headers);
+  headers.set("X-Bandobuddy-Local", "current");
+  return new Response(answer.body, { status: 200, headers });
+}
+
+// The map and the list: the copy on the phone when it's the server's map as it stands (quicker than asking);
+// otherwise the server when it answers, and the copy on the phone when it doesn't.
 async function view(request) {
+  if (await copyIsCurrent()) {
+    const answer = await fromPhoneFirst(request.url);
+    if (answer) return answer;
+  }
   const local = await haveIndex();
   const cache = await caches.open(DATA);
   try {
@@ -180,10 +200,17 @@ async function view(request) {
   }
 }
 
-// One place: the server when it answers (and keep what it says), otherwise what the phone knows.
-async function place(request) {
+// One place: what the phone kept, straight away, while the server's newer word is fetched and kept for next
+// time; or the server, when nothing's kept (and keep what it says); otherwise what the phone knows.
+async function place(request, event) {
   const kept = LocalDB.detail(decodeURIComponent(new URL(request.url).pathname.slice("/api/site/".length)))
     .catch(() => null);
+  if (await kept && navigator.onLine) {
+    event.waitUntil(fetch(request).then(r => (r.ok ? r.json() : null))
+      .then(site => site && LocalDB.putDetails([site])).catch(() => {}));
+    const answer = await fromPhoneFirst(request.url);
+    if (answer) return answer;
+  }
   try {
     const response = await patience(fetch(request), (await kept) ? SLOW_MS : 0);
     if (response.status >= 500 && await kept) throw new Error(`server ${response.status}`);
@@ -213,6 +240,21 @@ async function photo(request) {
   return response;
 }
 
+// Kept answers straight away, refreshed behind the scenes for next time ("Getting there", photo lists).
+async function keptFirst(request, cacheName, event) {
+  const cache = await caches.open(cacheName);
+  const hit = await cache.match(request);
+  const fresh = fetch(request).then(async response => {
+    if (response.ok) await keep(cache, cacheName, DATA_LIMIT, request, response.clone());
+    return response;
+  });
+  if (hit) {
+    event.waitUntil(fresh.catch(() => {}));
+    return hit;
+  }
+  return fresh.catch(() => offlineAnswer());
+}
+
 async function networkFirst(request, cacheName) {
   const cache = await caches.open(cacheName);
   try {
@@ -233,13 +275,23 @@ border:0;border-radius:10px;background:#fb923c;color:#1a1206;font:inherit;font-w
 Open it once with a signal and it'll work offline after that.</p>
 <button onclick="location.reload()">Try again</button></div></body></html>`;
 
-async function page(request) {
+async function page(request, event) {
   const cache = await caches.open(SHELL);
-  try {
-    const response = await fetch(request);
-    // Keep the freshest copy of the app itself, so it opens offline as you last saw it.
-    if (response.ok && new URL(request.url).pathname === "/") await cache.put("/", response.clone());
+  const home = new URL(request.url).pathname === "/";
+  // Keep the freshest copy of the app itself, so it opens offline as you last saw it.
+  const fresh = fetch(request).then(async response => {
+    if (response.ok && home) await cache.put("/", response.clone());
     return response;
+  });
+  if (home) {   // open the kept copy straight away; the newer one fetched now is used next time
+    const kept = await cache.match("/");
+    if (kept) {
+      event.waitUntil(fresh.catch(() => {}));
+      return kept;
+    }
+  }
+  try {
+    return await fresh;
   } catch (err) {
     return (await cache.match("/")) || (await caches.match("/"))
       || new Response(OFFLINE_PAGE, { status: 503, headers: { "Content-Type": "text/html; charset=utf-8" } });
@@ -259,7 +311,7 @@ self.addEventListener("fetch", event => {
   const ours = url.origin === self.location.origin;
 
   if (request.mode === "navigate") {
-    event.respondWith(page(request));
+    event.respondWith(page(request, event));
   } else if (TILE_HOSTS.some(host => url.hostname.endsWith(host)) || (ours && url.pathname.startsWith("/lidar/"))) {
     event.respondWith(cacheFirst(request, TILES, TILE_LIMIT));
   } else if (url.hostname === "unpkg.com" || (ours && url.pathname.startsWith("/static/"))) {
@@ -267,8 +319,10 @@ self.addEventListener("fetch", event => {
   } else if (ours && (url.pathname === "/api/map" || url.pathname === "/api/list")) {
     event.respondWith(view(request));
   } else if (ours && url.pathname.startsWith("/api/site/")) {
-    event.respondWith(place(request));
-  } else if (ours && (url.pathname === "/api/access" || url.pathname === "/api/photos" || url.pathname === "/api/search")) {
+    event.respondWith(place(request, event));
+  } else if (ours && (url.pathname === "/api/access" || url.pathname === "/api/photos")) {
+    event.respondWith(keptFirst(request, DATA, event));
+  } else if (ours && url.pathname === "/api/search") {
     event.respondWith(networkFirst(request, DATA));
   } else if (ours && url.pathname.startsWith("/api/")) {
     // Status, search, exports, and the page filling the phone's copy: live only.

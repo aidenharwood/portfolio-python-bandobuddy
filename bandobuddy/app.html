@@ -169,6 +169,12 @@
     box-shadow:0 0 0 4px color-mix(in srgb, var(--c) 35%, transparent), 0 2px 6px rgba(0,0,0,.35) }
   .me { width:22px; height:22px; border-radius:50%; background:var(--me); border:3px solid #fff; box-shadow:0 1px 5px rgba(0,0,0,.45); position:relative }
   .me::after { content:""; position:absolute; inset:-9px; border-radius:50%; background:var(--me); opacity:.3; animation:halo 2s ease-out infinite }
+  /* Which way you're facing (the compass) or heading (GPS, while moving): the dot becomes an arrow. */
+  .me-arrow { display:none; position:absolute; left:50%; top:50%; width:34px; height:34px; margin:-17px 0 0 -17px;
+    transform:rotate(var(--heading, 0deg)); transition:transform .25s linear; filter:drop-shadow(0 1px 3px rgba(0,0,0,.5)) }
+  .me-arrow path { fill:var(--me); stroke:#fff; stroke-width:2.4; stroke-linejoin:round }
+  .me.heading { background:transparent; border-color:transparent; box-shadow:none }
+  .me.heading .me-arrow { display:block }
   @keyframes halo { from { transform:scale(.4); opacity:.45 } to { transform:scale(1.4); opacity:0 } }
 
   /* list */
@@ -535,6 +541,7 @@ const S = {
   list: null, listNear: null, selected: null, site: null, status: null, prevVisit: null,
   view: "list", listSnap: "peek", sort: "nearest",
   wakeLock: null, installPrompt: null, kept: {}, heading: null, compassOn: false, saved: {}, savedTab: "want", lastMap: null,
+  course: null, orientationOk: null, orientationAsked: false,
   loc: { wanted: false, watch: null, pos: null, follow: false, first: false, quiet: false, auto: false, paused: false, warned: false },
   me: { dot: null, acc: null },
 };
@@ -1178,7 +1185,7 @@ async function fetchMap() {
   try { view = await apiView(`/api/map?${p}`); } catch (_) { return; }
   if (seq !== S.mapSeq) return;
   sayWhere(view);
-  S.version = view.data.version;
+  S.built = view.data.built;
   renderMap(view.data);
 }
 
@@ -1543,7 +1550,7 @@ function renderBearing() {
   if (!S.loc.pos) { el.hidden = true; return; }
   const deg = bearingTo(S.loc.pos, S.site);
   // With a compass, point where to walk; without one, point as the map does, north up.
-  const turn = S.heading == null ? deg : deg - S.heading;
+  const turn = S.compassOn && S.heading != null ? deg - S.heading : deg;
   el.hidden = false;
   el.querySelector("svg").style.transform = `rotate(${turn}deg)`;
   el.querySelector(".bearing-text").textContent = `${fmtDist(metres(S.loc.pos, S.site))} ${COMPASS_POINTS[Math.round(deg / 45) % 8]}`;
@@ -1558,7 +1565,53 @@ function onOrientation(e) {
   else if (e.absolute && typeof e.alpha === "number") heading = 360 - e.alpha;               // Android
   if (heading == null) return;
   S.heading = (heading + ((screen.orientation && screen.orientation.angle) || 0) + 360) % 360;
-  if (!compassFrame) compassFrame = requestAnimationFrame(() => { compassFrame = 0; renderBearing(); });
+  if (!compassFrame) compassFrame = requestAnimationFrame(() => { compassFrame = 0; renderBearing(); renderMe(); });
+}
+
+// The compass is listened to while your location's on the map (to point your arrow) or a place's bearing
+// arrow is using it, and only while the page is on screen. Android lets the page read it; an iPhone asks
+// first, and only when the asking comes from a tap.
+function orientationAllowed() {
+  if (S.orientationOk == null) {
+    S.orientationOk = typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission !== "function";
+  }
+  return S.orientationOk;
+}
+
+let orientationOn = false;
+function syncOrientation() {
+  const want = !document.hidden && (S.compassOn || (S.loc.wanted && orientationAllowed()));
+  if (want === orientationOn) return;
+  orientationOn = want;
+  for (const type of ["deviceorientationabsolute", "deviceorientation"]) {
+    if (want) window.addEventListener(type, onOrientation);
+    else window.removeEventListener(type, onOrientation);
+  }
+  if (!want) { S.heading = null; renderMe(); }
+}
+
+// Browsers that ask before sharing the compass (iPhones, newer Chrome): tried quietly when your location
+// starts (Chrome may simply say yes), and asked properly from the location button's tap, once (an iPhone
+// only asks from a tap).
+async function askOrientation(fromTap = true) {
+  if (orientationAllowed() || S.orientationAsked || typeof DeviceOrientationEvent === "undefined"
+      || typeof DeviceOrientationEvent.requestPermission !== "function") return;
+  if (fromTap) S.orientationAsked = true;
+  try { S.orientationOk = await DeviceOrientationEvent.requestPermission() === "granted"; } catch (_) { /* not from a tap */ }
+  syncOrientation();
+}
+
+// Which way you're facing: the phone's compass where it has one, else the way you're moving.
+function renderMe() {
+  const el = S.me.dot && S.me.dot.getElement();
+  const me = el && el.querySelector(".me");
+  if (!me) return;
+  const heading = S.heading != null ? S.heading : S.course;
+  me.classList.toggle("heading", heading != null);
+  if (heading == null) return;
+  const from = S.me.turn == null ? heading : S.me.turn;
+  S.me.turn = from + ((((heading - from) % 360) + 540) % 360 - 180);   // the short way round, past north too
+  me.style.setProperty("--heading", `${S.me.turn}deg`);
 }
 
 async function startCompass() {
@@ -1575,8 +1628,8 @@ async function startCompass() {
     return;
   }
   S.compassOn = true;
-  window.addEventListener("deviceorientationabsolute", onOrientation);
-  window.addEventListener("deviceorientation", onOrientation);
+  S.orientationOk = true;
+  syncOrientation();
   renderBearing();
   setTimeout(() => {
     if (S.compassOn && S.heading == null) {
@@ -1589,9 +1642,7 @@ async function startCompass() {
 function stopCompass() {
   if (!S.compassOn) return;
   S.compassOn = false;
-  S.heading = null;
-  window.removeEventListener("deviceorientationabsolute", onOrientation);
-  window.removeEventListener("deviceorientation", onOrientation);
+  syncOrientation();            // your own arrow may still be using it
   renderBearing();
 }
 
@@ -1621,6 +1672,8 @@ function startLocate({ quiet = false, auto = false } = {}) {
   Object.assign(S.loc, { wanted: true, follow: !quiet, first: true, quiet, auto, warned: false });
   savePrefs({ locOn: true });
   if (S.loc.watch == null) watchLocation();
+  syncOrientation();
+  askOrientation(false);
   renderLocBtn();
 }
 
@@ -1629,7 +1682,9 @@ function stopLocate() {
   Object.assign(S.loc, { wanted: false, watch: null, pos: null, follow: false, paused: false });
   savePrefs({ locOn: false });
   S.meLayer.clearLayers();
-  S.me = { dot: null, acc: null };
+  S.me = { dot: null, acc: null, turn: null };
+  S.course = null;
+  syncOrientation();
   renderLocBtn();
   scheduleList(0);
 }
@@ -1638,12 +1693,17 @@ function onPosition(pos) {
   const c = pos.coords;
   const prev = S.loc.pos;
   S.loc.pos = { lat: c.latitude, lng: c.longitude, acc: c.accuracy };
+  // The way you're moving, while you are (a heading at walking pace or faster; none standing still).
+  S.course = typeof c.speed === "number" && c.speed > 0.8 && typeof c.heading === "number" && !Number.isNaN(c.heading)
+    ? c.heading : null;
   const ll = [c.latitude, c.longitude];
   if (!S.me.dot) {
     S.me.acc = L.circle(ll, { radius: c.accuracy, color: "#2563eb", weight: 1, opacity: 0.5, fillColor: "#2563eb",
                               fillOpacity: 0.12, interactive: false }).addTo(S.meLayer);
     S.me.dot = L.marker(ll, { interactive: false, keyboard: false, zIndexOffset: 2000,
-                              icon: L.divIcon({ className: "bb-icon", html: '<div class="me"></div>', iconSize: [22, 22] }) }).addTo(S.meLayer);
+                              icon: L.divIcon({ className: "bb-icon", iconSize: [22, 22],
+                                                html: '<div class="me"><svg class="me-arrow" viewBox="0 0 34 34" aria-hidden="true">'
+                                                      + '<path d="M17 3 28 30 17 23.5 6 30Z"/></svg></div>' }) }).addTo(S.meLayer);
   } else {
     S.me.acc.setLatLng(ll).setRadius(c.accuracy);
     S.me.dot.setLatLng(ll);
@@ -1657,6 +1717,7 @@ function onPosition(pos) {
   }
   renderLocBtn();
   renderBearing();
+  renderMe();
   if (!prev || metres(prev, S.loc.pos) > 20) renderEntrances();
   if (!prev || metres(prev, S.loc.pos) > 75) scheduleList();
 }
@@ -1678,6 +1739,7 @@ function onPositionError(err) {
 // on you and follows you again (moving the map stops following). It never turns your location off: that's
 // in the menu.
 function onLocateButton() {
+  askOrientation();
   if (!S.loc.wanted) { startLocate(); return; }
   if (!S.loc.pos) { toast("Still finding your location…"); return; }
   S.loc.follow = true;
@@ -1697,6 +1759,7 @@ document.addEventListener("visibilitychange", () => {
   }
   holdScreenAwake(!document.hidden && S.loc.follow);
   if (document.hidden) stopCompass();
+  syncOrientation();
 });
 
 // Ask for the user's location as the page opens (the browser shows its own prompt the first time),
@@ -1756,7 +1819,8 @@ function renderStatus(st) {
   log.textContent = st.log.join("\n");
   if (atBottom) log.scrollTop = log.scrollHeight;
 
-  if (st.sites_version !== S.version) scheduleFetch(0);
+  noteServerBuilt(st.sites_built);
+  if (st.sites_built !== S.built) scheduleFetch(0);
   else renderList();
 }
 
@@ -2059,6 +2123,7 @@ function initInstall() {
 const AREAS_KEY = "bandobuddy:keptAreas";
 const KEEP_FOR_MS = 7 * 864e5;        // after a week, fetch again so details stay fresh
 const INDEX_CHECK_MS = 6 * 3600e3;    // ask whether the map has changed at most every six hours
+const INDEX_REFRESH_MS = 10 * 60e3;   // ...or, when the server says it has, every ten minutes at most
 const KEEP_MIN_ZOOM = 11;             // roughly a town and the country around it
 const KEEP_SETTLE_MS = 1500;          // wait for the map to stop moving
 const AREA_DEG = 0.25;                // details are kept in squares this size (about 28 x 17 km)
@@ -2201,6 +2266,22 @@ async function keepIndex(force = false) {
   } catch (_) { /* try again when the map next settles */ }
   indexBusy = false;
   if (S.view === "data") renderOffline();
+}
+
+// What the server's map was built from, noted on the phone with every status check: the service worker answers
+// from the phone first while its copy matches (much quicker than asking), and the copy's refreshed when it
+// doesn't, at most every ten minutes while an update keeps changing the map.
+let indexRefreshed = 0;
+async function noteServerBuilt(built) {
+  if (!built || !canKeep()) return;
+  try {
+    await LocalDB.noteServer(built);
+    const kept = await LocalDB.index();
+    if (kept && kept.built !== built && Date.now() - indexRefreshed > INDEX_REFRESH_MS) {
+      indexRefreshed = Date.now();
+      keepIndex(true);
+    }
+  } catch (_) { /* storage blocked: the server answers, as it always could */ }
 }
 
 // Ask the browser not to clear what's kept when the phone runs low on space (it may decide for itself).

@@ -61,6 +61,25 @@ class GeoTests(unittest.TestCase):
                 self.assertEqual(nation(lat, lng), want, (lat, lng))
 
 
+class SitesBuiltTests(unittest.TestCase):
+    def site(self, key, score=30):
+        return {"key": key, "name": key, "lat": 51.0, "lng": -1.0, "score": score, "strength": "strong",
+                "category": "military", "condition": "Disused", "kind": "bunker", "sources": "osm", "reasons": ["x"],
+                "detail": {"osm": [], "wikidata": [], "open": []}, "first_seen": "2026-01-01", "added": None}
+
+    def test_only_a_change_moves_it(self):
+        # Phones answer from their copy while it matches; a rebuild that changes nothing keeps it matching.
+        store = Store(Path(tempfile.mkdtemp()) / DB_NAME)
+        store.replace_sites([self.site("a"), self.site("b")])
+        built = store.sites_built()
+        with mock.patch("bandobuddy.store.now_iso", return_value="2030-01-01T00:00:00+00:00"):
+            store.replace_sites([self.site("a"), self.site("b")])      # a restart, or an update that found nothing
+            self.assertEqual(store.sites_built(), built)
+            store.replace_sites([self.site("a"), self.site("b", score=31)])
+            self.assertEqual(store.sites_built(), "2030-01-01T00:00:00+00:00")
+        self.assertEqual([r[4] for r in store.index_rows()], [30, 31])
+
+
 class DownloadTests(unittest.TestCase):
     def test_download_resumes_and_checks_md5(self):
         tmp = Path(tempfile.mkdtemp())
