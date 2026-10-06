@@ -6,8 +6,12 @@ name/description/note, which public Overpass servers can't afford to do for a wh
 """
 from __future__ import annotations
 
+import gc
+import math
 import re
 import threading
+from array import array
+from bisect import bisect_left
 from pathlib import Path
 from typing import Callable
 
@@ -259,8 +263,8 @@ def extract_candidates(
     path = str(pbf)
 
     nodes: list[dict] = []
-    ways: dict[int, tuple[dict, list[int]]] = {}
-    rels: dict[int, tuple[dict, list[int]]] = {}
+    ways: dict[int, tuple[dict, array]] = {}     # node ids as 8-byte integers: a UK run holds millions
+    rels: dict[int, tuple[dict, array]] = {}
     seen = 0
     for obj in osmium.FileProcessor(path).with_filter(EmptyTagFilter()):
         seen += 1
@@ -279,42 +283,52 @@ def extract_candidates(
                 nodes.append({"osm_id": f"node/{obj.id}", "lat": obj.location.lat, "lng": obj.location.lon,
                               "extent_m": 0, "tags": tags})
         elif kind == "w":
-            ways[obj.id] = (tags, [n.ref for n in obj.nodes])
+            ways[obj.id] = (tags, array("q", (n.ref for n in obj.nodes)))
         else:
-            rels[obj.id] = (tags, [m.ref for m in obj.members if m.type == "w"])
+            rels[obj.id] = (tags, array("q", (m.ref for m in obj.members if m.type == "w")))
     report("Reading OSM tags", seen, seen)
     if on_nodes and nodes:
         on_nodes(nodes)  # points are ready now; outlines need two more passes
+    gc.collect()   # the map rebuild just done for those points: hand its memory back before the big passes
 
-    member_ways: dict[int, list[int]] = {}
+    member_ways: dict[int, array] = {}
     wanted_ways = {ref for _, members in rels.values() for ref in members} - set(ways)
     if wanted_ways:
         report("Reading relation outlines", 0, len(wanted_ways))
         for w in osmium.FileProcessor(path, osmium.osm.WAY).with_filter(IdFilter(wanted_ways)):
-            member_ways[w.id] = [n.ref for n in w.nodes]
+            member_ways[w.id] = array("q", (n.ref for n in w.nodes))
         if cancel.is_set():
             raise Cancelled()
     for wid, (_, refs) in ways.items():
         member_ways.setdefault(wid, refs)
 
-    wanted_nodes = {ref for refs in member_ways.values() for ref in refs}
-    coords: dict[int, tuple[float, float]] = {}
-    if wanted_nodes:
-        report("Placing outlines", 0, len(wanted_nodes))
-        for n in osmium.FileProcessor(path, osmium.osm.NODE).with_filter(IdFilter(wanted_nodes)):
+    # Where every node those outlines use is. For the UK that's millions of nodes: held as a sorted array of
+    # ids with their positions in two arrays alongside (about 24 bytes a node), not a dict of tuples (about
+    # 200), which ran the server out of memory before it could save a single outline.
+    ids = array("q", sorted({ref for refs in member_ways.values() for ref in refs}))
+    lats, lngs = array("d", bytes(8 * len(ids))), array("d", bytes(8 * len(ids)))
+    placed = bytearray(len(ids))
+    if ids:
+        report("Placing outlines", 0, len(ids))
+        for n in osmium.FileProcessor(path, osmium.osm.NODE).with_filter(IdFilter(ids)):
             if n.location.valid():
-                coords[n.id] = (n.location.lat, n.location.lon)
+                i = bisect_left(ids, n.id)
+                if i < len(ids) and ids[i] == n.id:
+                    lats[i], lngs[i], placed[i] = n.location.lat, n.location.lon, 1
         if cancel.is_set():
             raise Cancelled()
 
-    def place(refs: list[int]) -> tuple[float, float, int] | None:
+    def place(refs) -> tuple[float, float, int] | None:
         """Centre of the outline's box, and half its diagonal: how far the outline reaches."""
-        pts = [coords[r] for r in refs if r in coords]
-        if not pts:
+        s = w = math.inf
+        n = e = -math.inf
+        for ref in refs:
+            i = bisect_left(ids, ref)
+            if i < len(ids) and ids[i] == ref and placed[i]:
+                s, n, w, e = min(s, lats[i]), max(n, lats[i]), min(w, lngs[i]), max(e, lngs[i])
+        if s == math.inf:
             return None
-        lats, lngs = [p[0] for p in pts], [p[1] for p in pts]
-        reach = haversine_m(min(lats), min(lngs), max(lats), max(lngs)) / 2
-        return (min(lats) + max(lats)) / 2, (min(lngs) + max(lngs)) / 2, round(reach)
+        return (s + n) / 2, (w + e) / 2, round(haversine_m(s, w, n, e) / 2)
 
     out = list(nodes)
     for wid, (tags, refs) in ways.items():
@@ -322,8 +336,8 @@ def extract_candidates(
         if c:
             out.append({"osm_id": f"way/{wid}", "lat": c[0], "lng": c[1], "extent_m": c[2], "tags": tags})
     for rid, (tags, members) in rels.items():
-        c = place([r for wid in members for r in member_ways.get(wid, [])])
+        c = place(r for wid in members for r in member_ways.get(wid, ()))
         if c:
             out.append({"osm_id": f"relation/{rid}", "lat": c[0], "lng": c[1], "extent_m": c[2], "tags": tags})
-    report("Placing outlines", len(wanted_nodes), len(wanted_nodes))
+    report("Placing outlines", len(ids), len(ids))
     return out

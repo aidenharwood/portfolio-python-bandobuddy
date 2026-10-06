@@ -284,6 +284,20 @@ class ConditionTests(unittest.TestCase):
                          "Disused")
 
 
+class NamedDisusedTests(unittest.TestCase):
+    def test_the_dive_test_facility_at_alverstoke(self):
+        # Mapped only as a fenced military area whose name says it's disused (OSM way 24597207).
+        store = Store(Path(tempfile.mkdtemp()) / "t.db")
+        store.upsert_osm([{"osm_id": "way/24597207", "lat": 50.77922, "lng": -1.14228, "extent_m": 120,
+                           "tags": {"landuse": "military", "barrier": "fence", "name": "Dive Test Facility (Disused)"}}],
+                         "2026-10-05T00:00:00+00:00")
+        build_sites(store)
+        site = store.full_sites(min_score=0)[0]
+        self.assertEqual((site["name"], site["condition"], site["category"], site["strength"]),
+                         ("Dive Test Facility", "Disused", "military", "strong"))   # the state shown once, as the condition
+        self.assertIn("Its name says 'disused'", site["reasons"])
+
+
 class DemolishedTests(unittest.TestCase):
     def test_osm_demolitions_and_building_sites(self):
         self.assertEqual(osm.gone_as({"demolished:building": "yes"}), "Demolished")
