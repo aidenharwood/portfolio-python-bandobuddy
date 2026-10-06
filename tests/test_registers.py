@@ -295,6 +295,44 @@ class ModTests(unittest.TestCase):
         self.assertEqual(category_for({"name": items["5"]["name"], "open": [items["5"]]}), "military")
 
 
+    def test_a_refused_search_is_tried_again_next_time(self):
+        tmp = Path(tempfile.mkdtemp())
+        site = lambda: Site({"disposal-database-house-of-commons-report": '<a href="/media/House_of_Commons_Report_.ods">r</a>',  # noqa: E731
+                             "House_of_Commons_Report_.ods": Resp(ods({"Report": [MOD_HEAD, *MOD_ROWS]}))})
+        answers = [{"lat": 54.2, "lng": -1.3}, geocode.Busy("pause")]
+        with mock.patch.object(geocode, "search", side_effect=answers) as search:
+            rows = list(registers.MoDisposals()(site(), nothing, data_dir=tmp))
+        self.assertEqual([r["ref"] for r in rows], ["1"])
+        self.assertEqual(search.call_count, 2)                      # and no more once Nominatim's said stop
+        self.assertEqual(set(registers.Kept(tmp, "mod_disposals").data["places"]), {"1"})
+        with mock.patch.object(geocode, "search", side_effect=[None, None, None, {"lat": 54.4, "lng": -1.7}]) as search:
+            rows = list(registers.MoDisposals()(site(), nothing, data_dir=tmp))
+        self.assertEqual([r["ref"] for r in rows], ["1", "5"])
+        self.assertEqual(search.call_count, 4)                      # RAF Henlow three ways, then Pinhill Messes
+        self.assertIsNone(registers.Kept(tmp, "mod_disposals").data["places"]["3"])   # found nothing: remembered
+
+
+class NominatimTests(unittest.TestCase):
+    def tearDown(self):
+        geocode._paused_until = geocode._last = 0.0
+
+    def test_a_429_pauses_searching(self):
+        class Asked:
+            status_code, headers, calls = 429, {"Retry-After": "120"}, 0
+
+            def get(self, *_a, **_kw):
+                self.calls += 1
+                return self
+
+        session = Asked()
+        with self.assertRaises(geocode.Busy):
+            geocode.search("Clive Barracks, Market Drayton", session)
+        with self.assertRaises(geocode.Busy):
+            geocode.search("Dale Barracks, Chester", session)
+        self.assertEqual(session.calls, 1)                          # the second never asked
+        self.assertGreater(geocode._paused_until - geocode._last, 100)
+
+
 # -- Best spots, and things that are never places ---------------------------------------------------------
 
 class BestSpotsTests(unittest.TestCase):
