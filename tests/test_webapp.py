@@ -243,6 +243,11 @@ class WebAppTests(unittest.TestCase):
         status, data, _ = self.request("GET", "/api/map?bbox=-0.2,51.4,0.0,51.6&zoom=12&weak=1")
         self.assertEqual(status, 200)
         self.assertEqual(data["mode"], "sites")
+        # When the map was built, as the status says it: the phone answers from its own copy while they match.
+        built = self.request("GET", "/api/status")[1]["sites_built"]
+        self.assertTrue(built)
+        self.assertEqual(data["built"], built)
+        self.assertEqual(self.request("GET", "/api/list?bbox=-0.2,51.4,0.0,51.6&weak=1")[1]["built"], built)
         self.assertEqual(len(data["sites"]), data["total"])
         self.assertEqual(self.request("GET", "/api/map?zoom=12")[0], 400)  # needs a bbox
         self.assertEqual(self.request("GET", "/api/map?bbox=-0.2,51.4,0.0,51.6&zoom=x")[0], 400)

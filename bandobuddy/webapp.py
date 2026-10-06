@@ -184,6 +184,7 @@ class App:
             raise ApiError(400, "zoom must be a number")
         view = self.store.map_view(filters.pop("bbox"), zoom, **filters)
         view["version"] = self.updater.sites_version
+        view["built"] = self.store.sites_built()     # what the phone's copy is compared with
         return view
 
     def list(self, qs: dict) -> dict:
@@ -206,7 +207,7 @@ class App:
         if near:
             for r in rows:
                 r["distance_m"] = round(haversine_m(near[0], near[1], r["lat"], r["lng"]))
-        return {"total": total, "sites": rows, "version": self.updater.sites_version}
+        return {"total": total, "sites": rows, "version": self.updater.sites_version, "built": self.store.sites_built()}
 
     def site(self, key: str) -> dict:
         site = self.store.get_site(key)
@@ -294,6 +295,7 @@ class App:
     def status(self) -> dict:
         st = self.updater.status()
         st["read_only"] = self.read_only
+        st["sites_built"] = self.store.sites_built()
         if self.read_only:  # visitors don't need server paths or logs
             st["data_dir"] = None
             st["log"] = []

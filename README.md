@@ -12,7 +12,7 @@ bandobuddy builds its own database of the whole country from **OpenStreetMap**, 
 - **Evidence, not scores.** Uses OpenStreetMap lifecycle tags (`abandoned:*`, `disused:*`, ruins, old mines, bunkers, dead railway tunnels), Wikidata state-of-use and closure dates, and wording in Wikipedia intros ("disused", "demolished", "converted to flats").
 - **Stays up to date.** Scheduled refreshes apply OpenStreetMap's daily change files instead of downloading the country again. Places are flagged **NEW** when they appear and dropped when they disappear from the data.
 - **Resumable.** Crawls survive restarts: downloads resume, and the Wikidata crawl remembers which areas are finished.
-- **Made for phones.** A full-screen map with a draggable bottom sheet (a side panel on wider screens). It asks for your location when it opens (or tap the location button later) to show where you are and list places nearest first, then get directions or share a link to a place. The location button always brings the map back to you; the floating layers button beside it holds the map style and the overlays.
+- **Made for phones.** A full-screen map with a draggable bottom sheet (a side panel on wider screens). It asks for your location when it opens (or tap the location button later) to show where you are and list places nearest first, then get directions or share a link to a place. Your position is an arrow pointing the way you're facing, from the phone's compass (an iPhone asks first, from a tap of the location button), or the way you're heading while you're on the move; a dot when it can't tell. The location button always brings the map back to you; the floating layers button beside it holds the map style and the overlays.
 - **Live map.** Built with Leaflet and OpenStreetMap tiles, with category icons that group into counts when zoomed out and fill in while an update runs. It also has category and source filters, place search (via Nominatim), [Panoramax](https://panoramax.fr) photos, and CSV/KML/GPX exports.
 - **Somewhere to start digging.** Each place lists the records it was built from, each linked to its page at the source: the OpenStreetMap object and its edit history, Wikidata and Wikipedia, the register entry, Historic England's official list entry, the planning application. The source's licence sits beside it. A *Dig deeper* list opens the same spot elsewhere: Ordnance Survey maps of 1888–1915 (National Library of Scotland), satellite imagery since 2014 (Esri Wayback), England's planning and listings map, Geograph and Mapillary photos, Wikipedia nearby, web and explorer-forum searches, the land registry for who owns it, and an OpenStreetMap note for reporting it gone. The grid reference the registers and old maps use is there to copy.
 - **Two modes.** A personal mode with full update controls, and a read-only public mode for hosting.
@@ -139,9 +139,12 @@ signal doesn't:
 - the page, its icons and Leaflet are cached, so it opens with no connection at all
 - **every place, in brief** (name, where, what it was, how strong the evidence is): about 3 MB for the whole UK,
   fetched once and again only when the map has changed. So the map, the list, filters and search work offline
-  anywhere, including places you've never looked at. With no signal the service worker answers the app's own
-  requests from this copy the same way the server would (same filters, clusters and order), and it does the
-  same after six seconds on a signal too weak to answer
+  anywhere, including places you've never looked at. The service worker answers the app's own requests from
+  this copy the same way the server would (same filters, clusters and order): first, whenever it matches the
+  server's map (in about 10 ms, against a few hundred for asking the server); with no signal; and after six
+  seconds on a signal too weak to answer. The server says when its map last changed, and a rebuild that comes out
+  the same (a restart, or an update that found nothing) doesn't count, so the copy stays current until something
+  does change. It's then fetched again, at most every ten minutes while an update keeps changing things
 - **everything about the places where you zoom in** (the evidence, what each source says, the ways in, the
   links): once the map settles at about town level, the details are fetched quietly in squares of a quarter of
   a degree, two at a time and each square once a week, holding off on data saver or a slow connection. A place
@@ -151,7 +154,9 @@ signal doesn't:
   further than you ever looked and the map fills in from the nearest zoomed-out tile you did see, blurrier but
   still there. Only tiles you've actually viewed: OpenStreetMap's tile policy rules out bulk-downloading them.
   For a full offline map, download your saved places as GPX and open them in OsmAnd or Organic Maps
-- "Getting there", street photos and town or postcode searches, once you've used them
+- "Getting there", street photos and town or postcode searches, once you've used them. A place's page, "Getting
+  there" and the photos open from what's kept straight away, and are refreshed behind the scenes for next time;
+  so is the app itself, so it opens at once and a new version is used from the next opening
 - the screen stays awake while you're following your location, and sleeps as soon as you stop
 
 Tiles and photos are fetched with CORS, so the phone's storage counts them at their real size (browsers count

@@ -7,6 +7,7 @@ web server can share one database file safely.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import sqlite3
@@ -284,11 +285,19 @@ class Store:
                  json.dumps(s["detail"], ensure_ascii=False), s["first_seen"], s["added"],
                  json.dumps(s.get("aliases") or [], ensure_ascii=False),
                  json.dumps(s.get("entrances") or [], ensure_ascii=False)) for s in sites]
+        # Phones keep a copy of the map, and answer from it while it matches the server's. A rebuild that comes
+        # out the same (a restart, or an update that found nothing new) leaves theirs current, and the table alone.
+        digest = hashlib.blake2b(digest_size=16)
+        for row in rows:
+            digest.update("\x1f".join(map(str, row)).encode("utf-8", "surrogatepass") + b"\x1e")
+        digest = digest.hexdigest()
+        if digest == self.get_setting("sites_digest") and self.get_setting("sites_built"):
+            return
         with self.connect() as db:
             db.execute("DELETE FROM sites")
             db.executemany("INSERT INTO sites VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
-            # Phones keep a copy of the map; this says whether theirs is out of date.
             db.execute("INSERT OR REPLACE INTO settings VALUES ('sites_built', ?)", (json.dumps(now_iso()),))
+            db.execute("INSERT OR REPLACE INTO settings VALUES ('sites_digest', ?)", (json.dumps(digest),))
 
     def sites_built(self) -> str:
         """When the map was last rebuilt (or, from before that was recorded, something that changes with it)."""
