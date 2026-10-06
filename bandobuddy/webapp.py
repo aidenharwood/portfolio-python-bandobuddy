@@ -32,10 +32,10 @@ import requests
 
 from . import __version__, access, export, geocode, imagery, lidar, opendata
 from .config import CATEGORIES, DATA_DIR, DB_NAME, OTHER_CATEGORY, UK_BBOX, WEAK_BELOW
-from .geo import haversine_m
+from .geo import grid_ref, haversine_m, nation
 from .sites import build_sites
 from .store import INDEX_COLUMNS, Store
-from .updater import ALL_SOURCES, SOURCE_LABELS, SOURCES, Updater
+from .updater import ALL_SOURCES, SOURCE_ABOUT, SOURCE_LABELS, SOURCES, Updater
 
 DEFAULT_PORT = 8642
 MAX_BODY_BYTES = 16_000
@@ -120,6 +120,15 @@ def parse_filters(qs: dict[str, list[str]]) -> dict:
     return filters
 
 
+def with_pointers(site: dict) -> dict:
+    """A full place as the page shows it: links out, which country it's in (which picks the records
+    and maps worth pointing at) and its grid reference, as the registers and old maps give places."""
+    site["links"] = export.links(site)
+    site["nation"] = nation(site["lat"], site["lng"])
+    site["grid_ref"] = grid_ref(site["lat"], site["lng"]) if site["nation"] not in (None, "northern_ireland") else None
+    return site
+
+
 class App:
     def __init__(self, store: Store, updater: Updater,
                  session_factory: Callable[[], requests.Session] = requests.Session, read_only: bool = False):
@@ -150,6 +159,8 @@ class App:
             "version": __version__,
             "categories": [[k, label] for k, label, _ in CATEGORIES] + [list(OTHER_CATEGORY)],
             "sources": [[s, SOURCE_LABELS[s]] for s in ALL_SOURCES],
+            # Every source a place can come from, switched on here or not: name, home page, licence.
+            "about": {s: [label, *SOURCE_ABOUT[s]] for s, label in SOURCE_LABELS.items()},
             "credits": [[d.label, d.home, d.attribution, d.licence] for d in opendata.DATASETS.values() if d.enabled()],
             "uk_bbox": UK_BBOX,
             "read_only": self.read_only,
@@ -201,8 +212,7 @@ class App:
         site = self.store.get_site(key)
         if not site:
             raise ApiError(404, "Place not found")
-        site["links"] = export.links(site)
-        return site
+        return with_pointers(site)
 
     def index(self, qs: dict) -> bytes:
         """Every place in brief, for a phone to keep so the map, list and search work with no signal.
@@ -222,9 +232,7 @@ class App:
         """Everything about the places in an area, a page at a time, or about particular places (key=...,
         repeated, since a key can hold a comma): what a phone keeps for offline."""
         if qs.get("key"):
-            sites = self.store.sites_by_key(qs["key"][:DETAILS_BY_KEY])
-            for site in sites:
-                site["links"] = export.links(site)
+            sites = [with_pointers(s) for s in self.store.sites_by_key(qs["key"][:DETAILS_BY_KEY])]
             return {"built": self.store.sites_built(), "sites": sites, "next": None}
         bbox = parse_filters(qs).get("bbox")
         after = (qs.get("after") or [""])[0]
@@ -232,9 +240,7 @@ class App:
             limit = max(1, min(1000, int((qs.get("limit") or [str(DETAILS_LIMIT)])[0])))
         except ValueError:
             raise ApiError(400, "limit must be a number")
-        sites = self.store.details_page(bbox=bbox, after=after, limit=limit)
-        for site in sites:
-            site["links"] = export.links(site)
+        sites = [with_pointers(s) for s in self.store.details_page(bbox=bbox, after=after, limit=limit)]
         return {"built": self.store.sites_built(), "sites": sites,
                 "next": sites[-1]["key"] if len(sites) == limit else None}
 

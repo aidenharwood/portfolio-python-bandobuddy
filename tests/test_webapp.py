@@ -61,6 +61,8 @@ class WebAppTests(unittest.TestCase):
         page = page.decode()
         self.assertNotIn("__BOOT__", page)
         self.assertIn('"categories"', page)
+        self.assertIn('"osm": ["OpenStreetMap", "https://www.openstreetmap.org/copyright", "Open Database Licence"]', page)
+        self.assertIn('"planit": ["Demolition applications (UK PlanIt)"', page)    # named even when it's switched off
         self.assertIn("leaflet", page)
         self.assertNotIn("googleapis", page)  # no Google anywhere
         self.assertIn("watchPosition", page)  # "use my location"
@@ -239,6 +241,8 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(site["detail"]["osm"][0]["osm_id"], "way/100")
         self.assertEqual(site["links"]["osm_element"], "https://www.openstreetmap.org/way/100")
         self.assertIn("streetview", site["links"])
+        self.assertEqual(site["nation"], "england")                         # picks the records worth pointing at
+        self.assertRegex(site["grid_ref"], r"^T[QL] \d{4} \d{4}$")
         self.assertEqual(self.request("GET", "/api/site/osm:way/999999")[0], 404)
 
     def test_photos_and_search(self):

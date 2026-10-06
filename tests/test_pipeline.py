@@ -7,7 +7,7 @@ from unittest import mock
 
 from bandobuddy import extract
 from bandobuddy.config import DB_NAME
-from bandobuddy.geo import grid_boxes
+from bandobuddy.geo import grid_boxes, grid_ref, nation
 from bandobuddy.scoring import category_for, condition_for, describe_osm, describe_wikidata, strength_for
 from bandobuddy.sites import build_sites
 from bandobuddy.store import Store
@@ -40,6 +40,25 @@ class GeoTests(unittest.TestCase):
         self.assertEqual(boxes[0][:2], (49.8, -8.7))
         self.assertEqual(max(b[2] for b in boxes), 60.95)
         self.assertEqual(max(b[3] for b in boxes), 1.9)
+
+    def test_grid_ref(self):
+        self.assertEqual(grid_ref(56.79685, -5.00360), "NN 1667 7128")             # Ben Nevis: NN 16667 71283
+        self.assertEqual(grid_ref(51.069824, -1.797089), "SU 1431 3007")           # 414313, 130075
+        self.assertEqual(grid_ref(56.79685, -5.00360, digits=6), "NN 166 712")
+        self.assertIsNone(grid_ref(40.0, -20.0))                                   # off the grid
+
+    def test_nation(self):
+        places = {"england": [(50.77922, -1.14228), (53.1934, -2.8931), (55.7704, -2.0047), (52.2040, -3.0300),
+                              (49.9150, -6.3150), (53.39, -3.18)],          # Gosport, Chester, Berwick, Kington, Scilly, Hoylake
+                  "scotland": [(55.9533, -3.1883), (55.6487, -2.2510), (54.9946, -3.0656), (55.29, -5.798),
+                               (60.153, -1.145), (57.815, -8.57)],          # Edinburgh, Coldstream, Gretna, Kintyre, Lerwick, St Kilda
+                  "wales": [(51.4816, -3.1791), (53.0460, -2.9925), (52.074, -3.125), (53.309, -4.633),
+                            (51.882, -5.269)],                               # Cardiff, Wrexham, Hay, Holyhead, St Davids
+                  "northern_ireland": [(54.5973, -5.9301), (55.29, -6.2)],  # Belfast, Rathlin
+                  None: [(54.15, -4.48), (49.214, -2.131), (48.85, 2.35)]}  # Isle of Man, Jersey, Paris
+        for want, points in places.items():
+            for lat, lng in points:
+                self.assertEqual(nation(lat, lng), want, (lat, lng))
 
 
 class DownloadTests(unittest.TestCase):
