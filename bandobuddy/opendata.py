@@ -952,7 +952,7 @@ DATASETS = {
         ),
         Dataset(
             key="planit",
-            label="Demolition applications (UK PlanIt)",
+            label="Planning applications (UK PlanIt)",
             licence="Planning register data, via UK PlanIt",
             attribution="Planning applications collected by UK PlanIt (planit.org.uk) from council websites",
             home="https://www.planit.org.uk/",

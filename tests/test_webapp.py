@@ -62,7 +62,7 @@ class WebAppTests(unittest.TestCase):
         self.assertNotIn("__BOOT__", page)
         self.assertIn('"categories"', page)
         self.assertIn('"osm": ["OpenStreetMap", "https://www.openstreetmap.org/copyright", "Open Database Licence"]', page)
-        self.assertIn('"planit": ["Demolition applications (UK PlanIt)"', page)    # named even when it's switched off
+        self.assertIn('"planit": ["Planning applications (UK PlanIt)"', page)    # named even when it's switched off
         self.assertIn("leaflet", page)
         self.assertNotIn("googleapis", page)  # no Google anywhere
         self.assertIn("watchPosition", page)  # "use my location"
