@@ -117,6 +117,63 @@ def wgs84_to_bng(lat: float, lng: float) -> tuple[float, float]:
     return easting, northing
 
 
+_GRID_LETTERS = "ABCDEFGHJKLMNOPQRSTUVWXYZ"   # no I
+
+
+def grid_ref(lat: float, lng: float, digits: int = 8) -> str | None:
+    """A National Grid reference ("SZ 6041 9808", to 10 m): how Ordnance Survey maps, Geograph and the
+    heritage registers give a place. None off the grid."""
+    easting, northing = wgs84_to_bng(lat, lng)
+    if not (0 <= easting < 700_000 and 0 <= northing < 1_300_000):
+        return None
+    e100k, n100k = int(easting // 100_000), int(northing // 100_000)
+    first = (19 - n100k) - (19 - n100k) % 5 + (e100k + 10) // 5
+    second = (19 - n100k) * 5 % 25 + e100k % 5
+    half = digits // 2
+    e, n = int(easting % 100_000) // 10 ** (5 - half), int(northing % 100_000) // 10 ** (5 - half)
+    return f"{_GRID_LETTERS[first]}{_GRID_LETTERS[second]} {e:0{half}d} {n:0{half}d}"
+
+
+# Rough outlines, (longitude, latitude), good to a kilometre or two along the borders: enough to pick
+# which country's records and maps to point at. The seaward sides run down the middle of the channels.
+_SCOTLAND = [(-2.03, 55.81), (-2.12, 55.77), (-2.25, 55.645), (-2.32, 55.635), (-2.21, 55.55), (-2.16, 55.47),
+             (-2.33, 55.40), (-2.48, 55.35), (-2.58, 55.29), (-2.69, 55.21), (-2.80, 55.13), (-2.88, 55.08),
+             (-2.97, 55.04), (-3.06, 54.99), (-3.30, 54.94), (-3.55, 54.83), (-3.85, 54.68), (-4.80, 54.50),
+             (-5.20, 54.55), (-5.35, 54.75), (-5.55, 55.10), (-5.95, 55.25), (-6.30, 55.45), (-7.50, 55.60),
+             (-8.00, 56.40), (-9.00, 57.80), (-6.50, 59.30), (-2.80, 60.30), (-1.20, 61.00), (-0.40, 60.95),
+             (-0.40, 60.20), (-1.20, 59.30), (-1.40, 57.50), (-1.85, 55.85)]
+_WALES = [(-4.80, 53.45), (-3.25, 53.42), (-3.00, 53.20), (-2.93, 53.17), (-2.86, 53.06), (-2.73, 52.97),
+          (-2.83, 52.92), (-3.04, 52.94), (-3.15, 52.89), (-3.12, 52.83), (-3.08, 52.77), (-2.98, 52.72),
+          (-3.10, 52.62), (-3.02, 52.55), (-3.13, 52.45), (-3.00, 52.35), (-2.98, 52.27), (-3.08, 52.17),
+          (-3.12, 52.08), (-2.98, 51.95), (-2.87, 51.88), (-2.65, 51.83), (-2.67, 51.62), (-2.90, 51.50),
+          (-3.10, 51.40), (-3.80, 51.36), (-4.60, 51.45), (-5.50, 51.60), (-5.50, 52.10), (-4.90, 52.75)]
+_NORTHERN_IRELAND = [(-8.25, 54.00), (-5.30, 54.00), (-5.20, 54.45), (-6.00, 55.32), (-7.30, 55.40), (-8.25, 55.40)]
+
+
+def _inside(lng: float, lat: float, outline: list[tuple[float, float]]) -> bool:
+    inside = False
+    for (x1, y1), (x2, y2) in zip(outline, outline[1:] + outline[:1]):
+        if (y1 > lat) != (y2 > lat) and lng < x1 + (lat - y1) * (x2 - x1) / (y2 - y1):
+            inside = not inside
+    return inside
+
+
+def nation(lat: float, lng: float) -> str | None:
+    """Which of the UK's countries a point is in: "england", "scotland", "wales", "northern_ireland",
+    or None outside them (the Isle of Man and the Channel Islands have records of their own)."""
+    if _inside(lng, lat, _NORTHERN_IRELAND):
+        return "northern_ireland"
+    if _inside(lng, lat, _SCOTLAND):
+        return "scotland"
+    if _inside(lng, lat, _WALES):
+        return "wales"
+    if 54.04 < lat < 54.43 and -4.85 < lng < -4.30:   # the Isle of Man
+        return None
+    if 49.85 < lat < 55.85 and -6.5 < lng < 1.8:
+        return "england"
+    return None
+
+
 def offset(lat: float, lng: float, north_m: float, east_m: float) -> tuple[float, float]:
     """Shift a point by metres north/east (flat-earth approximation, fine < ~50 km)."""
     dlat = north_m / EARTH_RADIUS_M

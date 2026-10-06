@@ -218,13 +218,30 @@
   .photos a { flex:none; width:180px; aspect-ratio:4/3; position:relative; border-radius:8px; overflow:hidden; background:#000; scroll-snap-align:start }
   .photos img { width:100%; height:100%; object-fit:cover; display:block }
   .photos span { position:absolute; left:0; right:0; bottom:0; padding:2px 6px; background:rgba(0,0,0,.7); color:#fff; font-size:11px }
-  .links { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px }
   details.box { margin-top:12px; border:1px solid var(--line); border-radius:10px; background:var(--raised) }
   details.box > summary { padding:9px 12px; color:var(--muted); font-size:13px; cursor:pointer }
   details.box > div { padding:0 12px 12px }
   table.tags { width:100%; border-collapse:collapse; font-size:12px }
   table.tags td { padding:3px 4px; border-top:1px solid var(--line); vertical-align:top; overflow-wrap:anywhere }
   table.tags td:first-child { color:var(--muted); white-space:nowrap }
+  .src + .src { margin-top:14px }
+  .src > b { font-size:14px }
+  .src ul { list-style:none; margin:4px 0 0; padding:0; display:grid; gap:8px }
+  .src li { font-size:14px; overflow-wrap:anywhere }
+  .src li small { color:var(--muted); font-size:12px }
+  .src .note { margin-top:4px; font-size:12px }
+  .src-links { display:flex; flex-wrap:wrap; gap:2px 14px }
+  .src a { color:var(--accent); font-weight:600; text-decoration:none; white-space:nowrap }
+  .src-note { margin-top:14px !important }
+  .src-note .linkbtn { padding:0; font-size:13px }
+  .src-note span { white-space:nowrap }
+  .dig a { display:flex; align-items:center; gap:12px; min-height:44px; padding:7px 0; border-bottom:1px solid var(--line);
+    color:var(--ink); text-decoration:none }
+  .dig a:last-child { border-bottom:0 }
+  .dig a::after { content:"\2197"; color:var(--accent); font-weight:700 }
+  .dig span { flex:1; min-width:0 }
+  .dig b { display:block; font-size:14px; font-weight:600 }
+  .dig small { display:block; color:var(--muted); font-size:12px; overflow-wrap:anywhere }
 
   /* filters */
   .cats { display:grid; grid-template-columns:1fr 1fr; gap:8px }
@@ -1309,21 +1326,100 @@ function directions(site) {
   return { href: `https://www.openstreetmap.org/directions?route=${encodeURIComponent(`${from};${to}`)}`, external: true };
 }
 
-const SOURCE_NAMES = Object.fromEntries(BOOT.sources);
+const SOURCE_ABOUT = BOOT.about || {};   // [name, home page, licence] for every source, switched on here or not
+const RECORDS_SHOWN = 5;   // of one source: a big works can have dozens of mapped buildings
+const outLink = (label, url) => `<a href="${safeUrl(url)}" target="_blank" rel="noopener">${esc(label)} ↗</a>`;
+
+// Each record a place was put together from, with the source's own pages for it.
+function sourceRecords(site) {
+  const d = site.detail || {};
+  const records = [];
+  for (const m of d.osm || []) {
+    const [type, id] = String(m.osm_id).split("/");
+    const url = `https://www.openstreetmap.org/${type}/${id}`;
+    records.push({ source: "osm", what: m.name || m.kind.charAt(0).toUpperCase() + m.kind.slice(1), ref: `${type} ${id}`,
+                   links: [["See it", url], ["What changed, and when", `${url}/history`]] });
+  }
+  for (const m of d.wikidata || [])
+    records.push({ source: "wikidata", what: m.name, ref: m.qid, links: [["Wikidata", m.url], ["Wikipedia", m.wikipedia_url]] });
+  for (const m of d.open || [])
+    records.push({ source: m.source, what: m.name, ref: m.source === "imported" ? "" : m.ref, links: registerLinks(m) });
+  return records;
+}
+
+function registerLinks(m) {
+  const ref = String(m.ref || "");
+  switch (m.source) {
+    case "heritage_at_risk":   // the At Risk entry, and the listing itself: what it is and why it was listed
+      return [["At Risk entry", m.url], /^1\d{6}$/.test(ref) && ["Official list entry", `https://historicengland.org.uk/listing/the-list/list-entry/${ref}`]];
+    case "brownfield":         // the council's own link goes to its planning page or a site plan, when it gives one
+      return [/^\d+$/.test(ref) && ["Register entry", `https://www.planning.data.gov.uk/entity/${ref}`], ["Council's page", m.url]];
+    case "planit":
+      return [["Council's page", m.url], ref && ["On PlanIt", `https://www.planit.org.uk/planapplic/${ref.split("/").map(encodeURIComponent).join("/")}/`]];
+    case "imported":
+      return [["Where you got it", m.url]];
+    default:
+      return [["See the record", m.url]];
+  }
+}
+
+function renderSources(site) {
+  const records = sourceRecords(site);
+  return String(site.sources || "").split("+").filter(Boolean).map(key => {
+    const mine = records.filter(r => r.source === key);
+    const rows = mine.slice(0, RECORDS_SHOWN).map(r => {
+      const links = r.links.filter(l => l && l[1]).map(([label, url]) => outLink(label, url)).join("");
+      return `<li>${esc(r.what)}${r.ref ? ` <small>${esc(r.ref)}</small>` : ""}${links ? `<div class="src-links">${links}</div>` : ""}</li>`;
+    }).join("") + (mine.length > RECORDS_SHOWN ? `<li><small>and ${mine.length - RECORDS_SHOWN} more</small></li>` : "");
+    const [name, home, licence] = SOURCE_ABOUT[key] || [key];
+    const terms = [licence && esc(licence), home && outLink("About this data", home)].filter(Boolean).join(" · ");
+    return `<div class="src"><b>${esc(name)}</b>${rows ? `<ul>${rows}</ul>` : ""}${terms ? `<p class="note">${terms}</p>` : ""}</div>`;
+  }).join("");
+}
+
+// Where to look next: what stood here before, how it's changed, who else has written about it, who owns it.
+// A place opened from the offline index alone doesn't know its country, so it gets the links that fit anywhere.
+function researchLinks(site) {
+  const lat = site.lat.toFixed(5), lng = site.lng.toFixed(5), here = `${lat},${lng}`;
+  const nation = site.nation || "";
+  // Its name alone: other names are often as loose as "Saint Peter", and one word ("Pillbox") finds everything.
+  const named = !/^Unnamed /.test(site.name) && /\S\s+\S/.test(site.name);
+  const google = q => `https://www.google.com/search?q=${encodeURIComponent(q)}`;
+  return [
+    ["Old maps", "Ordnance Survey maps of 1888–1915, side by side with today's aerial view",
+     `https://maps.nls.uk/geo/explore/side-by-side/#zoom=17&lat=${lat}&lon=${lng}&layers=6&right=ESRIWorld`],
+    ["Satellite photos over the years", "Every release since 2014: see when the roof went, or the diggers came",
+     `https://livingatlas.arcgis.com/wayback/#mapCenter=${lng}%2C${lat}%2C18&mode=explore`],
+    nation === "england" && ["Listings and planning", "Listed buildings, monuments, conservation areas and brownfield land around it",
+     `https://www.planning.data.gov.uk/map/?dataset=listed-building&dataset=scheduled-monument&dataset=conservation-area&dataset=brownfield-land#${here},17z`],
+    ["Wikipedia nearby", "Articles on the places around it", `https://en.wikipedia.org/wiki/Special:Nearby#/coord/${here}`],
+    ["england", "scotland", "wales"].includes(nation) && ["Photos nearby", "Geograph: photos of every corner of Britain, some from decades back",
+     `https://www.geograph.org.uk/near/${here}`],
+    ["Street-level photos", "Mapillary's photos along the roads and paths", `https://www.mapillary.com/app/?lat=${lat}&lng=${lng}&z=18`],
+    !(site.detail && (site.detail.osm || []).length) && ["On OpenStreetMap", "What's mapped around it",
+     `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lng}#map=18/${lat}/${lng}`],
+    named && ["Search the web", `"${site.name}"`, google(`"${site.name}"`)],
+    named && ["Explorers' reports", "Search 28DaysLater and Derelict Places for it",
+     google(`"${site.name}" (site:28dayslater.co.uk OR site:derelictplaces.co.uk)`)],
+    (nation === "england" || nation === "wales") && ["Who owns it", "HM Land Registry: the title register names the owner, for a small fee",
+     "https://search-property-information.service.gov.uk/"],
+    nation === "scotland" && ["Who owns it", "ScotLIS: the title sheet names the owner, for a small fee", "https://scotlis.ros.gov.uk/"],
+    ["Gone, or not as described?", "Leave a note on OpenStreetMap for mappers. Their fixes reach this map at its next update",
+     `https://www.openstreetmap.org/note/new?lat=${lat}&lon=${lng}#map=18/${lat}/${lng}`],
+  ].filter(Boolean).map(([title, about, url]) =>
+    `<a href="${safeUrl(url)}" target="_blank" rel="noopener"><span><b>${esc(title)}</b><small>${esc(about)}</small></span></a>`).join("");
+}
 
 function renderSite(site) {
   const lk = site.links;
   const nav = directions(site);
   const strength = site.strength === "strong" ? '<span class="tag strong">Strong evidence</span>'
     : site.strength === "weak" ? '<span class="tag">Weak lead</span>' : "";
-  const more = [["OpenStreetMap", lk.osm_element || lk.openstreetmap], ["Wikipedia", lk.wikipedia], ["Wikidata", lk.wikidata],
-                ...(lk.registers || []).map(r => [r.label, r.url]), ["Mapillary", lk.mapillary]]
-    .filter(([, url]) => url)
-    .map(([label, url]) => `<a class="btn small" href="${safeUrl(url)}" target="_blank" rel="noopener">${esc(label)} ↗</a>`).join("");
   const osm = (site.detail.osm || [])[0];
   const tags = osm ? Object.entries(osm.tags).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join("") : "";
-  const sources = String(site.sources || "").split("+").map(s => SOURCE_NAMES[s] || s).join(" and ");
   const coords = `${site.lat.toFixed(6)}, ${site.lng.toFixed(6)}`;
+  const gridRef = site.grid_ref
+    ? `<span>Grid ref <button type="button" class="linkbtn" data-copy="${esc(site.grid_ref)}" title="Copy">${esc(site.grid_ref)}</button></span> · ` : "";
   $("detail").innerHTML = `
     <div class="site-head" data-drag>
       ${badge(site.category, "big")}
@@ -1350,11 +1446,12 @@ function renderSite(site) {
     <div class="block"><h3>Getting there</h3><div id="getThere"><p class="note">Looking at the paths around it…</p></div></div>
     <div class="block"><h3>Your notes</h3>
       <textarea class="notes" id="noteBox" placeholder="Access, what's inside, when you went… Only kept on this device.">${esc((S.saved[site.key] || {}).note || "")}</textarea></div>
-    <div class="block"><h3>More about it</h3>
-      <div class="links">${more}</div>
-      <p class="note">${coords} · found in ${esc(sources)} · first seen ${esc((site.first_seen || "").slice(0, 10))}</p>
+    <div class="block"><h3>Where it comes from</h3>
+      ${renderSources(site)}
+      <p class="note src-note">${gridRef}<span>${coords}</span>${site.first_seen ? ` · <span>first seen ${esc(site.first_seen.slice(0, 10))}</span>` : ""}</p>
       ${tags ? `<details class="box"><summary>OpenStreetMap tags</summary><div><table class="tags">${tags}</table></div></details>` : ""}
     </div>
+    <div class="block"><h3>Dig deeper</h3><div class="dig">${researchLinks(site)}</div></div>
     <p class="note">Being on this map doesn't mean you can go in. Check who owns it, and stay off anything posted or secured.</p>`;
 }
 

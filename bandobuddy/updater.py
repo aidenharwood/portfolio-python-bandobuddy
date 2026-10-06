@@ -28,6 +28,11 @@ ALL_SOURCES = (*SOURCES, importer.SOURCE)                  # ...plus places you 
 SOURCE_LABELS = {"osm": "OpenStreetMap", "wikidata": "Wikidata & Wikipedia",
                  **{key: d.label for key, d in opendata.DATASETS.items()},
                  importer.SOURCE: "Your own imports"}
+# Where each source explains itself, and the terms it's used under: (home page, licence).
+SOURCE_ABOUT = {"osm": ("https://www.openstreetmap.org/copyright", "Open Database Licence"),
+                "wikidata": ("https://www.wikidata.org/wiki/Wikidata:Licensing", "CC0; Wikipedia's text CC BY-SA"),
+                **{key: (d.home, d.licence) for key, d in opendata.DATASETS.items()},
+                importer.SOURCE: ("", "")}
 OD_BATCH = 2000               # records held before writing them to the database
 INCREMENTAL_EVERY_DAYS = 7    # PlanIt asks for a fortnight of changes: weekly leaves a week to spare
 WIKIDATA_BOX_DEG = 0.5
