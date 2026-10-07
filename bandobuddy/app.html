@@ -68,6 +68,7 @@
     width:max-content; max-width:calc(100% - 32px); padding:10px 14px; border-radius:12px; background:var(--ink); color:var(--panel);
     box-shadow:var(--shadow); font-size:14px; opacity:0; pointer-events:none; transition:opacity .2s }
   .toast.show { opacity:1 }
+  .toast.action.show { pointer-events:auto; cursor:pointer }
 
   /* floating locate button: rides on top of the sheet */
   .fabs { position:fixed; z-index:900; right:12px; bottom:calc(var(--sheet-h) + 30px); display:grid; gap:10px;
@@ -110,6 +111,7 @@
     .sheet { top:76px; left:12px; right:auto; bottom:12px; width:400px; height:auto; border-radius:16px; box-shadow:var(--shadow); transform:none }
     .grab { display:none }
     .sheet-body { padding:12px 16px 24px }
+    .sheet[data-snap] .sheet-body { overflow-y:auto }   /* a side panel never folds down: always scrolls */
     [data-drag] { touch-action:auto }
     .fabs { right:16px; bottom:36px }
     .toast { top:76px; left:calc(50% + 206px) }
@@ -212,6 +214,7 @@
   .site-head { display:flex; gap:12px; align-items:flex-start; padding:2px 0 12px }
   .site-head h2 { margin:0; font-size:20px; line-height:1.2; overflow-wrap:anywhere }
   .site-head p { margin:4px 0 0; color:var(--muted); font-size:14px }
+  .site-head p.when { font-size:13px }
   .actions { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 6px; padding:0 0 8px }
   .act { flex:none; display:inline-flex; align-items:center; gap:6px; height:40px; padding:0 14px; border:1px solid var(--line);
     border-radius:20px; background:var(--panel); color:var(--accent); font-size:14px; font-weight:600; text-decoration:none }
@@ -235,6 +238,7 @@
   .src ul { list-style:none; margin:4px 0 0; padding:0; display:grid; gap:8px }
   .src li { font-size:14px; overflow-wrap:anywhere }
   .src li small { color:var(--muted); font-size:12px }
+  .src li small.when { display:block; margin-top:1px }
   .src .note { margin-top:4px; font-size:12px }
   .src-links { display:flex; flex-wrap:wrap; gap:2px 14px }
   .src a { color:var(--accent); font-weight:600; text-decoration:none; white-space:nowrap }
@@ -591,6 +595,8 @@ const fmtCount = n => n >= 10000 ? `${Math.round(n / 1000)}k` : n >= 1000 ? `${(
 let toastTimer = null;
 function toast(msg, ms = 4000) {
   const t = $("toast");
+  t.classList.remove("action");
+  t.onclick = null;
   t.textContent = msg;
   t.classList.add("show");
   clearTimeout(toastTimer);
@@ -634,8 +640,10 @@ function initSheetDrag() {
   sheet.addEventListener("pointerdown", e => {
     d = null;
     if (wide() || e.button > 0 || !e.target.closest("[data-drag], .grab")) return;
-    d = { id: e.pointerId, y0: e.clientY, v0: Sheet.visible, lastY: e.clientY, lastT: e.timeStamp, vel: 0, moved: false,
-          onControl: !!e.target.closest("[data-drag] button, [data-drag] a, input, select") };
+    // A button in a header is the button's: a finger drifting a few pixels while tapping the X mustn't turn the
+    // tap into a drag, which takes the pointer and swallows the click.
+    if (e.target.closest("[data-drag] button, [data-drag] a, [data-drag] input, [data-drag] select")) return;
+    d = { id: e.pointerId, y0: e.clientY, v0: Sheet.visible, lastY: e.clientY, lastT: e.timeStamp, vel: 0, moved: false };
   });
   window.addEventListener("pointermove", e => {
     if (!d || e.pointerId !== d.id) return;
@@ -660,7 +668,7 @@ function initSheetDrag() {
     d = null;
     document.body.classList.remove("dragging");
     if (!drag.moved) {
-      if (e.type === "pointerup" && !drag.onControl) Sheet.set({ peek: "half", half: "full", full: "half" }[Sheet.snap]);
+      if (e.type === "pointerup") Sheet.set({ peek: "half", half: "full", full: "half" }[Sheet.snap]);
       return;
     }
     const s = Sheet.sizes();
@@ -669,6 +677,21 @@ function initSheetDrag() {
   }
   window.addEventListener("pointerup", end);
   window.addEventListener("pointercancel", end);
+
+  // A mouse in a narrow window: the wheel opens the sheet (and then scrolls it), and closes it again from the top.
+  // Once per gesture: one flick of the wheel is dozens of events.
+  let wheeled = 0;
+  sheet.addEventListener("wheel", e => {
+    if (wide() || e.ctrlKey || !e.deltaY) return;
+    const body = $("sheetBody");
+    const open = e.deltaY > 0 && Sheet.snap !== "full";
+    const close = e.deltaY < 0 && Sheet.snap !== "peek" && body.scrollTop <= 0;
+    if (!open && !close) return;
+    e.preventDefault();
+    if (e.timeStamp - wheeled < 400) return;
+    wheeled = e.timeStamp;
+    Sheet.set(open ? (Sheet.snap === "peek" ? "half" : "full") : (Sheet.snap === "full" ? "half" : "peek"));
+  }, { passive: false });
 }
 
 function show(view, snap) {
@@ -1350,13 +1373,36 @@ function sourceRecords(site) {
     const [type, id] = String(m.osm_id).split("/");
     const url = `https://www.openstreetmap.org/${type}/${id}`;
     records.push({ source: "osm", what: m.name || m.kind.charAt(0).toUpperCase() + m.kind.slice(1), ref: `${type} ${id}`,
-                   links: [["See it", url], ["What changed, and when", `${url}/history`]] });
+                   when: reportedText(m), links: [["See it", url], ["What changed, and when", `${url}/history`]] });
   }
   for (const m of d.wikidata || [])
-    records.push({ source: "wikidata", what: m.name, ref: m.qid, links: [["Wikidata", m.url], ["Wikipedia", m.wikipedia_url]] });
+    records.push({ source: "wikidata", what: m.name, ref: m.qid, when: reportedText(m),
+                   links: [["Wikidata", m.url], ["Wikipedia", m.wikipedia_url]] });
   for (const m of d.open || [])
-    records.push({ source: m.source, what: m.name, ref: m.source === "imported" ? "" : m.ref, links: registerLinks(m) });
+    records.push({ source: m.source, what: m.name, ref: m.source === "imported" ? "" : m.ref, when: reportedText(m),
+                   links: registerLinks(m) });
   return records;
+}
+
+// When a source last said what it says: "2024-06-28" -> "28 Jun 2024"; a month or a bare year as they are.
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function fmtDay(on) {
+  const m = /^(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?/.exec(String(on || ""));
+  if (!m) return "";
+  return [m[3] && String(Number(m[3])), m[2] && MONTHS[Number(m[2]) - 1], m[1]].filter(Boolean).join(" ");
+}
+function reportedText(m) {
+  const day = m && fmtDay(m.reported);
+  return day ? `${m.reported_as ? `${m.reported_as} ` : ""}${day}` : "";
+}
+
+// The latest any source has said about a place: "Last update: decided 28 Jun 2024 (UK PlanIt)".
+function lastReported(site) {
+  const last = (site.detail || {}).last_reported;
+  const said = last && reportedText({ reported: last.on, reported_as: last.as });
+  if (!said) return "";
+  const from = (SOURCE_ABOUT[last.source] || [])[0] || ({ osm: "OpenStreetMap", wikidata: "Wikidata" })[last.source] || "";
+  return `<p class="when">Last update: ${esc(said)}${from ? ` (${esc(from)})` : ""}</p>`;
 }
 
 function registerLinks(m) {
@@ -1387,7 +1433,7 @@ function renderSources(site) {
     const mine = records.filter(r => r.source === key);
     const rows = mine.slice(0, RECORDS_SHOWN).map(r => {
       const links = r.links.filter(l => l && l[1]).map(([label, url]) => outLink(label, url)).join("");
-      return `<li>${esc(r.what)}${r.ref ? ` <small>${esc(r.ref)}</small>` : ""}${links ? `<div class="src-links">${links}</div>` : ""}</li>`;
+      return `<li>${esc(r.what)}${r.ref ? ` <small>${esc(r.ref)}</small>` : ""}${r.when ? `<small class="when">${esc(r.when)}</small>` : ""}${links ? `<div class="src-links">${links}</div>` : ""}</li>`;
     }).join("") + (mine.length > RECORDS_SHOWN ? `<li><small>and ${mine.length - RECORDS_SHOWN} more</small></li>` : "");
     const [name, home, licence] = SOURCE_ABOUT[key] || [key];
     const terms = [licence && esc(licence), home && outLink("About this data", home)].filter(Boolean).join(" · ");
@@ -1443,6 +1489,7 @@ function renderSite(site) {
       ${badge(site.category, "big")}
       <div class="grow"><h2>${esc(site.name)}${site.added ? '<span class="new">NEW</span>' : ""}</h2>
         <p>${esc(site.condition)} · ${esc(catLabel(site.category))}</p>
+        ${lastReported(site)}
         ${(site.aliases || []).length ? `<p class="aka">Also known as ${esc(site.aliases.join(", "))}</p>` : ""}
         <button type="button" class="bearing" id="bearing" hidden>${svg(UI.arrow)}<span class="bearing-text"></span><small></small></button></div>
       ${closeButton()}
@@ -1847,11 +1894,20 @@ async function checkNewSinceVisit() {
   if (!S.prevVisit) return;
   try {
     const data = await api(`/api/list?${new URLSearchParams({ added_since: S.prevVisit, limit: "0" })}`);
-    if (data.total) {
-      $("newCard").innerHTML = `${svg(UI.new)}<span class="grow"><b>${fmtN(data.total)} new place${data.total === 1 ? "" : "s"} since your last visit</b><small>Tap to show only those</small></span>`;
-      $("newCard").hidden = false;
-    }
+    S.newSince = data.total || 0;
+    renderNewCard();
   } catch (_) { /* not important */ }
+}
+
+// The places new since your last visit: a card to show only those and, while they're showing, to go back.
+function renderNewCard() {
+  const n = S.newSince || 0, only = $("newMode").value === "visit";
+  $("newCard").hidden = !n;
+  if (!n) return;
+  const [said, tap] = only ? ["Showing only what's new since your last visit", "Tap to show everything again"]
+    : [`${fmtN(n)} new place${n === 1 ? "" : "s"} since your last visit`, "Tap to show only those"];
+  $("newCard").innerHTML = `${svg(UI.new)}<span class="grow"><b>${said}</b><small>${tap}</small></span>`;
+  $("newCard").setAttribute("aria-pressed", String(only));
 }
 
 // ---------- wiring ----------
@@ -1904,6 +1960,7 @@ function initFilters() {
                 best: $("best").checked,
                 sources: pickedSources(), knownSources: BOOT.sources.map(s => s[0]) });
     renderFilterCount();
+    renderNewCard();
     scheduleFetch(0);
   };
   $("catChips").addEventListener("click", e => {
@@ -1984,9 +2041,8 @@ function initControls() {
   });
   $("locCard").addEventListener("click", () => startLocate());
   $("newCard").addEventListener("click", () => {
-    $("newMode").value = "visit";
+    $("newMode").value = $("newMode").value === "visit" ? "" : "visit";
     $("newMode").dispatchEvent(new Event("change"));
-    $("newCard").hidden = true;
   });
   $("locBtn").addEventListener("click", onLocateButton);
   $("layersBtn").addEventListener("click", () => showLayers($("layersPanel").hidden));
@@ -2095,6 +2151,13 @@ function initOffline() {
     if (firstVisit && S.map) S.map.eachLayer(layer => { if (layer instanceof L.TileLayer) layer.redraw(); });
   });
 
+  // The worker opened the copy of the app it kept, then fetched a newer one: offer it now, not next time.
+  navigator.serviceWorker?.addEventListener("message", e => {
+    if (!e.data || e.data.type !== "page-updated") return;
+    toast("bandobuddy has been updated. Tap here to use the new version.", 60000);
+    $("toast").classList.add("action");
+    $("toast").onclick = () => location.reload();
+  });
   if ("serviceWorker" in navigator && window.isSecureContext) {
     navigator.serviceWorker.register("/sw.js").catch(() => { /* fine: the app just won't work offline */ });
   }

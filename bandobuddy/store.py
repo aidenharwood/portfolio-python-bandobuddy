@@ -10,6 +10,8 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
+import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -57,6 +59,17 @@ SITE_LIST_FIELDS = ("key, name, lat, lng, score, strength, category, condition, 
 INDEX_COLUMNS = ["key", "name", "lat", "lng", "score", "strength", "category", "condition", "kind", "sources",
                  "added", "first_seen", "aliases", "entrance_count", "summary"]
 MAP_SITE_LIMIT = 400   # more matches than this in view and the map shows clusters instead
+# SQLite lets one connection write at a time. Every source refreshing at once (a restart, "Update all") queues for
+# that turn: waiting up to ten minutes for it, rather than giving up after 30 seconds with "database is locked".
+BUSY_WAIT_S = 600
+# ...and no one write holds it for long: big writes go in batches of this many rows, each its own transaction.
+WRITE_BATCH = 5000
+SITES_DDL = re.search(r"CREATE TABLE IF NOT EXISTS sites (\(.*?\));", SCHEMA, re.S).group(1)
+
+
+def _batches(rows: list, size: int = WRITE_BATCH):
+    for at in range(0, len(rows), size):
+        yield rows[at:at + size]
 CLUSTER_PX = 64        # roughly how wide a cluster cell is on screen
 
 
@@ -77,13 +90,15 @@ class Store:
             db.executescript(SCHEMA)
             # Columns added since a table was made: add them in place, and the next update fills them in.
             for table, column, kind in (("osm_items", "extent_m", "REAL"), ("wd_items", "aliases", "TEXT"),
-                                        ("od_items", "aliases", "TEXT")):
+                                        ("od_items", "aliases", "TEXT"), ("osm_items", "edited", "TEXT"),
+                                        ("wd_items", "modified", "TEXT"), ("od_items", "reported", "TEXT"),
+                                        ("od_items", "reported_as", "TEXT")):
                 if column not in {r["name"] for r in db.execute(f"PRAGMA table_info({table})")}:
                     db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
-        db = sqlite3.connect(str(self.path), timeout=30)
+        db = sqlite3.connect(str(self.path), timeout=BUSY_WAIT_S)
         db.row_factory = sqlite3.Row
         try:
             with db:
@@ -104,44 +119,51 @@ class Store:
     # -- raw items -----------------------------------------------------------------------
     def upsert_osm(self, items: Iterable[dict], seen_at: str) -> None:
         rows = [(i["osm_id"], i["lat"], i["lng"], json.dumps(i["tags"], ensure_ascii=False), i.get("extent_m") or 0,
-                 seen_at, seen_at) for i in items]
-        with self.connect() as db:
-            db.executemany(
-                """INSERT INTO osm_items (osm_id, lat, lng, tags, extent_m, first_seen, last_seen)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)
-                   ON CONFLICT(osm_id) DO UPDATE SET lat = excluded.lat, lng = excluded.lng, tags = excluded.tags,
-                   extent_m = excluded.extent_m, last_seen = excluded.last_seen, gone_at = NULL""",
-                rows,
-            )
+                 i.get("edited"), seen_at, seen_at) for i in items]
+        for batch in _batches(rows):
+            with self.connect() as db:
+                db.executemany(
+                    """INSERT INTO osm_items (osm_id, lat, lng, tags, extent_m, edited, first_seen, last_seen)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                       ON CONFLICT(osm_id) DO UPDATE SET lat = excluded.lat, lng = excluded.lng, tags = excluded.tags,
+                       extent_m = excluded.extent_m, edited = COALESCE(excluded.edited, osm_items.edited),
+                       last_seen = excluded.last_seen, gone_at = NULL""",
+                    batch,
+                )
 
     def upsert_wd(self, items: Iterable[dict], seen_at: str) -> None:
         rows = [(i["qid"], i["label"], i["lat"], i["lng"], json.dumps(i["types"]), json.dumps(i["states"]),
-                 i["ended"], i["wiki"], json.dumps(i.get("aliases") or [], ensure_ascii=False), seen_at, seen_at)
-                for i in items]
-        with self.connect() as db:
-            db.executemany(
-                """INSERT INTO wd_items (qid, label, lat, lng, types, states, ended, wiki, aliases, first_seen, last_seen)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                   ON CONFLICT(qid) DO UPDATE SET label = excluded.label, lat = excluded.lat, lng = excluded.lng,
-                   types = excluded.types, states = excluded.states, ended = excluded.ended, wiki = excluded.wiki,
-                   aliases = excluded.aliases, last_seen = excluded.last_seen, gone_at = NULL""",
-                rows,
-            )
+                 i["ended"], i["wiki"], json.dumps(i.get("aliases") or [], ensure_ascii=False), i.get("modified"),
+                 seen_at, seen_at) for i in items]
+        for batch in _batches(rows):
+            with self.connect() as db:
+                db.executemany(
+                    """INSERT INTO wd_items (qid, label, lat, lng, types, states, ended, wiki, aliases, modified,
+                       first_seen, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                       ON CONFLICT(qid) DO UPDATE SET label = excluded.label, lat = excluded.lat, lng = excluded.lng,
+                       types = excluded.types, states = excluded.states, ended = excluded.ended, wiki = excluded.wiki,
+                       aliases = excluded.aliases, modified = COALESCE(excluded.modified, wd_items.modified),
+                       last_seen = excluded.last_seen, gone_at = NULL""",
+                    batch,
+                )
 
     def upsert_od(self, items: Iterable[dict], seen_at: str) -> None:
         """Records from an open register (Historic England, Canmore, Coflein, brownfield...)."""
         rows = [(i["dataset"], i["ref"], i["name"], i["lat"], i["lng"], i["kind"], i["evidence"], i["weight"],
-                 i.get("url"), json.dumps(i.get("aliases") or [], ensure_ascii=False), seen_at, seen_at) for i in items]
-        with self.connect() as db:
-            db.executemany(
-                """INSERT INTO od_items (dataset, ref, name, lat, lng, kind, evidence, weight, url, aliases,
-                   first_seen, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                   ON CONFLICT(dataset, ref) DO UPDATE SET name = excluded.name, lat = excluded.lat,
-                   lng = excluded.lng, kind = excluded.kind, evidence = excluded.evidence,
-                   weight = excluded.weight, url = excluded.url, aliases = excluded.aliases,
-                   last_seen = excluded.last_seen, gone_at = NULL""",
-                rows,
-            )
+                 i.get("url"), json.dumps(i.get("aliases") or [], ensure_ascii=False), i.get("reported"),
+                 i.get("reported_as"), seen_at, seen_at) for i in items]
+        for batch in _batches(rows):
+            with self.connect() as db:
+                db.executemany(
+                    """INSERT INTO od_items (dataset, ref, name, lat, lng, kind, evidence, weight, url, aliases,
+                       reported, reported_as, first_seen, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                       ON CONFLICT(dataset, ref) DO UPDATE SET name = excluded.name, lat = excluded.lat,
+                       lng = excluded.lng, kind = excluded.kind, evidence = excluded.evidence,
+                       weight = excluded.weight, url = excluded.url, aliases = excluded.aliases,
+                       reported = excluded.reported, reported_as = excluded.reported_as,
+                       last_seen = excluded.last_seen, gone_at = NULL""",
+                    batch,
+                )
 
     def active_od(self, dataset: str | None = None) -> list[dict]:
         where = "gone_at IS NULL" + (" AND dataset = ?" if dataset else "")
@@ -176,16 +198,18 @@ class Store:
 
     def active_osm(self) -> list[dict]:
         with self.connect() as db:
-            rows = db.execute("SELECT osm_id, lat, lng, tags, extent_m, first_seen FROM osm_items WHERE gone_at IS NULL")
+            rows = db.execute("SELECT osm_id, lat, lng, tags, extent_m, edited, first_seen FROM osm_items"
+                              " WHERE gone_at IS NULL")
             return [{"osm_id": r["osm_id"], "lat": r["lat"], "lng": r["lng"], "tags": json.loads(r["tags"]),
-                     "extent_m": r["extent_m"] or 0, "first_seen": r["first_seen"]} for r in rows]
+                     "extent_m": r["extent_m"] or 0, "edited": r["edited"], "first_seen": r["first_seen"]} for r in rows]
 
     def active_wd(self) -> list[dict]:
         with self.connect() as db:
             rows = db.execute("SELECT * FROM wd_items WHERE gone_at IS NULL")
             return [{"qid": r["qid"], "label": r["label"], "lat": r["lat"], "lng": r["lng"],
                      "types": json.loads(r["types"]), "states": json.loads(r["states"]), "ended": r["ended"],
-                     "wiki": r["wiki"], "aliases": json.loads(r["aliases"] or "[]"), "first_seen": r["first_seen"]}
+                     "wiki": r["wiki"], "aliases": json.loads(r["aliases"] or "[]"), "modified": r["modified"],
+                     "first_seen": r["first_seen"]}
                     for r in rows]
 
     def count_items(self) -> dict:
@@ -289,15 +313,29 @@ class Store:
                  json.dumps(s.get("entrances") or [], ensure_ascii=False)) for s in sites]
         # Phones keep a copy of the map, and answer from it while it matches the server's. A rebuild that comes
         # out the same (a restart, or an update that found nothing new) leaves theirs current, and the table alone.
-        digest = hashlib.blake2b(digest_size=16)
+        # The best-spots rules count too: phones apply them to their copy, so new rules need a new copy.
+        digest = hashlib.blake2b(json.dumps(BEST, sort_keys=True).encode("utf-8"), digest_size=16)
         for row in rows:
             digest.update("\x1f".join(map(str, row)).encode("utf-8", "surrogatepass") + b"\x1e")
         digest = digest.hexdigest()
         if digest == self.get_setting("sites_digest") and self.get_setting("sites_built"):
             return
+        # Written beside the map in use, a batch at a time, then swapped in at once. Written in one go, 160,000
+        # places held the database for over a minute, and every source refreshing meanwhile gave up waiting.
+        # Readers see the old map until the swap. Named for this process: another may be rebuilding too.
+        table = f"sites_next_{os.getpid()}"
         with self.connect() as db:
-            db.execute("DELETE FROM sites")
-            db.executemany("INSERT INTO sites VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
+            db.execute(f"DROP TABLE IF EXISTS {table}")
+            db.execute(f"CREATE TABLE {table} {SITES_DDL}")
+        for batch in _batches(rows):
+            with self.connect() as db:
+                db.executemany(f"INSERT INTO {table} VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", batch)
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")      # DDL doesn't start a transaction by itself: the swap is all or nothing
+            db.execute("DROP TABLE sites")
+            db.execute(f"ALTER TABLE {table} RENAME TO sites")
+            db.execute("CREATE INDEX sites_lat ON sites(lat)")
+            db.execute("CREATE INDEX sites_score ON sites(score)")
             db.execute("INSERT OR REPLACE INTO settings VALUES ('sites_built', ?)", (json.dumps(now_iso()),))
             db.execute("INSERT OR REPLACE INTO settings VALUES ('sites_digest', ?)", (json.dumps(digest),))
 
@@ -343,9 +381,9 @@ class Store:
             args += BEST["conditions"]
             where.append(f"LOWER(kind) NOT IN ({','.join('?' * len(BEST['skip_kinds']))})")
             args += BEST["skip_kinds"]
-            where.append(f"(name NOT LIKE 'Unnamed %' OR kind = 'cave entrance'"
-                         f" OR category IN ({','.join('?' * len(BEST['unnamed_ok']))}))")
-            args += BEST["unnamed_ok"]
+            where.append(f"(name NOT LIKE 'Unnamed %' OR category IN ({','.join('?' * len(BEST['unnamed_ok']))})"
+                         f" OR LOWER(kind) NOT IN ({','.join('?' * len(BEST['vague_kinds']))}))")
+            args += BEST["unnamed_ok"] + BEST["vague_kinds"]
         if bbox:
             w, s, e, n = bbox
             where += ["lat BETWEEN ? AND ?", "lng BETWEEN ? AND ?"]

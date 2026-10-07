@@ -19,7 +19,7 @@ import threading
 import xml.etree.ElementTree as ET
 import zipfile
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Iterator
 from urllib.parse import urljoin
@@ -309,6 +309,7 @@ class ScotlandDerelictLand:
         if not link:
             raise RuntimeError("The site register's spreadsheet isn't linked from its page any more")
         _stop(cancel)
+        survey = re.search(r"(20\d\d)", link.group(1))
         resp = session.get(urljoin(self.page, link.group(1)), headers=headers, timeout=TIMEOUT)
         resp.raise_for_status()
         rows = ods_rows(resp.content, self.sheet)
@@ -325,7 +326,7 @@ class ScotlandDerelictLand:
                 continue
             if not row.get("Site Code"):
                 continue
-            yield {**row, "lat": lat, "lng": lng}
+            yield {**row, "lat": lat, "lng": lng, "survey": survey.group(1) if survey else None}
             done += 1
         progress("reading the register", done, done)
 
@@ -344,7 +345,16 @@ STATE_WORDS = ("derelict", "dilapidated", "ruinous", "fire damaged", "abandoned"
 STALLED_PHRASES = ("unfinished dwelling", "unfinished house", "unfinished building", "partially constructed dwelling",
                    "partially constructed house", "partially constructed building", "partially built dwelling",
                    "partially built house", "part built dwelling", "partly built dwelling", "partially completed dwelling",
-                   "incomplete dwelling", "never been occupied", "never occupied")
+                   "incomplete dwelling", "never been occupied", "never occupied",
+                   # ...or one that can't be lived in, in so many words: "demolish existing uninhabitable house",
+                   # "condemned as unfit for habitation". About 120 more since 2000.
+                   "uninhabitable", "unfit for habitation", "unfit for human habitation")
+# Living in a caravan on the plot while the house is done up: it couldn't be lived in then. Most are finished in a
+# year or two, but not all: 3 Segensworth Road, Titchfield had a caravan "whilst the property is being renovated"
+# in 2018, stood empty after, and was approved for demolition in 2024. About 500 since 2000, holiday parks and
+# Traveller pitches among them (the judge drops those): two pages.
+CARAVAN_SEARCH = " or ".join(f"{home} {work}" for home in ("caravan", '"mobile home"')
+                             for work in ("renovated", "renovation", "renovating", "refurbishment", "refurbished"))
 
 
 def _quoted(words) -> list[str]:
@@ -374,6 +384,7 @@ class PlanIt:
     days: int = 14                 # a fortnight: a weekly run with a week to spare
     windows: tuple = ("recent", "decided")   # made lately, and decided lately
     stalled: str = " or ".join(_quoted(STALLED_PHRASES))   # asked for in full, every time: a page or so
+    caravans: str = CARAVAN_SEARCH                           # ...and these: two pages
     batch: int = 300
     gap_s: float = 61
 
@@ -399,8 +410,11 @@ class PlanIt:
 
     def __call__(self, session: requests.Session, progress: Progress, cancel=None) -> Records:
         asked = False
-        asks = [(self.search, window) for window in self.windows] + ([(self.stalled, None)] if self.stalled else [])
-        for search, window in asks:
+        asks = [(self.search, window, {"recent": "new applications", "decided": "decisions"}[window])
+                for window in self.windows]
+        asks += [(search, None, what) for search, what in ((self.stalled, "unfinished and unlivable buildings"),
+                                                           (self.caravans, "houses being done up")) if search]
+        for search, window, what in asks:
             page, done = 1, 0
             while True:
                 _stop(cancel)
@@ -419,7 +433,6 @@ class PlanIt:
                         continue
                     yield {**row, "lat": float(row["location_y"]), "lng": float(row["location_x"])}
                 done += len(records)
-                what = {"recent": "new applications", "decided": "decisions"}.get(window, "unfinished buildings")
                 progress(f"{what}, a minute between pages", done, total if isinstance(total, int) else None)
                 if len(records) < self.batch or (isinstance(total, int) and done >= total):
                     break
@@ -540,6 +553,32 @@ class Dataset:
         return os.environ.get(f"BANDOBUDDY_{self.key.upper()}", "").strip().lower() in ("1", "true", "yes", "on")
 
 
+HAR_YEAR = 2025                   # the register's edition: each year's is a layer of its own
+
+
+def _dated(value) -> str | None:
+    """A register's date as a day ("2024-06-28"): from ISO text, "28/06/2024", or ArcGIS's milliseconds."""
+    if value in (None, ""):
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            return datetime.fromtimestamp(value / 1000, timezone.utc).strftime("%Y-%m-%d")
+        except (OverflowError, OSError, ValueError):
+            return None
+    text = str(value).strip()
+    m = re.match(r"(\d{4})-(\d{2})-(\d{2})", text)
+    if m:
+        return m.group(0)
+    m = re.match(r"(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})", text)
+    if m:
+        try:
+            return date(int(m.group(3)), int(m.group(2)), int(m.group(1))).isoformat()
+        except ValueError:
+            return None
+    m = re.match(r"(\d{4})$", text)
+    return m.group(1) if m else None
+
+
 def _har(row: dict) -> dict | None:
     kinds = {"Listed Building": ("listed building", 25), "Scheduled Monument": ("scheduled monument", 15)}
     if row.get("HeritageCa") not in kinds:  # conservation areas and parks are whole districts, not places
@@ -553,6 +592,7 @@ def _har(row: dict) -> dict | None:
         "evidence": f"Historic England has it on the Heritage at Risk register ({kind})",
         "weight": weight,
         "url": row.get("URL"),
+        "reported": str(HAR_YEAR), "reported_as": "on the register in",
     }
 
 
@@ -571,6 +611,7 @@ def _brownfield(row: dict) -> dict | None:
         "evidence": "On the council's brownfield land register" + (f": {notes[:120]}" if notes else ""),
         "weight": 10,
         "url": row.get("site-plan-url") or None,
+        "reported": _dated(row.get("entry-date")), "reported_as": "register entry updated",
     }
 
 
@@ -590,6 +631,7 @@ def _canmore(row: dict) -> dict | None:
         "aliases": [a for a in aliases if a and a != name],
         "weight": weight,
         "url": row.get("URL"),
+        "reported": _dated(row.get("LASTUPDATE")), "reported_as": "record updated",
     }
 
 
@@ -607,6 +649,7 @@ def _coflein(row: dict) -> dict | None:
         "evidence": f"Coflein records {_a(what)} here",
         "weight": weight,
         "url": row.get("url"),
+        "reported": _dated(row.get("lastupdate")), "reported_as": "record updated",
     }
 
 
@@ -653,6 +696,7 @@ def _school(row: dict) -> dict | None:
                     + (", merged into another school" if merged else ""),
         "weight": weight,
         "url": f"https://get-information-schools.service.gov.uk/Establishments/Establishment/Details/{row.get('URN')}",
+        "reported": closed.isoformat() if closed else None, "reported_as": "closed",
     }
 
 
@@ -692,6 +736,7 @@ def _vdl(row: dict) -> dict | None:
         "evidence": f"Scotland's land survey lists {said}",
         "weight": weight,
         "url": None,
+        "reported": row.get("survey"), "reported_as": "land survey of",
     }
 
 
@@ -740,6 +785,25 @@ _NO_DECISION = re.compile(r"\bpre[- ]?app(?:lication)?\b|certificate of lawful|l
 # A building begun and never finished, or finished and never lived in.
 _STALLED = re.compile(r"\b(?:unfinished|incomplete|partially (?:constructed|built|completed)|part[- ]built|partly built)"
                       r"\s+(?:dwelling|house|home|building)s?\b|\bnever (?:been )?occupied\b", re.I)
+# A house that can't be lived in, said of the house: not of a loft, an annexe or a garage.
+_UNLIVABLE = re.compile(r"\b(?:uninhabitable|uninhabited|unfit for (?:human )?habitation)\b", re.I)
+_PARTS = (r"(?:loft|roof ?space|attic|annexe?|garages?|outbuildings?|outhouses?|sheds?|space|rooms?|area|basements?|cellars?"
+          r"|island|mobile homes?|caravans?)")
+_UNLIVABLE_PART = re.compile(r"(?:uninhabitable|uninhabited|unfit for (?:human )?habitation)\s+(?:[\w/-]+\s+){0,2}?"
+                             + _PARTS + r"s?\b|\b" + _PARTS + r"\s+(?:[\w-]+\s+){0,3}?(?:uninhabitable|uninhabited)",
+                             re.I)
+# ...unless it's said of the house too: "demolish existing uninhabitable house and outbuildings".
+_UNLIVABLE_HOME = re.compile(r"(?:uninhabitable|uninhabited|unfit for (?:human )?habitation)\s+(?:[\w,-]+\s+){0,3}?"
+                             r"(?:house|dwelling|bungalow|cottage|property|building|farmhouse|home|maisonette|flat)s?\b"
+                             r"|\b(?:house|dwelling|bungalow|cottage|property|farmhouse)s?\b[^.]{0,40}\b(?:is|was|are|were)"
+                             r" (?:\w+ )?(?:uninhabitable|unfit for)", re.I)
+# Living on the plot in a caravan while the house is done up...
+_DOING_UP = re.compile(r"\b(?:caravan|mobile home|static home)s?\b.{0,160}?\b(?:whilst|while|during|pending|until"
+                       r"|to (?:enable|allow|facilitate)|incidental to|for the duration of|for (?:the )?(?:house|home|dwelling))\b.{0,80}?\b(?:renovat|refurbish|restor|repair|rebuil"
+                       r"|reconstruct)", re.I)
+# ...not a holiday park, a Traveller site, or a house being knocked down and replaced.
+_NOT_DOING_UP = re.compile(r"holiday|glamping|touring|\bpitch|traveller|gypsy|caravan (?:park|site|club)|camp ?site"
+                           r"|camping|\blodges\b|chalets?|demoli|replacement dwelling|new dwelling", re.I)
 # Said of the building itself, with no demolition in sight.
 _STATE = re.compile(r"derelict|dilapidated|ruinous|fire[- ]damaged|abandoned|dangerous (?:structure|building)", re.I)
 # ...but not of something too small to go and see: the windows, a tree, a shed, a wall.
@@ -760,15 +824,25 @@ def _excerpt(said: str, focus: re.Match | None, size: int = 160) -> str:
 
 def _planit(row: dict) -> dict | None:
     """A planning application worth knowing about: one to demolish something derelict, empty or
-    redundant; one that calls the building itself derelict or falling down; or one about a house begun
-    and never finished, or never lived in."""
+    redundant; one that calls the building itself derelict or falling down, or unfit to live in; one about a
+    house begun and never finished, or never lived in; or one to live in a caravan on the plot while the house
+    is done up."""
     said = re.sub(r"\s+", " ", row.get("description") or "").strip()
-    if _NO_DECISION.search(said):
+    unlivable = _UNLIVABLE.search(said) \
+        if (_UNLIVABLE_HOME.search(said) or not _UNLIVABLE_PART.search(said)) and not _TREE_WORK.search(said) else None
+    doing_up = _DOING_UP.search(said) if not _NOT_DOING_UP.search(said) else None
+    # Advice before applying decides nothing, but an application that calls a house unlivable still says so.
+    if _NO_DECISION.search(said) and not (unlivable or doing_up):
         return None
     demolition = bool(re.search(r"demoli", said, re.I))
     weight = kind = None
     stalled = _STALLED.search(said)
-    if stalled:
+    focus = stalled or unlivable or doing_up
+    if unlivable and not stalled:
+        weight, kind = 18, _kind_of(said) or "building"
+    elif doing_up and not stalled:
+        weight, kind = 12, _kind_of(said) or "house"
+    elif stalled:
         weight = 14
         if "occupied" in stalled.group(0).lower():      # finished, never lived in: a house, or a gym unit
             kind = _kind_of(said) or "building"
@@ -821,7 +895,11 @@ def _planit(row: dict) -> dict | None:
         "ref": str(row.get("name") or row.get("uid") or "").strip(),
         "name": name,
         "kind": kind,
-        "evidence": f"Planning application ({state}): \"{_excerpt(said, stalled or _STATE.search(said))}\"",
+        "reported": decided or (row.get("start_date") or "")[:10] or None,
+        "reported_as": "decided" if decided else "applied for",
+        "evidence": f"Planning application ({state}): \"{_excerpt(said, focus or _STATE.search(said))}\""
+                    + ("; someone was to live in a caravan on the plot meanwhile, so it couldn't be lived in then"
+                       if doing_up and not (stalled or unlivable) else ""),
         "weight": weight,
         "url": row.get("url") or row.get("link"),
     }
@@ -890,6 +968,7 @@ def _committee(row: dict) -> dict | None:
         "evidence": f"{row['council']}'s planning report ({row['ref']}{when}): \"{said[:280]}\"",
         "weight": weight,
         "url": row["url"],
+        "reported": row.get("meeting") or None, "reported_as": "committee meeting",
     }
 
 
@@ -917,13 +996,23 @@ def _cqc(row: dict) -> dict | None:
     """A care home or hospital the Care Quality Commission no longer regulates, with nothing registered there
     since: the building's empty, or turned into something else (the more years, the likelier)."""
     said = f"{row['name']} {row['category']}"
+    years = _years_since(row["ended"])
+    if row.get("centre"):        # a day-service building: councils take years to sell them (Fiveways, Yeovil)
+        weight = 22 if years is not None and years <= 5 else 20
+        if years is not None and years > 14:
+            weight = 8
+        elif years is not None and years > 10:
+            weight = 12
+        return {"ref": row["ref"], "name": row["centre"], "kind": "day centre", "weight": weight,
+                "evidence": f"The Care Quality Commission records it as closed in {row['ended'][:4]}: the last care "
+                            f"service at {row['centre']} ended then, and none is registered there now",
+                "url": f"https://www.cqc.org.uk/location/{row['ref']}", "reported": row["ended"], "reported_as": "closed"}
     if row["care_home"]:
         kind = "nursing home" if re.search(r"nursing", said, re.I) else "care home"
         weight, what = (20 if row["beds"] >= 40 else 16), f"{_a(kind)} with {row['beds']} beds"
     else:
         kind = "hospice" if re.search(r"hospice", said, re.I) else "hospital"
         weight, what = 20, _a(kind)
-    years = _years_since(row["ended"])
     if years is not None and years <= 5:
         weight += 4
     elif years is not None and years > 12:
@@ -933,7 +1022,7 @@ def _cqc(row: dict) -> dict | None:
     return {"ref": row["ref"], "name": row["name"], "kind": kind, "weight": weight,
             "evidence": f"The Care Quality Commission records it as closed in {row['ended'][:4]} ({what}); "
                         "no care service is registered there now",
-            "url": f"https://www.cqc.org.uk/location/{row['ref']}"}
+            "url": f"https://www.cqc.org.uk/location/{row['ref']}", "reported": row["ended"], "reported_as": "closed"}
 
 
 def _nhs_estate(row: dict) -> dict | None:
@@ -950,7 +1039,10 @@ def _nhs_estate(row: dict) -> dict | None:
         said = (f"NHS estates return ({row['year']}): {int(row['empty_m2']):,} of its {int(row['floor_m2']):,} m² "
                 "stand empty")
         weight = 18
-    return {"ref": row["ref"], "name": name, "kind": kind, "weight": weight, "evidence": said, "url": None}
+    year = re.match(r"(\d{4})/(\d{2})", row.get("year") or "")
+    return {"ref": row["ref"], "name": name, "kind": kind, "weight": weight, "evidence": said, "url": None,
+            "reported": f"{year.group(1)[:2]}{year.group(2)}-03-31" if year else None,
+            "reported_as": "estates return for the year to"}
 
 
 def _railway_estate(row: dict) -> dict | None:
@@ -993,7 +1085,8 @@ def _mod(row: dict) -> dict | None:
     status = (row.get("status") or "").strip().lower()
     return {"ref": row["ref"], "name": name[:90], "kind": kind, "weight": weight,
             "evidence": said + (f" (stage: {status})" if status else ""),
-            "url": "https://www.gov.uk/government/publications/disposal-database-house-of-commons-report"}
+            "url": "https://www.gov.uk/government/publications/disposal-database-house-of-commons-report",
+            "reported": row.get("reported"), "reported_as": "reported to Parliament"}
 
 
 CANMORE_TERMS = ("OBSERVATION POST", "BUNKER", "PILLBOX", "BATTERY", "AIRFIELD", "AERODROME", "COLLIERY",
@@ -1011,7 +1104,7 @@ DATASETS = {
             attribution="Contains Historic England data © Historic England",
             home="https://opendata-historicengland.hub.arcgis.com/",
             fetch=ArcGIS("https://services-eu1.arcgis.com/ZOdPfBS3aqqDYPUQ/arcgis/rest/services"
-                         "/HAR_2025_OTHR_WGS84_Point/FeatureServer/0",
+                         f"/HAR_{HAR_YEAR}_OTHR_WGS84_Point/FeatureServer/0",
                          where="HeritageCa IN ('Listed Building','Scheduled Monument')",
                          fields="List_Entry,HeritageCa,EntryName,URL,uid"),
             judge=_har,
@@ -1024,7 +1117,7 @@ DATASETS = {
                         "© Historic Environment Scotland",
             home="https://canmore.org.uk/",
             fetch=ArcGISByIds("https://inspire.hes.scot/arcgis/rest/services/CANMORE/Canmore_Points/MapServer/0",
-                              CANMORE_WHERES, fields="CANMOREID,SITENUMBER,NMRSNAME,ALTNAME,SITETYPE,BROADCLASS,URL"),
+                              CANMORE_WHERES, fields="CANMOREID,SITENUMBER,NMRSNAME,ALTNAME,SITETYPE,BROADCLASS,URL,LASTUPDATE"),
             judge=_canmore,
         ),
         Dataset(

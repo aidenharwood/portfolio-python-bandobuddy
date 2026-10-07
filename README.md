@@ -14,7 +14,7 @@ bandobuddy builds its own database of the whole country from **OpenStreetMap**, 
 - **Resumable.** Crawls survive restarts: downloads resume, and the Wikidata crawl remembers which areas are finished.
 - **Made for phones.** A full-screen map with a draggable bottom sheet (a side panel on wider screens). It asks for your location when it opens (or tap the location button later) to show where you are and list places nearest first, then get directions or share a link to a place. Your position is an arrow pointing the way you're facing, from the phone's compass (an iPhone asks first, from a tap of the location button), or the way you're heading while you're on the move; a dot when it can't tell. The location button always brings the map back to you; the floating layers button beside it holds the map style and the overlays.
 - **Live map.** Built with Leaflet and OpenStreetMap tiles, with category icons that group into counts when zoomed out and fill in while an update runs. It also has category and source filters, place search (via Nominatim), [Panoramax](https://panoramax.fr) photos, and CSV/KML/GPX exports.
-- **Somewhere to start digging.** Each place lists the records it was built from, each linked to its page at the source: the OpenStreetMap object and its edit history, Wikidata and Wikipedia, the register entry, Historic England's official list entry, the planning application. The source's licence sits beside it. A *Dig deeper* list opens the same spot elsewhere: Ordnance Survey maps of 1888–1915 (National Library of Scotland), satellite imagery since 2014 (Esri Wayback), England's planning and listings map, Geograph and Mapillary photos, Wikipedia nearby, web and explorer-forum searches, the land registry for who owns it, and an OpenStreetMap note for reporting it gone. The grid reference the registers and old maps use is there to copy.
+- **Somewhere to start digging.** Each place lists the records it was built from, each linked to its page at the source: the OpenStreetMap object and its edit history, Wikidata and Wikipedia, the register entry, Historic England's official list entry, the planning application. The source's licence sits beside it, and each record says when its source last said so: when the OpenStreetMap object or Wikidata item was last edited, when the school or care home closed, when the planning application was decided, the committee meeting, when the register entry was updated. Under the place's name, *Last update* gives the latest of them. A *Dig deeper* list opens the same spot elsewhere: Ordnance Survey maps of 1888–1915 (National Library of Scotland), satellite imagery since 2014 (Esri Wayback), England's planning and listings map, Geograph and Mapillary photos, Wikipedia nearby, web and explorer-forum searches, the land registry for who owns it, and an OpenStreetMap note for reporting it gone. The grid reference the registers and old maps use is there to copy.
 - **Two modes.** A personal mode with full update controls, and a read-only public mode for hosting.
 
 ## Architecture
@@ -169,7 +169,8 @@ Updates and settings still need a connection, and the app tells you when you're 
 weren't kept still opens with what the brief copy knows (its name, what it was, the main reason, Directions).
 A new version only takes over once it has everything the app needs to open, so an update that half-downloads
 on a weak signal can't leave you with nothing offline. A new release retires the old caches automatically,
-because the service worker is stamped with the version.
+because the service worker is stamped with the version. And because the app opens from its kept copy, a newer
+one is fetched behind it: when it differs, the app says "bandobuddy has been updated" and a tap reloads it.
 
 Phones only share their location with HTTPS sites, so the locate button won't work at a plain `http://192.168…`
 address. To try location locally, use Chrome's USB port forwarding (`chrome://inspect/#devices` → *Port forwarding*,
@@ -195,7 +196,7 @@ Wi-Fi is set to a *Private* network.
 | [MOD disposals](https://www.gov.uk/government/publications/disposal-database-house-of-commons-report) | UK | OGL v3 | Barracks, airfields, ranges and depots the Ministry of Defence has given up or is giving up |
 | [NHS estates return (ERIC)](https://digital.nhs.uk/data-and-information/publications/statistical/estates-returns-information-collection) (optional, off by default) | England | OGL v3 | NHS sites standing wholly or mostly empty |
 | [UK PlanIt](https://www.planit.org.uk/) (optional, off by default) | UK | Planning register data | Applications to demolish buildings described as derelict, empty or redundant; applications that call a building derelict or falling down; houses begun and never finished |
-| Planning committee reports (optional, off by default) | 195 councils | Council papers, mostly OGL | A planning officer's own sentence saying the building on a site stands empty, unfinished or derelict |
+| Planning committee reports (optional, off by default) | 197 councils | Council papers, mostly OGL | A planning officer's own sentence saying the building on a site stands empty, unfinished or derelict |
 
 A national register saying a place exists isn't the same as saying it's abandoned, so most register
 entries are weak leads. Military and underground records are the exception: an observation post or a
@@ -224,8 +225,11 @@ registered now. A closure only counts if the building closed: a change of owner 
 another at the same address, so anything with a service registered there now is left out, and of several
 registrations at one building only the last counts. Care homes with fewer than 20 beds, ordinary houses that go back
 to being homes, are left out too. Recent closures are the strongest leads; a care home that closed more than twelve
-years ago has usually been converted or knocked down, so it's a weak one. That's about 2,800 places. The files are
-read again only when CQC publishes new ones.
+years ago has usually been converted or knocked down, so it's a weak one. Day-service buildings count too: a
+resource, day, training or respite centre whose last care service has gone, like Fiveways Resource Centre in Yeovil
+(closed in 2019, its last service out in 2020, and still unsold in 2026). Councils take years to sell these, so they
+stay good leads for ten years. GPs' medical centres and care agencies' offices are left out. That's about 2,950
+places. The files are read again only when CQC publishes new ones.
 
 **Closed railways' tunnels and viaducts.** National Highways looks after what's left of railway lines closed long
 ago (the Historical Railways Estate) and publishes a list of the structures with grid references. Its tunnels and
@@ -252,9 +256,14 @@ or abandoned (a derelict chapel up for conversion is still standing): those made
 decisions in the last fortnight on any made earlier. That's usually one page each, a minute apart (longer if PlanIt
 asks to wait), and it runs weekly, building up a picture rather than copying the archive. Separately, it asks each
 time for every application about a house begun and never finished, or never lived in ("partially built dwelling",
-"never occupied"): about 120 since 2000, a single page. Derelict barns up for conversion, of which there are a great
-many, and unfinished houses (most are self-builds that were finished later) are weaker leads; a description that
-uses those words of a tree, the windows or a shed is ignored. Each application is saved as it arrives, so stopping part-way keeps what came.
+"never occupied"), or one that can't be lived in ("demolish existing uninhabitable house", "condemned as unfit for
+habitation"): about 240 since 2000, a single page. It also asks for every application to live in a caravan on the plot
+while the house is renovated, about 500 and two pages, leaving out holiday parks, Traveller sites and houses being
+knocked down and replaced. That's how 3 Segensworth Road, Titchfield turns up: a caravan "whilst the property is
+being renovated" in 2018, empty since, and approved for demolition in 2024. Most such renovations are finished, so
+these are weaker leads, fading like any approval. Derelict barns up for conversion, of which there are a great
+many, and unfinished houses (most are self-builds that were finished later) are weaker leads too. A description that
+uses those words of a tree, the windows, a loft, an annexe or a shed is ignored. Each application is saved as it arrives, so stopping part-way keeps what came.
 Garages, extensions and house replacements are ignored, and so are pre-application advice and lawful-development
 certificates, which don't decide anything. An approved demolition shows as the place's condition; one approved more
 than 18 months ago, or a follow-up to an earlier approval (discharging its conditions, an amendment), is a weak lead
@@ -271,7 +280,7 @@ substantial, single residence but has not been occupied since its construction i
 No register records that; the report is the only place it's written down.
 
 Most councils in England and Wales publish committee papers with ModernGov, which has a free-text search over every
-document it holds. bandobuddy knows 195 councils whose ModernGov search answers (found by asking each of PlanIt's 455
+document it holds. bandobuddy knows 197 councils whose ModernGov search answers (found by asking each of PlanIt's 455
 planning authorities' likely ModernGov addresses, then searching each once; 33 more turn searches away and aren't
 asked). For each, it asks for planning committee papers using the phrases officers use, such as "has not been occupied
 since", "has stood empty", "vacant since", "has been redundant", "poor state of repair", "dilapidated", "boarded up",
@@ -397,10 +406,12 @@ or an old military site or a cave. It leaves out:
 - bare land: brownfield and cleared plots
 - capped shafts, spoil heaps and quarry holes
 - shop units and kiosks, phone boxes and book swaps
-- unnamed places, except bunkers, tunnels, military sites and caves, which often have no name
+- car parks, pitches, playgrounds, information boards and the like
+- unnamed places mapped only as "a structure" or "a ruin", with nothing to say what they are. An unnamed abandoned
+  house, disused school or adit still counts, and so does an unnamed bunker, tunnel or military site
 
 Turn it off to see everything again, including *Show weaker leads*. The rules are in `config.BEST`, and the phone's
-copy of the map applies the same ones.
+copy of the map applies the same ones. Changing them counts as a change to the map, so phones fetch it again.
 
 **A place can have several ways in.** Cave entrances, adits and shafts that belong to a place are listed with it
 rather than as pins of their own: one joins a place within 400 m that shares a distinctive part of its name (or of

@@ -79,6 +79,43 @@ class SitesBuiltTests(unittest.TestCase):
             self.assertEqual(store.sites_built(), "2030-01-01T00:00:00+00:00")
         self.assertEqual([r[4] for r in store.index_rows()], [30, 31])
 
+    def test_written_beside_and_swapped_in(self):
+        # In batches, so no one write holds the database for long; the map in use is whole until the swap.
+        store = Store(Path(tempfile.mkdtemp()) / DB_NAME)
+        with mock.patch("bandobuddy.store.WRITE_BATCH", 2):
+            store.replace_sites([self.site(k) for k in "abcde"])
+        self.assertEqual(len(store.full_sites(min_score=0)), 5)
+        with store.connect() as db:
+            names = {r[0] for r in db.execute("SELECT name FROM sqlite_master")}
+        self.assertFalse([n for n in names if n.startswith("sites_next")])
+        self.assertTrue({"sites_lat", "sites_score"} <= names)
+
+    def test_a_busy_database_is_waited_for(self):
+        # Every source refreshing at once: a write waits its turn rather than failing with "database is locked".
+        import sqlite3
+        import threading
+        import time
+        store = Store(Path(tempfile.mkdtemp()) / DB_NAME)
+        held = threading.Event()
+
+        def hold():
+            db = sqlite3.connect(str(store.path))
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("INSERT INTO settings VALUES ('busy', '1')")
+            held.set()
+            time.sleep(1.5)
+            db.commit()
+            db.close()
+        other = threading.Thread(target=hold)
+        other.start()
+        held.wait()
+        started = time.monotonic()
+        store.upsert_od([{"dataset": "x", "ref": "1", "name": "n", "lat": 51, "lng": -1, "kind": "k", "evidence": "e",
+                          "weight": 5}], "2026-01-01")
+        other.join()
+        self.assertGreater(time.monotonic() - started, 1)
+        self.assertEqual(len(store.active_od("x")), 1)
+
 
 class DownloadTests(unittest.TestCase):
     def test_download_resumes_and_checks_md5(self):
