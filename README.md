@@ -12,9 +12,9 @@ bandobuddy builds its own database of the whole country from **OpenStreetMap**, 
 - **Evidence, not scores.** Uses OpenStreetMap lifecycle tags (`abandoned:*`, `disused:*`, ruins, old mines, bunkers, dead railway tunnels), Wikidata state-of-use and closure dates, and wording in Wikipedia intros ("disused", "demolished", "converted to flats").
 - **Stays up to date.** Scheduled refreshes apply OpenStreetMap's daily change files instead of downloading the country again. Places are flagged **NEW** when they appear and dropped when they disappear from the data.
 - **Resumable.** Crawls survive restarts: downloads resume, and the Wikidata crawl remembers which areas are finished.
-- **Made for phones.** A full-screen map with a draggable bottom sheet (a side panel on wider screens). It asks for your location when it opens (or tap the location button later) to show where you are and list places nearest first, then get directions or share a link to a place. Your position is an arrow pointing the way you're facing, from the phone's compass (an iPhone asks first, from a tap of the location button), or the way you're heading while you're on the move; a dot when it can't tell. The location button always brings the map back to you; the floating layers button beside it holds the map style and the overlays.
+- **Made for phones.** A full-screen map with a draggable bottom sheet (a side panel on wider screens). It asks for your location when it opens (or tap the location button later) to show where you are and list places nearest first, then get directions (in Apple Maps, Google Maps, Waze or whichever app you choose, once or always) or share a link to a place. Your position is an arrow pointing the way you're facing, from the phone's compass (an iPhone asks first, from a tap of the location button), or the way you're heading while you're on the move; a dot when it can't tell. The location button always brings the map back to you; the floating layers button beside it holds the map style and the overlays.
 - **Live map.** Built with Leaflet and OpenStreetMap tiles, with category icons that group into counts when zoomed out and fill in while an update runs. It also has category and source filters, place search (via Nominatim), [Panoramax](https://panoramax.fr) photos, and CSV/KML/GPX exports.
-- **Somewhere to start digging.** Each place lists the records it was built from, each linked to its page at the source: the OpenStreetMap object and its edit history, Wikidata and Wikipedia, the register entry, Historic England's official list entry, the planning application. The source's licence sits beside it, and each record says when its source last said so: when the OpenStreetMap object or Wikidata item was last edited, when the school or care home closed, when the planning application was decided, the committee meeting, when the register entry was updated. Under the place's name, *Last update* gives the latest of them. A *Dig deeper* list opens the same spot elsewhere: Ordnance Survey maps of 1888–1915 (National Library of Scotland), satellite imagery since 2014 (Esri Wayback), England's planning and listings map, Geograph and Mapillary photos, Wikipedia nearby, web and explorer-forum searches, the land registry for who owns it, and an OpenStreetMap note for reporting it gone. The grid reference the registers and old maps use is there to copy.
+- **Somewhere to start digging.** Each place lists the records it was built from, each linked to its page at the source: the OpenStreetMap object and its edit history, Wikidata and Wikipedia, the register entry, Historic England's official list entry, the planning application. The source's licence sits beside it, and each record gives the dates its source does: when the OpenStreetMap object or Wikidata item was last edited (and when Wikidata says it closed), when the school or care home closed, when the planning application was made and decided, the committee meeting, when the register entry was made and last updated, the survey or return it's from, and for the railway list, when the list was last changed. Under the place's name, *Last update* gives the latest that isn't still to come, and hovering a place on the map says it too. A *Dig deeper* list opens the same spot elsewhere: Ordnance Survey maps of 1888–1915 (National Library of Scotland), satellite imagery since 2014 (Esri Wayback), England's planning and listings map, Geograph and Mapillary photos, Wikipedia nearby, web and explorer-forum searches, the land registry for who owns it, and an OpenStreetMap note for reporting it gone. The grid reference the registers and old maps use is there to copy.
 - **Two modes.** A personal mode with full update controls, and a read-only public mode for hosting.
 
 ## Architecture
@@ -171,6 +171,14 @@ A new version only takes over once it has everything the app needs to open, so a
 on a weak signal can't leave you with nothing offline. A new release retires the old caches automatically,
 because the service worker is stamped with the version. And because the app opens from its kept copy, a newer
 one is fetched behind it: when it differs, the app says "bandobuddy has been updated" and a tap reloads it.
+
+**News of saved places.** Whenever the phone's copy of the map is refreshed, the app compares each saved place with
+how it was when you last looked. It checks whether the condition has changed, whether a source has a newer date (a
+planning decision, a closure, an edit) and whether a visitor has reported on it. A card on the list says how many
+have news, and Saved shows what changed under each one; opening a place marks its news as seen. **Tell me when saved
+places change** (in Saved) adds notifications. On Android, with the app installed, the browser lets it check in the
+background now and then; iPhones don't allow that for web apps, so there it's when you open the app. All of this
+happens on the phone, from its own copy of the map: your saved places are never sent anywhere.
 
 Phones only share their location with HTTPS sites, so the locate button won't work at a plain `http://192.168…`
 address. To try location locally, use Chrome's USB port forwarding (`chrome://inspect/#devices` → *Port forwarding*,
@@ -413,6 +421,8 @@ or an old military site or a cave. It leaves out:
 Turn it off to see everything again, including *Show weaker leads*. The rules are in `config.BEST`, and the phone's
 copy of the map applies the same ones. Changing them counts as a change to the map, so phones fetch it again.
 
+**Filtering by date.** Under *When* in the filters, places can be narrowed by any of the dates their sources give: *Closed*, *Last edited or updated*, *First recorded*, *Planning decision or meeting*, *Visitor report*, or the last update from any of them. Then *within the last* or *more than ... ago*, in days, months or years: "closed more than 5 years ago", "last edited within 6 months". Each place keeps its latest date of each kind (`config.DATE_KINDS`), and the phone's copy filters the same way offline.
+
 **A place can have several ways in.** Cave entrances, adits and shafts that belong to a place are listed with it
 rather than as pins of their own: one joins a place within 400 m that shares a distinctive part of its name (or of
 one of its other names), and an unnamed one joins only what it's right beside. Open a place and each entrance is
@@ -436,6 +446,28 @@ a country park, are ignored: they say nothing about one building.
 `destroyed:*` tags, and building sites as `landuse=construction` or `building=construction`. A place inside one of
 those outlines (or within 15 m of one mapped as a point, 40 m if it shares the name) is demoted, its condition is
 *Demolished* or *Building site*, and the first reason says so.
+
+## What visitors found
+
+Anyone can say what they found at a place, from fixed choices only. There's no free text, so there's nothing to
+moderate:
+
+- **access difficulty**, from 1 (walk in) to 5 (very hard)
+- **accessible** or **inaccessible**
+- any of a fixed set of **tags**: well preserved, trashed, graffiti, stripped, fire damaged, partly collapsed,
+  security on site, cameras, alarmed, sealed up, being demolished, being converted, lived in (`config.REPORT_TAGS`)
+
+A place shows what its reports add up to: the average difficulty, how many of those who said found it accessible,
+and for every tag how many of its reports gave it ("Trashed: 3 of 5"), each with a bar. Reports older than three years drop out (`config.REPORT_YEARS`). Hovering a
+place gives it in brief ("access 2.7/5 · got in 4/5 · trashed 3/5"). Each time a place is marked accessible or
+inaccessible it goes in its **access history** with the day, so you can see when it was last open and when it was
+sealed up. The latest report counts towards the place's *Last update*.
+
+Each device has one report per place, which it can change or remove; removing it also takes its marks out of the
+history. Devices aren't identified: the app gives itself a random id, and the server keeps a different hash of it for
+each place, so one device's visits can't be linked. No addresses are kept. Reporting is the one thing a read-only
+public copy (`BANDOBUDDY_PUBLIC`) accepts from visitors, at most 30 reports an hour from one address
+(`config.REPORTS_PER_HOUR`).
 
 ## Data and credits
 

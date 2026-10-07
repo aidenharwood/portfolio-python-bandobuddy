@@ -8,13 +8,16 @@ from __future__ import annotations
 import math
 import re
 from collections import Counter, defaultdict
+from datetime import date
 from difflib import SequenceMatcher
 
 from .geo import haversine_m
 from .osm import alt_names, best_name, classify, describe_kind, entrance_kind, gone_as, in_use_as
-from .config import WEAK_BELOW
+from .config import DATE_KINDS, WEAK_BELOW
 from .scoring import category_for, condition_for, score_site, strength_for
-from .store import Store
+from .store import Store, now_iso
+from . import reports as visitor_reports
+from .opendata import latest_date
 from .wikidata import evaluate, wikipedia_title
 
 TWIN_M = 40      # OSM elements this close (and not differently named) are one site
@@ -317,10 +320,35 @@ def shown_name(name: str) -> str:
     return shown or name
 
 
+def site_dates(members: list[dict], report: dict | None = None) -> dict:
+    """A place's latest date of each kind its records give ("closed", "edited", ...), and of all of them ("any"),
+    as days, for filtering. A bare year counts as its end, or today if that's still to come."""
+    today = date.today().isoformat()
+    out: dict[str, str] = {}
+
+    def note(kind: str, when: str | None) -> None:
+        if not when:
+            return
+        day = min(f"{when}-12-31", today) if len(when) == 4 else when[:10]
+        if day <= today and day > out.get(kind, ""):
+            out[kind] = day
+    for m in members:
+        for what, when in m.get("dates") or ():
+            if what in DATE_KINDS:
+                note(DATE_KINDS[what], when)
+                note("any", when)
+    if report and report.get("latest"):
+        note("visited", report["latest"])
+        note("any", report["latest"])
+    return out
+
+
 def last_reported(members: list[dict]) -> dict | None:
     """The most recent date any source gives for a place, and which: {"on", "as", "source"}. A bare year counts
     as its end ("2025" is later than "2025-03-31")."""
-    dated = [m for m in members if m.get("reported")]
+    today = date.today().isoformat()
+    dated = [m for m in members if m.get("reported")
+             and (m["reported"] if len(m["reported"]) > 4 else f"{m['reported']}-01-01") <= today]
     if not dated:
         return None
     latest = max(dated, key=lambda m: m["reported"] + ("-12-31" if len(m["reported"]) == 4 else ""))
@@ -409,6 +437,7 @@ def build_sites(store: Store) -> int:
         ev = {"osm_id": item["osm_id"], "name": name, "kind": describe_kind(tags), "evidence": evidence,
               "weight": weight, "tags": tags, "first_seen": item["first_seen"], "source": "osm",
               "reported": item.get("edited"), "reported_as": "last edited",
+              "dates": [["last edited", item["edited"]]] if item.get("edited") else [],
               "lat": item["lat"], "lng": item["lng"], "aliases": alt_names(tags), "entrance": entrance_kind(tags)}
         twin = next((s for s in grid.near(item["lat"], item["lng"])
                      if haversine_m(s["lat"], s["lng"], item["lat"], item["lng"]) <= TWIN_M
@@ -429,8 +458,10 @@ def build_sites(store: Store) -> int:
         ev = evaluate(row, intros.get(wikipedia_title(row["wiki"]) or ""))
         if not ev:
             continue
-        ev.update(first_seen=row["first_seen"], source="wikidata", reported=row.get("modified"),
-                  reported_as="last edited",
+        dates = ([["closed", row["ended"][:4]]] if row.get("ended") else []) \
+            + ([["last edited", row["modified"]]] if row.get("modified") else [])
+        said, when = latest_date(dates)
+        ev.update(first_seen=row["first_seen"], source="wikidata", dates=dates, reported=when, reported_as=said,
                   entrance=_entrance_from_text(f"{ev['kind']} {ev['name']}"))
         if ev.get("in_use"):
             attractions.add(ev["lat"], ev["lng"], None, ev["in_use"], ev["name"], "Wikidata")
@@ -458,6 +489,7 @@ def build_sites(store: Store) -> int:
               "weight": row["weight"], "url": row["url"], "lat": row["lat"], "lng": row["lng"],
               "first_seen": row["first_seen"], "source": row["dataset"], "aliases": row.get("aliases") or [],
               "reported": row.get("reported"), "reported_as": row.get("reported_as"),
+              "dates": row.get("dates") or ([[row["reported_as"], row["reported"]]] if row.get("reported") else []),
               "entrance": _entrance_from_text(said)}
         near = grid.near(row["lat"], row["lng"])
         # "Track II" and "Incline III" of the same quarry are one place to visit, named for the quarry.
@@ -480,6 +512,9 @@ def build_sites(store: Store) -> int:
 
     sites = _join_entrances(sites)
 
+    # What visitors have said: how hard to get in, whether they could, and tags.
+    read_at = now_iso()
+    reported = {key: visitor_reports.summarize(rows) for key, rows in store.all_reports().items()}
     out = []
     for site in sites:
         site["name"] = _agreed_name(site)
@@ -491,6 +526,10 @@ def build_sites(store: Store) -> int:
         # "New" only once a source's first full crawl is done, and only if every part of the site is new.
         is_new = all(baseline(m["source"]) and m["first_seen"] > baseline(m["source"]) for m in members)
         best = max(members, key=lambda m: m["weight"])
+        report = reported.get(site["key"])
+        said = [{"source": "reports", "reported": report["latest"], "reported_as": "visitor report"}] \
+            if report and report.get("latest") else []
+        latest = last_reported(members + said)
         order = {"osm": 0, "wikidata": 1}
         sources = "+".join(sorted({m["source"] for m in members}, key=lambda s: (order.get(s, 2), s)))
         out.append({
@@ -506,11 +545,18 @@ def build_sites(store: Store) -> int:
             "sources": sources,
             "reasons": reasons,
             "detail": {"osm": site["osm"], "wikidata": site["wikidata"], "open": site["open"],
-                       "last_reported": last_reported(members)},
+                       "last_reported": latest},
+            "reported": (latest or {}).get("on"), "reported_as": (latest or {}).get("as"),
+            "reported_by": (latest or {}).get("source"),
+            "report": report,
+            "dates": site_dates(members, report),
             "first_seen": first_seen,
             "added": first_seen if is_new else None,
             "aliases": _aliases(site),
             "entrances": _entrances(site),
         })
     store.replace_sites(out)
+    # Reports made or taken back while this was being built and written: put them back on their places.
+    for key in store.reports_touched_since(read_at):
+        store.set_site_report(key, visitor_reports.summarize(store.reports_for(key)[0]))
     return len(out)

@@ -15,6 +15,7 @@ import json
 import re
 import xml.etree.ElementTree as ET
 import zipfile
+from datetime import date
 from pathlib import Path
 
 from .opendata import judge_record, sounds_gone
@@ -184,6 +185,8 @@ def to_items(places: list[dict], label: str) -> list[dict]:
             "weight": weight,
             "url": place["url"] or None,
             "aliases": place["aliases"],
+            "dates": [["imported", date.today().isoformat()]],
+            "reported": date.today().isoformat(), "reported_as": "imported",
         })
     return items
 

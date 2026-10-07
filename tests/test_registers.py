@@ -17,8 +17,8 @@ from bandobuddy.store import Store
 
 
 class Resp:
-    def __init__(self, content=b"", text=None, status=200):
-        self.content, self.status_code = content, status
+    def __init__(self, content=b"", text=None, status=200, headers=None):
+        self.content, self.status_code, self.headers = content, status, headers or {}
         self.text = text if text is not None else content.decode("utf-8", "replace")
 
     def raise_for_status(self):
@@ -259,11 +259,12 @@ HRE = [["ELR", "ELR.LineName", "RPL or Sustrans?", "StructureType", "Status", "O
 
 class RailwayEstateTests(unittest.TestCase):
     def test_tunnels_and_viaducts(self):
-        site = Site({"HRE+structures.xlsx": Resp(xlsx(HRE))})
+        site = Site({"HRE+structures.xlsx": Resp(xlsx(HRE), headers={"Last-Modified": "Tue, 03 Jun 2025 09:00:00 GMT"})})
         rows = list(registers.RailwayEstate()(site, nothing, data_dir=None))
         self.assertEqual([r["ref"] for r in rows], ["E1", "E2"])
         tunnel, viaduct = map(opendata._railway_estate, rows)
         self.assertEqual((tunnel["kind"], tunnel["weight"]), ("railway tunnel", 26))
+        self.assertEqual(tunnel["dates"], [("list updated", "2025-06-03")])
         self.assertIn("a tunnel on a closed railway (Bath Green Park - Mangotsfield)", tunnel["evidence"])
         self.assertEqual(_condition_from(tunnel["evidence"]), "Disused")
         self.assertEqual((viaduct["name"], viaduct["weight"]), ("Railway viaduct (Cockermouth - Penrith)", 10))
@@ -288,7 +289,7 @@ MOD_ROWS = [
 class ModTests(unittest.TestCase):
     def test_sites_found_once_and_judged(self):
         tmp = Path(tempfile.mkdtemp())
-        site = lambda: Site({"disposal-database-house-of-commons-report": '<a href="/media/House_of_Commons_Report_.ods">r</a>',  # noqa: E731
+        site = lambda: Site({"disposal-database-house-of-commons-report": '<a href="/media/68a5/20250812_House_of_Commons_Report_.ods">r</a>',  # noqa: E731
                              "House_of_Commons_Report_.ods": Resp(ods({"Report": [MOD_HEAD, *MOD_ROWS]}))})
         with mock.patch.object(geocode, "search", return_value={"lat": 54.2, "lng": -1.3}) as search:
             rows = list(registers.MoDisposals()(site(), nothing, data_dir=tmp))
@@ -302,7 +303,7 @@ class ModTests(unittest.TestCase):
             items = {i["ref"]: i for i in map(opendata._mod, rows)}
         self.assertEqual((items["1"]["name"], items["1"]["kind"], items["1"]["weight"]),
                          ("Alanbrooke Barracks", "barracks", 18))
-        self.assertEqual(items["1"]["reported"], None)          # this stand-in's file name has no date in it
+        self.assertEqual(items["1"]["dates"], [("reported to Parliament", "2025-08-12")])
         self.assertEqual(_condition_from(items["1"]["evidence"]), "Disused")
         self.assertEqual((items["3"]["name"], items["3"]["kind"], items["3"]["weight"]),
                          ("North Site, RAF Henlow", "airfield", 8))
@@ -313,7 +314,7 @@ class ModTests(unittest.TestCase):
 
     def test_a_refused_search_is_tried_again_next_time(self):
         tmp = Path(tempfile.mkdtemp())
-        site = lambda: Site({"disposal-database-house-of-commons-report": '<a href="/media/House_of_Commons_Report_.ods">r</a>',  # noqa: E731
+        site = lambda: Site({"disposal-database-house-of-commons-report": '<a href="/media/68a5/20250812_House_of_Commons_Report_.ods">r</a>',  # noqa: E731
                              "House_of_Commons_Report_.ods": Resp(ods({"Report": [MOD_HEAD, *MOD_ROWS]}))})
         answers = [{"lat": 54.2, "lng": -1.3}, geocode.Busy("pause")]
         with mock.patch.object(geocode, "search", side_effect=answers) as search:
@@ -360,19 +361,61 @@ class ReportedTests(unittest.TestCase):
         self.assertIsNone(opendata._dated("unknown"))
         cqc = opendata._cqc({"ref": "1-2", "name": "Elm Lodge", "category": "Residential", "care_home": True,
                              "beds": 30, "ended": "2020-03-14", "centre": ""})
-        self.assertEqual((cqc["reported"], cqc["reported_as"]), ("2020-03-14", "closed"))
+        self.assertEqual(cqc["dates"], [("closed", "2020-03-14")])
         canmore = opendata._canmore({"CANMOREID": 7, "NMRSNAME": "BRATTON ROC POST", "SITETYPE": "OBSERVATION POST",
-                                     "LASTUPDATE": 1557792000000})
-        self.assertEqual((canmore["reported"], canmore["reported_as"]), ("2019-05-14", "record updated"))
+                                     "ENTRYDATE": 946684800000, "LASTUPDATE": 1557792000000})
+        self.assertEqual(canmore["dates"], [("recorded", "2000-01-01"), ("record updated", "2019-05-14")])
         har = opendata._har({"HeritageCa": "Listed Building", "EntryName": "Mill", "List_Entry": 1000001})
-        self.assertEqual(har["reported"], str(opendata.HAR_YEAR))
+        self.assertEqual(har["dates"], [("on the register in", str(opendata.HAR_YEAR))])
         nhs = opendata._nhs_estate({"ref": "RX1", "name": "Ward Block", "trust": "T", "whole": True, "unoccupied_m2": 1,
                                     "floor_m2": 1, "year": "2024/25"})
-        self.assertEqual(nhs["reported"], "2025-03-31")
+        self.assertEqual(nhs["dates"], [("estates return for the year to", "2025-03-31")])
         planit = opendata._planit({"name": "Fareham/P/18/1344/FP", "address": "3 Segensworth Road",
                                    "description": "Siting of a static caravan whilst the property is being renovated",
                                    "app_state": "Permitted", "decided_date": "2019-01-02", "start_date": "2018-11-27"})
-        self.assertEqual((planit["reported"], planit["reported_as"]), ("2019-01-02", "decided"))
+        self.assertEqual(planit["dates"], [("applied for", "2018-11-27"), ("decided", "2019-01-02")])
+        # The record's own latest: not one still to come, and a bare year once it's begun counts as its end.
+        self.assertEqual(opendata.latest_date(planit["dates"]), ("decided", "2019-01-02"))
+        self.assertEqual(opendata.latest_date([("closed", "2025-03-31"), ("on the register in", "2025")]),
+                         ("on the register in", "2025"))
+        self.assertEqual(opendata.latest_date([("decided", "2019-01-02"), ("to be sold from", "2099")]),
+                         ("decided", "2019-01-02"))
+        self.assertEqual(opendata.latest_date([]), (None, None))
+
+    def test_a_place_dated_by_kind_for_filtering(self):
+        from bandobuddy.sites import site_dates
+        members = [{"dates": [["last edited", "2021-03-03"]]},
+                   {"dates": [["closed", "2017"], ["last edited", "2024-02-01"]]},          # Wikidata: a bare year
+                   {"dates": [["applied for", "2018-11-27"], ["decided", "2019-01-02"]]},
+                   {"dates": [["reported to Parliament", "2099-01-01"]]}]                   # still to come: not yet
+        dates = site_dates(members, {"latest": "2026-10-07"})
+        self.assertEqual(dates, {"edited": "2024-02-01", "closed": "2017-12-31", "entered": "2018-11-27",
+                                 "decided": "2019-01-02", "visited": "2026-10-07", "any": "2026-10-07"})
+        this_year = str(date.today().year)
+        self.assertEqual(site_dates([{"dates": [["on the register in", this_year]]}])["edited"], date.today().isoformat())
+
+    def test_filtering_by_date(self):
+        store = Store(Path(tempfile.mkdtemp()) / DB_NAME)
+        site = lambda key, dates: {"key": key, "name": key, "lat": 51.0, "lng": -1.0, "score": 30,  # noqa: E731
+                                   "strength": "strong", "category": "institutional", "condition": "Disused",
+                                   "kind": "hospital", "sources": "osm", "reasons": ["x"],
+                                   "detail": {"osm": [], "wikidata": [], "open": []}, "first_seen": "2026-01-01",
+                                   "added": None, "dates": dates}
+        store.replace_sites([site("long-closed", {"closed": "2012-05-01", "any": "2025-01-01"}),
+                             site("just-closed", {"closed": "2025-06-01", "any": "2025-06-01"}),
+                             site("never-closed", {"edited": "2026-09-01", "any": "2026-09-01"})])
+        keys = lambda **f: sorted(s["key"] for s in store.full_sites(min_score=0, **f))   # noqa: E731
+        self.assertEqual(keys(date_kind="closed", date_to="2021-10-07"), ["long-closed"])     # more than 5 years ago
+        self.assertEqual(keys(date_kind="closed", date_from="2021-10-07"), ["just-closed"])   # within the last 5
+        self.assertEqual(keys(date_kind="any", date_from="2026-01-01"), ["never-closed"])
+        self.assertEqual(keys(date_kind="nonsense", date_from="2026-01-01"), ["just-closed", "long-closed", "never-closed"])
+        from bandobuddy.store import INDEX_COLUMNS        # the phone's copy carries them, to filter the same way
+        self.assertIn("dates", INDEX_COLUMNS)
+        from bandobuddy import webapp
+        self.assertEqual(webapp.parse_filters({"date": ["closed"], "date_to": ["2021-10-07"]})["date_to"], "2021-10-07")
+        for bad in ({"date": ["haunted"], "date_to": ["2021-10-07"]}, {"date": ["closed"], "date_to": ["last year"]}):
+            with self.assertRaises(webapp.ApiError):
+                webapp.parse_filters(bad)
 
     def test_a_place_says_its_latest(self):
         from bandobuddy.sites import last_reported

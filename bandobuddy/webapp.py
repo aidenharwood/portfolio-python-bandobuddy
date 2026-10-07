@@ -11,12 +11,14 @@ can't use DNS-rebinding tricks to talk to it. POSTs must also be same-origin JSO
 from __future__ import annotations
 
 import gzip
+import hashlib
 import ipaddress
 import json
 import os
 import re
 import signal
 import socket
+import sqlite3
 import threading
 import time
 import traceback
@@ -30,15 +32,17 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 import requests
 
-from . import __version__, access, export, geocode, imagery, lidar, opendata
-from .config import BEST, CATEGORIES, DATA_DIR, DB_NAME, OTHER_CATEGORY, UK_BBOX, WEAK_BELOW
+from . import __version__, access, export, geocode, imagery, lidar, opendata, reports
+from .config import (BEST, CATEGORIES, DATA_DIR, DATE_FILTERS, DB_NAME, OTHER_CATEGORY, REPORT_TAGS, REPORTS_PER_HOUR,
+                     UK_BBOX, WEAK_BELOW)
 from .geo import grid_ref, haversine_m, nation
 from .sites import build_sites
-from .store import INDEX_COLUMNS, Store
+from .store import INDEX_COLUMNS, Store, now_iso
 from .updater import ALL_SOURCES, SOURCE_ABOUT, SOURCE_LABELS, SOURCES, Updater
 
 DEFAULT_PORT = 8642
 MAX_BODY_BYTES = 16_000
+VISITOR_POSTS = {"/api/report"}   # what a read-only public copy still takes from visitors: fixed choices only
 LIST_LIMIT = 100
 DETAILS_LIMIT = 500        # places per page of /api/details: about 650 KB, 100 KB compressed
 DETAILS_BY_KEY = 200       # places asked for by name in one go
@@ -50,6 +54,17 @@ CACHE_TTL_S = 24 * 3600
 LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "[::1]"})
 LAN_SUFFIXES = (".local", ".lan", ".home", ".home.arpa", ".internal", ".localdomain")
 CATEGORY_KEYS = [c[0] for c in CATEGORIES] + [OTHER_CATEGORY[0]]
+DATE_KEYS = {key for key, _ in DATE_FILTERS}
+def asset_version() -> str:
+    """The release, and a fingerprint of the app's own files: "0.13.0-1a2b3c4d". Assets are kept a week and the
+    service worker by its version, so stamping them with the release alone left a changed localdb.js unfetched
+    until the next release. Read fresh each time: a few hundred kilobytes, and the page is read anyway."""
+    digest = hashlib.blake2b(digest_size=4)
+    for name in ("app.html", "static/sw.js", "static/localdb.js"):
+        digest.update(resources.files("bandobuddy").joinpath(name).read_bytes())
+    return f"{__version__}-{digest.hexdigest()}"
+
+
 # Files the app itself needs. Anything not named here isn't served, so no path can be walked.
 STATIC = {
     "/manifest.webmanifest": ("manifest.webmanifest", "application/manifest+json", "public, max-age=3600"),
@@ -117,6 +132,13 @@ def parse_filters(qs: dict[str, list[str]]) -> dict:
         except ValueError:
             raise ApiError(400, "added_since must be an ISO date")
         filters["added_since"] = one("added_since")
+    if one("date"):        # "closed more than five years ago": the page works out the day
+        if one("date") not in DATE_KEYS:
+            raise ApiError(400, "Unknown kind of date")
+        for name in ("date_from", "date_to"):
+            if one(name) and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", one(name)):
+                raise ApiError(400, f"{name} must be a day, YYYY-MM-DD")
+        filters.update(date_kind=one("date"), date_from=one("date_from") or None, date_to=one("date_to") or None)
     if one("q"):
         filters["q"] = one("q")[:80]
     return filters
@@ -146,15 +168,28 @@ class App:
                                              session_factory)
         self._index: tuple[str, bytes] | None = None   # (built, gzipped JSON): 3 MB rather than 25
         self._index_lock = threading.Lock()
+        self._reported: dict[str, list[float]] = {}   # address -> when it last reported, this past hour
+        self._reported_lock = threading.Lock()
+
+    def with_schema(self, fn):
+        """fn(), and once more after putting back any column it found missing: an older copy of bandobuddy
+        running on the same data (a second instance, mid-upgrade) rebuilds the map in its own layout."""
+        try:
+            return fn()
+        except sqlite3.OperationalError as exc:
+            if "no such column" not in str(exc):
+                raise
+            self.store.ensure_schema()
+            return fn()
 
     def static(self, path: str) -> tuple[bytes, str, str]:
         name, ctype, cache = STATIC[path]
         return resources.files("bandobuddy.static").joinpath(name).read_bytes(), ctype, cache
 
     def worker(self) -> bytes:
-        """The service worker, stamped with this version so a release retires the old caches."""
+        """The service worker, stamped with the assets' version so any change to them retires the old caches."""
         js = resources.files("bandobuddy.static").joinpath("sw.js").read_text(encoding="utf-8")
-        return js.replace("__VERSION__", __version__).encode("utf-8")
+        return js.replace("__VERSION__", asset_version()).encode("utf-8")
 
     def page(self) -> bytes:
         boot = {
@@ -166,10 +201,12 @@ class App:
             "credits": [[d.label, d.home, d.attribution, d.licence] for d in opendata.DATASETS.values() if d.enabled()],
             "uk_bbox": UK_BBOX,
             "read_only": self.read_only,
+            "report_tags": REPORT_TAGS,
+            "date_filters": DATE_FILTERS,
         }
         template = resources.files("bandobuddy").joinpath("app.html").read_text(encoding="utf-8")
         return (template.replace("__BOOT__", json.dumps(boot).replace("<", "\\u003c"))
-                .replace("__ASSET_VERSION__", __version__).encode("utf-8"))
+                .replace("__ASSET_VERSION__", asset_version()).encode("utf-8"))
 
     def health(self) -> dict:
         with self.store.connect() as db:
@@ -246,6 +283,44 @@ class App:
         sites = [with_pointers(s) for s in self.store.details_page(bbox=bbox, after=after, limit=limit)]
         return {"built": self.store.sites_built(), "sites": sites,
                 "next": sites[-1]["key"] if len(sites) == limit else None}
+
+    # -- visitors' reports: fixed choices only; the one thing the public copy lets visitors change ---------------
+    def reports(self, qs: dict) -> dict:
+        key, device = (qs.get("key") or [""])[0], (qs.get("device") or [""])[0]
+        return self._reports_of(key, device)
+
+    def _reports_of(self, key: str, device: str) -> dict:
+        rows, history = self.store.reports_for(key)
+        reporter = reports.reporter_id(device, key) if device else None
+        return {"summary": reports.summarize(rows, history),
+                "mine": reports.mine(next((r for r in rows if r["reporter"] == reporter), None))}
+
+    def report(self, body: dict, client: str) -> dict:
+        self._limit_reports(client)
+        try:
+            r = reports.parse(body)
+        except reports.Invalid as exc:
+            raise ApiError(400, str(exc))
+        if not self.store.site_exists(r["key"]):
+            raise ApiError(404, "Place not found")
+        reporter = reports.reporter_id(r["device"], r["key"])
+        if r["clear"]:
+            self.store.clear_report(r["key"], reporter)
+        else:
+            self.store.save_report(r["key"], reporter, r["difficulty"], r["access"], r["tags"], now_iso())
+        rows, _ = self.store.reports_for(r["key"])
+        self.store.set_site_report(r["key"], reports.summarize(rows))
+        return self._reports_of(r["key"], r["device"])
+
+    def _limit_reports(self, client: str) -> None:
+        now = time.monotonic()
+        with self._reported_lock:
+            recent = [t for t in self._reported.get(client, []) if now - t < 3600]
+            if len(recent) >= REPORTS_PER_HOUR:
+                raise ApiError(429, "That's a lot of reports from here: try again in a while")
+            self._reported[client] = recent + [now]
+            if len(self._reported) > 10_000:   # forget addresses that have gone quiet
+                self._reported = {c: ts for c, ts in self._reported.items() if ts and now - ts[-1] < 3600}
 
     def photos(self, qs: dict) -> dict:
         try:
@@ -405,7 +480,12 @@ def make_handler(app: App, allowed_hosts: Iterable[str] = ()) -> type[BaseHTTPRe
             self._json(status, {"error": message})
             return False
 
-        def _guard(self, post: bool) -> bool:
+        def _client(self) -> str:
+            """Who's asking, for the reports limit: the visitor, not the ingress in front of us."""
+            forwarded = (self.headers.get("X-Forwarded-For") or "").split(",")[0]
+            return (self.headers.get("X-Real-IP") or forwarded or self.client_address[0]).strip()
+
+        def _guard(self, post: bool, path: str = "") -> bool:
             if not host_ok(self.headers.get("Host")):
                 return self._refuse(403, "Forbidden host")
             if post:
@@ -414,7 +494,7 @@ def make_handler(app: App, allowed_hosts: Iterable[str] = ()) -> type[BaseHTTPRe
                     return self._refuse(403, "Cross-origin request refused")
                 if not (self.headers.get("Content-Type") or "").startswith("application/json"):
                     return self._refuse(415, "Expected JSON")
-                if app.read_only:
+                if app.read_only and path not in VISITOR_POSTS:
                     return self._refuse(403, "This is a read-only copy of bandobuddy")
             return True
 
@@ -432,7 +512,7 @@ def make_handler(app: App, allowed_hosts: Iterable[str] = ()) -> type[BaseHTTPRe
 
         def _dispatch(self, fn) -> None:
             try:
-                result = fn()
+                result = app.with_schema(fn)
             except ApiError as exc:
                 self._json(exc.status, {"error": str(exc)})
             except Exception as exc:
@@ -477,7 +557,7 @@ def make_handler(app: App, allowed_hosts: Iterable[str] = ()) -> type[BaseHTTPRe
                 self._dispatch(lambda: app.site(unquote(path[len("/api/site/"):])))
             elif path == "/api/index":
                 try:
-                    packed = app.index(qs)
+                    packed = app.with_schema(lambda: app.index(qs))
                 except Exception as exc:
                     traceback.print_exc()
                     self._json(500, {"error": f"{type(exc).__name__}: {exc}"})
@@ -488,6 +568,8 @@ def make_handler(app: App, allowed_hosts: Iterable[str] = ()) -> type[BaseHTTPRe
                 self._dispatch(lambda: app.details(qs))
             elif path == "/api/photos":
                 self._dispatch(lambda: app.photos(qs))
+            elif path == "/api/report":
+                self._dispatch(lambda: app.reports(qs))
             elif path == "/api/access":
                 self._dispatch(lambda: app.access(qs))
             elif path == "/api/search":
@@ -496,7 +578,7 @@ def make_handler(app: App, allowed_hosts: Iterable[str] = ()) -> type[BaseHTTPRe
                 self._dispatch(app.status)
             elif path == "/api/export":
                 try:
-                    body, ctype, name = app.export(qs)
+                    body, ctype, name = app.with_schema(lambda: app.export(qs))
                 except ApiError as exc:
                     self._json(exc.status, {"error": str(exc)})
                     return
@@ -505,10 +587,11 @@ def make_handler(app: App, allowed_hosts: Iterable[str] = ()) -> type[BaseHTTPRe
                 self._json(404, {"error": "Not found"})
 
         def do_POST(self):
-            if not self._guard(post=True):
-                return
             path = urlparse(self.path).path
-            routes = {"/api/update": app.update, "/api/pause": app.pause, "/api/settings": app.settings}
+            if not self._guard(post=True, path=path):
+                return
+            routes = {"/api/update": app.update, "/api/pause": app.pause, "/api/settings": app.settings,
+                      "/api/report": lambda body: app.report(body, self._client())}
             if path in routes:
                 self._dispatch(lambda: routes[path](self._body()))
             else:
