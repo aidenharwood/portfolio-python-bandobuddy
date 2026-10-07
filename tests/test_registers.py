@@ -165,6 +165,17 @@ CQC_ROWS = [
     # A private clinic in a house: not a hospital building.
     cqc_row("5-1", "Mill House", "N", 0, "Hospital - mental health/capacity", "Independent Healthcare Org", RECENT,
             "500", "AB2 2AA", "5 Mill Lane"),
+    # A council's day centre: the last service there, a care agency's office, left in 2020 (Fiveways, Yeovil).
+    cqc_row("6-1", "Somerset LD Services 3", "N", 0, "Community based adult social care services", "Social Care Org",
+            "18/04/2017", "", "BA21 3BB", "Fiveways Resource Centre"),
+    cqc_row("6-2", "Dimensions Somerset Yeovil Domiciliary Care Office", "N", 0,
+            "Community based adult social care services", "Social Care Org", "14/03/2020", "", "BA21 3BB",
+            "Fiveways Resource Centre"),
+    # A care agency in an office unit, and a GP's medical centre: not buildings worth the trip.
+    cqc_row("7-1", "Affinity Support Services", "N", 0, "Community based adult social care services", "Social Care Org",
+            RECENT, "", "ME7 1AA", "Unit 3 Manor Farm"),
+    cqc_row("8-1", "Hillmeads Medical Centre", "N", 0, "GP Practices", "Primary Medical Services", RECENT, "",
+            "B38 9AA", "97 Hillmeads Road"),
 ]
 CQC_ACTIVE = "Name,Address,Postcode\r\nElm Lodge Care,\"Elm Lodge, 3 Elm Road, Town\",AB1 4CD\r\nOther,9 Far Road,ZZ9 9ZZ\r\n"
 
@@ -183,7 +194,7 @@ class CqcTests(unittest.TestCase):
     def test_closed_buildings_not_changes_of_owner(self):
         tmp = Path(tempfile.mkdtemp())
         rows = list(registers.CqcClosures()(cqc_site(), nothing, data_dir=tmp))
-        self.assertEqual(sorted(r["ref"] for r in rows), ["1-1", "4-1"])
+        self.assertEqual(sorted(r["ref"] for r in rows), ["1-1", "4-1", "6-2"])
         items = {i["ref"]: i for i in (opendata._cqc(r) for r in rows)}
         home = items["1-1"]
         self.assertEqual((home["kind"], home["weight"]), ("care home", 24))
@@ -194,9 +205,13 @@ class CqcTests(unittest.TestCase):
         self.assertTrue(_condition_from(home["evidence"]).startswith("Closed 20"))
         # A care home called Church View is a care home.
         self.assertEqual(category_for({"name": "Church View Care Home", "open": [home]}), "institutional")
+        centre = items["6-2"]                  # the building, under its own name, and the last service to leave
+        self.assertEqual((centre["name"], centre["kind"], centre["weight"]), ("Fiveways Resource Centre", "day centre", 20))
+        self.assertEqual(_condition_from(centre["evidence"]), "Closed 2020")
+        self.assertEqual(category_for({"name": centre["name"], "open": [centre]}), "institutional")
         # Kept: the same month's files aren't read again.
         again = Site({"using-cqc-data": cqc_site().pages["using-cqc-data"]})
-        self.assertEqual(len(list(registers.CqcClosures()(again, nothing, data_dir=tmp))), 2)
+        self.assertEqual(len(list(registers.CqcClosures()(again, nothing, data_dir=tmp))), 3)
 
 
 # -- NHS estates ----------------------------------------------------------------------------------------
@@ -287,6 +302,7 @@ class ModTests(unittest.TestCase):
             items = {i["ref"]: i for i in map(opendata._mod, rows)}
         self.assertEqual((items["1"]["name"], items["1"]["kind"], items["1"]["weight"]),
                          ("Alanbrooke Barracks", "barracks", 18))
+        self.assertEqual(items["1"]["reported"], None)          # this stand-in's file name has no date in it
         self.assertEqual(_condition_from(items["1"]["evidence"]), "Disused")
         self.assertEqual((items["3"]["name"], items["3"]["kind"], items["3"]["weight"]),
                          ("North Site, RAF Henlow", "airfield", 8))
@@ -333,6 +349,52 @@ class NominatimTests(unittest.TestCase):
         self.assertGreater(geocode._paused_until - geocode._last, 100)
 
 
+# -- When each source last said so ------------------------------------------------------------------------
+
+class ReportedTests(unittest.TestCase):
+    def test_every_register_dates_its_record(self):
+        self.assertEqual(opendata._dated("2024-12-16"), "2024-12-16")
+        self.assertEqual(opendata._dated("14/05/2019"), "2019-05-14")
+        self.assertEqual(opendata._dated(1557792000000), "2019-05-14")          # ArcGIS: milliseconds
+        self.assertEqual(opendata._dated("2025"), "2025")
+        self.assertIsNone(opendata._dated("unknown"))
+        cqc = opendata._cqc({"ref": "1-2", "name": "Elm Lodge", "category": "Residential", "care_home": True,
+                             "beds": 30, "ended": "2020-03-14", "centre": ""})
+        self.assertEqual((cqc["reported"], cqc["reported_as"]), ("2020-03-14", "closed"))
+        canmore = opendata._canmore({"CANMOREID": 7, "NMRSNAME": "BRATTON ROC POST", "SITETYPE": "OBSERVATION POST",
+                                     "LASTUPDATE": 1557792000000})
+        self.assertEqual((canmore["reported"], canmore["reported_as"]), ("2019-05-14", "record updated"))
+        har = opendata._har({"HeritageCa": "Listed Building", "EntryName": "Mill", "List_Entry": 1000001})
+        self.assertEqual(har["reported"], str(opendata.HAR_YEAR))
+        nhs = opendata._nhs_estate({"ref": "RX1", "name": "Ward Block", "trust": "T", "whole": True, "unoccupied_m2": 1,
+                                    "floor_m2": 1, "year": "2024/25"})
+        self.assertEqual(nhs["reported"], "2025-03-31")
+        planit = opendata._planit({"name": "Fareham/P/18/1344/FP", "address": "3 Segensworth Road",
+                                   "description": "Siting of a static caravan whilst the property is being renovated",
+                                   "app_state": "Permitted", "decided_date": "2019-01-02", "start_date": "2018-11-27"})
+        self.assertEqual((planit["reported"], planit["reported_as"]), ("2019-01-02", "decided"))
+
+    def test_a_place_says_its_latest(self):
+        from bandobuddy.sites import last_reported
+        members = [{"source": "osm", "reported": "2021-03-03", "reported_as": "last edited"},
+                   {"source": "heritage_at_risk", "reported": "2025", "reported_as": "on the register in"},
+                   {"source": "planit", "reported": "2025-06-28", "reported_as": "decided"},
+                   {"source": "railway_estate", "reported": None}]
+        self.assertEqual(last_reported(members), {"on": "2025", "as": "on the register in", "source": "heritage_at_risk"})
+        self.assertIsNone(last_reported([{"source": "railway_estate"}]))
+
+    def test_kept_in_the_store(self):
+        store = Store(Path(tempfile.mkdtemp()) / DB_NAME)
+        store.upsert_osm([{"osm_id": "way/1", "lat": 51, "lng": -1, "tags": {"building": "ruins"}, "edited": "2021-03-03"}],
+                         "2026-01-01")
+        store.upsert_osm([{"osm_id": "way/1", "lat": 51, "lng": -1, "tags": {"building": "ruins"}}], "2026-02-01")
+        self.assertEqual(store.active_osm()[0]["edited"], "2021-03-03")       # not lost to a read that didn't say
+        store.upsert_od([{"dataset": "planit", "ref": "A/1", "name": "x", "lat": 51, "lng": -1, "kind": "house",
+                          "evidence": "e", "weight": 5, "reported": "2019-01-02", "reported_as": "decided"}], "2026-01-01")
+        row = store.active_od("planit")[0]
+        self.assertEqual((row["reported"], row["reported_as"]), ("2019-01-02", "decided"))
+
+
 # -- Best spots, and things that are never places ---------------------------------------------------------
 
 class BestSpotsTests(unittest.TestCase):
@@ -354,10 +416,27 @@ class BestSpotsTests(unittest.TestCase):
             self.site("museum", condition="Heritage site", kind="castle", category="historic"),
             self.site("u1", name="Unnamed building", condition="Abandoned", kind="building", category="buildings"),
             self.site("u2", name="Unnamed bunker", condition="Old military", kind="bunker", category="bunkers"),
+            self.site("u3", name="Unnamed ruin", condition="Ruin", kind="structure", category="historic"),
+            # Near Botley: OpenStreetMap's abandoned house with no name. What it is is known, so it counts.
+            self.site("u4", name="Unnamed house", condition="Abandoned", kind="house", category="buildings"),
+            self.site("u5", name="Unnamed adit", condition="Abandoned", kind="adit", category="mines"),
+            self.site("courts", name="Old Tennis Courts", condition="Disused", kind="pitch", category="leisure"),
         ])
         best = {s["key"] for s in store.full_sites(min_score=0, best=True)}
-        self.assertEqual(best, {"asylum", "closed home", "u2"})
-        self.assertEqual(len(store.full_sites(min_score=0)), 10)
+        self.assertEqual(best, {"asylum", "closed home", "u2", "u4", "u5"})
+        self.assertEqual(len(store.full_sites(min_score=0)), 14)
+
+    def test_new_rules_are_a_new_map(self):
+        # Phones apply the rules to their own copy, so changing them must move the stamp they compare.
+        store = Store(Path(tempfile.mkdtemp()) / DB_NAME)
+        store.replace_sites([self.site("asylum")])
+        built = store.sites_built()
+        with mock.patch("bandobuddy.store.now_iso", return_value="2030-01-01T00:00:00+00:00"):
+            store.replace_sites([self.site("asylum")])
+            self.assertEqual(store.sites_built(), built)
+            with mock.patch.dict("bandobuddy.store.BEST", {"min_score": 25}):
+                store.replace_sites([self.site("asylum")])
+            self.assertEqual(store.sites_built(), "2030-01-01T00:00:00+00:00")
 
     def test_phone_boxes_and_post_boxes_are_not_places(self):
         self.assertTrue(osm.not_a_place({"disused:amenity": "telephone"}))

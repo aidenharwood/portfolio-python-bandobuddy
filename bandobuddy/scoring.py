@@ -56,7 +56,7 @@ def members_of(site: dict) -> list[dict]:
 
 # What the strongest evidence says a place is, when that settles its category whatever it's called.
 _KIND_CATEGORIES = [
-    (re.compile(r"\bschool|\bcollege\b|\bacademy\b|care home|nursing home|\bhospital\b|hospice|\bnhs\b", re.I),
+    (re.compile(r"\bschool|\bcollege\b|\bacademy\b|care home|nursing home|\bhospital\b|hospice|\bnhs\b|day centre", re.I),
      "institutional"),
     (re.compile(r"^railway tunnel$", re.I), "tunnels"),
     (re.compile(r"^railway viaduct$", re.I), "rail"),
@@ -101,7 +101,7 @@ def _condition_from(evidence: str) -> str | None:
                  text):
         return "Unfinished"
     if re.search(r"never (?:been )?occupied|not been occupied|unoccupied|stood empty|stands? empty|been empty"
-                 r"|remained empty", text):
+                 r"|remained empty|uninhabitable|uninhabited|unfit for (?:human )?habitation|couldn't be lived in", text):
         return "Empty"
     if "due to close" in text:
         return "Closing"

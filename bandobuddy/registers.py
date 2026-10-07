@@ -168,6 +168,10 @@ _norm = lambda s: re.sub(r"[^a-z0-9]", "", (s or "").lower())          # noqa: E
 _pc = lambda s: re.sub(r"\s", "", (s or "").upper())                  # noqa: E731
 CQC_HOSPITALS = re.compile(r"hospital|hospice|mental health - community & (?:hospital|residential)", re.I)
 CQC_HOSPITAL_NAMES = re.compile(r"hospital|hospice|infirmary|asylum|nursing home|sanatorium", re.I)
+# A building for day services, named as one in its address or name: councils' resource and day centres, mostly. Not a
+# GP's "medical centre" (practices merge and move) or a care agency's office ("X Support Services").
+CQC_CENTRE = re.compile(r"\b(?:resource|day|training|activity|activities|respite|social education|adult education)"
+                        r"\s+(?:centre|center)\b", re.I)
 
 
 def _cqc_date(value: str) -> date | None:
@@ -183,10 +187,12 @@ class CqcClosures:
     regulates. Kept only where the building is closed rather than under new management: the last
     registration at the property ended, and nothing's registered at that address now (the directory of
     what's active). Care homes with 20 or more beds, and hospitals: small supported-living homes are
-    ordinary houses that go back to being homes."""
+    ordinary houses that go back to being homes. And day-service buildings, the resource and day centres
+    councils closed: Fiveways Resource Centre, Yeovil, closed in 2019, its last service gone in 2020."""
 
     page = "https://www.cqc.org.uk/about-us/transparency/using-cqc-data"
     min_beds = 20
+    version = 2          # raised when what's kept changes, so last month's reading isn't reused
 
     def __call__(self, session: requests.Session, progress: Progress, cancel=None,
                  data_dir: Path | None = None) -> Iterator[dict]:
@@ -194,13 +200,13 @@ class CqcClosures:
         progress("looking for this month's files", 0, None)
         closed_url = _link(session, self.page, r'href="([^"]+Deactivated_Locations\.ods)"')
         active_url = _link(session, self.page, r'href="([^"]+CQC_directory\.csv)"')
-        rows = kept.fresh(f"{closed_url} {active_url}")
+        rows = kept.fresh(f"{closed_url} {active_url} v{self.version}")
         if rows is None:
             progress("reading CQC's closed locations (about 30 MB)", 0, None)
             active = self._active(session, active_url, cancel)
             with _download(session, closed_url, cancel) as f:
                 rows = self._closed(f, active, progress, cancel)
-            kept.keep(f"{closed_url} {active_url}", rows)
+            kept.keep(f"{closed_url} {active_url} v{self.version}", rows)
         progress("closed care homes and hospitals", len(rows), len(rows))
         yield from rows
 
@@ -227,7 +233,9 @@ class CqcClosures:
                 beds = 0
             hospital = not care_home and CQC_HOSPITALS.search(r.get("Location Primary Inspection Category") or "") \
                 and ("NHS" in (r.get("Location Type/Sector") or "") or CQC_HOSPITAL_NAMES.search(r.get("Location Name") or ""))
-            if not (care_home and beds >= self.min_beds or hospital):
+            street, name = r.get("Location Street Address") or "", (r.get("Location Name") or "").strip()
+            centre = not care_home and not hospital and (CQC_CENTRE.search(street) or CQC_CENTRE.search(name))
+            if not (care_home and beds >= self.min_beds or hospital or centre):
                 continue
             ended = _cqc_date(r.get("Location HSCA End Date"))
             try:
@@ -242,7 +250,9 @@ class CqcClosures:
                                                      r.get("Location City")) if x),
                    "postcode": r.get("Location Postal Code") or "", "lat": lat, "lng": lng, "care_home": care_home,
                    "beds": beds, "category": r.get("Location Primary Inspection Category") or "",
-                   "sector": r.get("Location Type/Sector") or "", "ended": ended.isoformat()}
+                   "sector": r.get("Location Type/Sector") or "", "ended": ended.isoformat(),
+                   # the building, for a centre: "Fiveways Resource Centre", not the agency that last used it
+                   "centre": (street.strip() if CQC_CENTRE.search(street) else name) if centre else ""}
             if key not in latest or row["ended"] > latest[key]["ended"]:
                 latest[key] = row
         rows = []
@@ -390,6 +400,8 @@ class MoDisposals:
         kept = Kept(data_dir, "mod_disposals")
         places = dict(kept.data.get("places") or {})
         url = _link(session, self.page, r'href="([^"]+\.ods)"')
+        day = re.search(r"/(20\d\d)(\d\d)(\d\d)_", url)          # "20250812_House_of_Commons_Report_.ods"
+        reported = f"{day.group(1)}-{day.group(2)}-{day.group(3)}" if day else None
         resp = session.get(url, headers=HEADERS, timeout=TIMEOUT)
         resp.raise_for_status()
         records = _records(ods_stream(io.BytesIO(resp.content), _first_sheet(resp.content)), "Primary Establishment Name")
@@ -415,7 +427,7 @@ class MoDisposals:
                          "parcel": (r.get("Primary Parcel Name") or "").strip(), "status": (r.get("Status") or "").strip(),
                          "year": (r.get("Disposal From") or "").strip(), "town": (r.get("Town") or "").strip(),
                          "county": (r.get("County") or "").strip(), "area_ha": (r.get("Total Area (ha)") or "").strip(),
-                         "lat": places[ref][0], "lng": places[ref][1]})
+                         "reported": reported, "lat": places[ref][0], "lng": places[ref][1]})
         kept.keep(url, rows, places=places)
         yield from rows
 

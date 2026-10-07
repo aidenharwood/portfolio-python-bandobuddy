@@ -317,6 +317,16 @@ def shown_name(name: str) -> str:
     return shown or name
 
 
+def last_reported(members: list[dict]) -> dict | None:
+    """The most recent date any source gives for a place, and which: {"on", "as", "source"}. A bare year counts
+    as its end ("2025" is later than "2025-03-31")."""
+    dated = [m for m in members if m.get("reported")]
+    if not dated:
+        return None
+    latest = max(dated, key=lambda m: m["reported"] + ("-12-31" if len(m["reported"]) == 4 else ""))
+    return {"on": latest["reported"], "as": latest.get("reported_as") or "", "source": latest["source"]}
+
+
 def _agreed_name(site: dict) -> str:
     """When sources disagree, the name most of them use: one record called "Bethel Quarry" that also
     goes by "Gripwood Quarry", and another called "Gripwood Quarry", make it Gripwood Quarry. A name
@@ -398,6 +408,7 @@ def build_sites(store: Store) -> int:
         name = best_name(tags)
         ev = {"osm_id": item["osm_id"], "name": name, "kind": describe_kind(tags), "evidence": evidence,
               "weight": weight, "tags": tags, "first_seen": item["first_seen"], "source": "osm",
+              "reported": item.get("edited"), "reported_as": "last edited",
               "lat": item["lat"], "lng": item["lng"], "aliases": alt_names(tags), "entrance": entrance_kind(tags)}
         twin = next((s for s in grid.near(item["lat"], item["lng"])
                      if haversine_m(s["lat"], s["lng"], item["lat"], item["lng"]) <= TWIN_M
@@ -418,7 +429,8 @@ def build_sites(store: Store) -> int:
         ev = evaluate(row, intros.get(wikipedia_title(row["wiki"]) or ""))
         if not ev:
             continue
-        ev.update(first_seen=row["first_seen"], source="wikidata",
+        ev.update(first_seen=row["first_seen"], source="wikidata", reported=row.get("modified"),
+                  reported_as="last edited",
                   entrance=_entrance_from_text(f"{ev['kind']} {ev['name']}"))
         if ev.get("in_use"):
             attractions.add(ev["lat"], ev["lng"], None, ev["in_use"], ev["name"], "Wikidata")
@@ -445,6 +457,7 @@ def build_sites(store: Store) -> int:
         ev = {"ref": row["ref"], "name": row["name"], "kind": row["kind"], "evidence": row["evidence"],
               "weight": row["weight"], "url": row["url"], "lat": row["lat"], "lng": row["lng"],
               "first_seen": row["first_seen"], "source": row["dataset"], "aliases": row.get("aliases") or [],
+              "reported": row.get("reported"), "reported_as": row.get("reported_as"),
               "entrance": _entrance_from_text(said)}
         near = grid.near(row["lat"], row["lng"])
         # "Track II" and "Incline III" of the same quarry are one place to visit, named for the quarry.
@@ -492,7 +505,8 @@ def build_sites(store: Store) -> int:
             "kind": best["kind"],
             "sources": sources,
             "reasons": reasons,
-            "detail": {"osm": site["osm"], "wikidata": site["wikidata"], "open": site["open"]},
+            "detail": {"osm": site["osm"], "wikidata": site["wikidata"], "open": site["open"],
+                       "last_reported": last_reported(members)},
             "first_seen": first_seen,
             "added": first_seen if is_new else None,
             "aliases": _aliases(site),

@@ -98,6 +98,8 @@ class ExtractTests(unittest.TestCase):
         self.assertAlmostEqual(items["way/100"]["lng"], -0.1295, places=4)
         self.assertAlmostEqual(items["relation/200"]["lat"], 51.4910, places=4)  # from its member way
         self.assertEqual(items["way/102"]["tags"]["name"], "Hill Tunnel")
+        # When each was last edited, for the place to say how fresh its evidence is.
+        self.assertEqual({i["edited"] for i in items.values()}, {"2024-01-01"})
 
     def test_cancel(self):
         path = write_osm(Path(tempfile.mkdtemp()) / "area.osm")

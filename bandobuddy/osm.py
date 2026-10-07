@@ -260,13 +260,22 @@ class Cancelled(Exception):
     pass
 
 
+def _edited(obj) -> str | None:
+    """When an element was last edited, as a day: None if the extract doesn't say (it's 1970 then)."""
+    try:
+        stamp = obj.timestamp
+        return stamp.strftime("%Y-%m-%d") if stamp and stamp.year >= 2004 else None
+    except (AttributeError, ValueError):
+        return None
+
+
 def extract_candidates(
     pbf: Path,
     progress: Callable[[str, int, int | None], None] | None = None,
     cancel: threading.Event | None = None,
     on_nodes: Callable[[list[dict]], None] | None = None,
 ) -> list[dict]:
-    """Every OSM element in the extract that classify() accepts, as {osm_id, lat, lng, tags}.
+    """Every OSM element in the extract that classify() accepts, as {osm_id, lat, lng, tags, edited}.
 
     Three passes, so no giant node-location index is needed:
       1. tagged objects: keep matching nodes (they carry coordinates), ways and relations
@@ -296,28 +305,29 @@ def extract_candidates(
         if classify(tags) is None and in_use_as(tags) is None and gone_as(tags) is None:
             continue
         kind = obj.type_str()
+        edited = _edited(obj)
         if kind == "n":
             if obj.location.valid():
                 nodes.append({"osm_id": f"node/{obj.id}", "lat": obj.location.lat, "lng": obj.location.lon,
-                              "extent_m": 0, "tags": tags})
+                              "extent_m": 0, "tags": tags, "edited": edited})
         elif kind == "w":
-            ways[obj.id] = (tags, array("q", (n.ref for n in obj.nodes)))
+            ways[obj.id] = (tags, array("q", (n.ref for n in obj.nodes)), edited)
         else:
-            rels[obj.id] = (tags, array("q", (m.ref for m in obj.members if m.type == "w")))
+            rels[obj.id] = (tags, array("q", (m.ref for m in obj.members if m.type == "w")), edited)
     report("Reading OSM tags", seen, seen)
     if on_nodes and nodes:
         on_nodes(nodes)  # points are ready now; outlines need two more passes
     gc.collect()   # the map rebuild just done for those points: hand its memory back before the big passes
 
     member_ways: dict[int, array] = {}
-    wanted_ways = {ref for _, members in rels.values() for ref in members} - set(ways)
+    wanted_ways = {ref for _, members, _ in rels.values() for ref in members} - set(ways)
     if wanted_ways:
         report("Reading relation outlines", 0, len(wanted_ways))
         for w in osmium.FileProcessor(path, osmium.osm.WAY).with_filter(IdFilter(wanted_ways)):
             member_ways[w.id] = array("q", (n.ref for n in w.nodes))
         if cancel.is_set():
             raise Cancelled()
-    for wid, (_, refs) in ways.items():
+    for wid, (_, refs, _) in ways.items():
         member_ways.setdefault(wid, refs)
 
     # Where every node those outlines use is. For the UK that's millions of nodes: held as a sorted array of
@@ -349,13 +359,15 @@ def extract_candidates(
         return (s + n) / 2, (w + e) / 2, round(haversine_m(s, w, n, e) / 2)
 
     out = list(nodes)
-    for wid, (tags, refs) in ways.items():
+    for wid, (tags, refs, edited) in ways.items():
         c = place(refs)
         if c:
-            out.append({"osm_id": f"way/{wid}", "lat": c[0], "lng": c[1], "extent_m": c[2], "tags": tags})
-    for rid, (tags, members) in rels.items():
+            out.append({"osm_id": f"way/{wid}", "lat": c[0], "lng": c[1], "extent_m": c[2], "tags": tags,
+                        "edited": edited})
+    for rid, (tags, members, edited) in rels.items():
         c = place(r for wid in members for r in member_ways.get(wid, ()))
         if c:
-            out.append({"osm_id": f"relation/{rid}", "lat": c[0], "lng": c[1], "extent_m": c[2], "tags": tags})
+            out.append({"osm_id": f"relation/{rid}", "lat": c[0], "lng": c[1], "extent_m": c[2], "tags": tags,
+                        "edited": edited})
     report("Placing outlines", len(ids), len(ids))
     return out

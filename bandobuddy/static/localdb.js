@@ -204,6 +204,7 @@ self.LocalDB = (() => {
     const minScore = best ? Math.max(weak ? 0 : meta.weak_below, best.min_score) : weak ? 0 : meta.weak_below;
     const bestConditions = best && new Set(best.conditions);
     const skipKinds = best && new Set(best.skip_kinds);
+    const vagueKinds = best && new Set(best.vague_kinds || []);
     const bbox = parseBbox(params.get("bbox"));
     const cats = (params.get("categories") || "").split(",").filter(Boolean);
     const srcs = (params.get("sources") || "").split(",").filter(Boolean);
@@ -224,8 +225,8 @@ self.LocalDB = (() => {
         const cond = row[c.condition] || "";
         if (!bestConditions.has(cond) && !/^Closed \d{4}$/.test(cond)) return false;
         if (skipKinds.has((row[c.kind] || "").toLowerCase())) return false;
-        if ((row[c.name] || "").startsWith("Unnamed ") && row[c.kind] !== "cave entrance"
-            && !best.unnamed_ok.includes(row[c.category])) return false;
+        if ((row[c.name] || "").startsWith("Unnamed ") && !best.unnamed_ok.includes(row[c.category])
+            && vagueKinds.has((row[c.kind] || "").toLowerCase())) return false;
       }
       return true;
     };
@@ -336,7 +337,7 @@ self.LocalDB = (() => {
     }
     const meta = await index();
     if (!meta) return null;
-    if (searchParams.get("best") && !meta.best) return null;   // kept before best spots: ask the server
+    if (searchParams.get("best") && !(meta.best && meta.best.vague_kinds)) return null;   // older rules: ask the server
     const result = pathname === "/api/map" ? await mapView(meta, searchParams)
       : pathname === "/api/list" ? await list(meta, searchParams) : null;
     return result && { ...result, version: null, built: meta.built, local: meta.built };

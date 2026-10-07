@@ -275,6 +275,10 @@ border:0;border-radius:10px;background:#fb923c;color:#1a1206;font:inherit;font-w
 Open it once with a signal and it'll work offline after that.</p>
 <button onclick="location.reload()">Try again</button></div></body></html>`;
 
+async function tell(message) {
+  for (const client of await self.clients.matchAll({ type: "window" })) client.postMessage(message);
+}
+
 async function page(request, event) {
   const cache = await caches.open(SHELL);
   const home = new URL(request.url).pathname === "/";
@@ -286,7 +290,11 @@ async function page(request, event) {
   if (home) {   // open the kept copy straight away; the newer one fetched now is used next time
     const kept = await cache.match("/");
     if (kept) {
-      event.waitUntil(fresh.catch(() => {}));
+      const opened = kept.clone().text();
+      event.waitUntil(fresh.then(async response => {
+        // Not the app that just opened: say so, so it can be reloaded now rather than found out next time.
+        if (response.ok && (await response.clone().text()) !== (await opened)) await tell({ type: "page-updated" });
+      }).catch(() => {}));
       return kept;
     }
   }
