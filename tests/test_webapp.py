@@ -109,8 +109,10 @@ class WebAppTests(unittest.TestCase):
 
         status, sw, resp = self.request("GET", "/sw.js")
         self.assertEqual(status, 200)
-        self.assertNotIn(b"__VERSION__", sw)             # stamped, so a release retires old caches
-        self.assertIn(__version__.encode(), sw)
+        self.assertNotIn(b"__VERSION__", sw)             # stamped, so any change to the app retires old caches
+        stamp = webapp.asset_version()                   # the release, and a fingerprint of the app's files
+        self.assertTrue(stamp.startswith(f"{__version__}-"))
+        self.assertIn(stamp.encode(), sw)
         self.assertEqual(resp.getheader("Cache-Control"), "no-cache")
         self.assertEqual(resp.getheader("Service-Worker-Allowed"), "/")
 
@@ -123,9 +125,9 @@ class WebAppTests(unittest.TestCase):
             self.assertIn("max-age", resp.getheader("Cache-Control"), path)
 
         # The phone's copy of the map: loaded by the page and the worker at this version's address.
-        self.assertIn(f'src="/static/localdb.js?v={__version__}"'.encode(), self.request("GET", "/")[1])
+        self.assertIn(f'src="/static/localdb.js?v={stamp}"'.encode(), self.request("GET", "/")[1])
         self.assertIn(f"/static/localdb.js?v=${{VERSION}}".encode(), sw)
-        status, body, resp = self.request("GET", f"/static/localdb.js?v={__version__}")
+        status, body, resp = self.request("GET", f"/static/localdb.js?v={stamp}")
         self.assertEqual(status, 200)
         self.assertTrue(resp.getheader("Content-Type").startswith("text/javascript"))
         self.assertIn(b"self.LocalDB", body)

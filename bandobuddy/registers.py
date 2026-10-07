@@ -19,6 +19,7 @@ import threading
 import zipfile
 import xml.etree.ElementTree as ET
 from datetime import date, datetime, timedelta
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Callable, Iterator
 from urllib.parse import urljoin
@@ -364,6 +365,10 @@ class RailwayEstate:
         progress("reading the list of structures", 0, None)
         resp = session.get(self.url, headers=HEADERS, timeout=TIMEOUT)
         resp.raise_for_status()
+        try:     # the list carries no dates of its own: when it was last changed is the nearest
+            updated = parsedate_to_datetime(resp.headers.get("Last-Modified")).date().isoformat()
+        except (TypeError, ValueError):
+            updated = None
         seen = set()
         for r in _records(xlsx_rows(resp.content), "StructureType"):
             kind = (r.get("StructureType") or "").strip()
@@ -375,7 +380,8 @@ class RailwayEstate:
             lat, lng = bng_to_wgs84(*grid)
             yield {"ref": ref, "name": (r.get("Name") or "").strip(), "kind": kind.lower(),
                    "line": (r.get("ELR.LineName") or "").strip(), "path": (r.get("RPL or Sustrans?") or "").strip(),
-                   "status": (r.get("Status") or "").strip(), "os_ref": r.get("OSReference"), "lat": lat, "lng": lng}
+                   "status": (r.get("Status") or "").strip(), "os_ref": r.get("OSReference"), "updated": updated,
+                   "lat": lat, "lng": lng}
 
 
 # -- The MOD's disposals ---------------------------------------------------------------------------------

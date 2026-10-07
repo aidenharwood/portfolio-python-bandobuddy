@@ -20,7 +20,7 @@ self.LocalDB = (() => {
   const HELD_SQUARES = 60;      // 1° squares of the index held in memory between questions
   const CURRENT_FOR_MS = 30 * 60e3;   // how long the server's last word on its map is trusted for
   const LISTED = ["key", "name", "lat", "lng", "score", "strength", "category", "condition", "kind", "sources",
-                  "added", "aliases", "entrance_count"];
+                  "added", "aliases", "entrance_count", "reported", "reported_as", "reported_by", "report"];
 
   let opening = null;
   const held = new Map();       // "lat,lng" -> rows, for the index version in `heldFor`
@@ -136,6 +136,84 @@ self.LocalDB = (() => {
     return true;
   }
 
+  // ---------- news of saved places, worked out on the phone: nothing about them is ever sent anywhere ----------
+  const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const day = on => {
+    const m = /^(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?/.exec(String(on || ""));
+    return m ? [m[3] && String(Number(m[3])), m[2] && MONTHS[Number(m[2]) - 1], m[1]].filter(Boolean).join(" ") : "";
+  };
+
+  /** Particular places in brief, from the kept index, as {key: place}. Saved places know where they are, which
+   *  says which square of the index to look in. */
+  async function briefOf(places) {
+    const meta = await index();
+    if (!meta || !places.length) return {};
+    const c = Object.fromEntries(meta.columns.map((name, i) => [name, i]));
+    const bySquare = new Map();
+    for (const p of places) {
+      const sq = squareOf(p.lat, p.lng);
+      if (!bySquare.has(sq)) bySquare.set(sq, new Set());
+      bySquare.get(sq).add(p.key);
+    }
+    const db = await open();
+    const store = db.transaction("squares").objectStore("squares");
+    const squares = [...bySquare.keys()];
+    const found = await Promise.all(squares.map(sq => answer(store.get(sq))));
+    const out = {};
+    squares.forEach((sq, i) => {
+      for (const row of found[i] || []) if (bySquare.get(sq).has(row[c.key])) out[row[c.key]] = listed(c, row);
+    });
+    return out;
+  }
+
+  /** What about a place would be news: its condition, its last update, and what visitors have said. */
+  function signature(place) {
+    const r = place.report || {};
+    return { condition: place.condition || "", reported: place.reported || "", reported_as: place.reported_as || "",
+             reported_by: place.reported_by || "", visited: r.latest || "", accessible: r.accessible || 0,
+             inaccessible: r.inaccessible || 0 };
+  }
+
+  /** What's changed since `was`, in a few words each: "now Demolished", "decided 2 Jan 2027". */
+  function changes(was, now) {
+    if (!was) return [];
+    const said = [];
+    if (now.condition && now.condition !== was.condition) said.push(`now ${now.condition}`);
+    if (now.visited && now.visited !== was.visited) {
+      const tried = now.accessible + now.inaccessible;
+      said.push(`a new visitor report${tried ? `: got in ${now.accessible} of ${tried}` : ""}`);
+    }
+    if (now.reported && now.reported > was.reported && now.reported_by !== "reports")
+      said.push(`${now.reported_as ? `${now.reported_as} ` : ""}${day(now.reported)}`);
+    return said;
+  }
+
+  /** Saved places being watched for news: {notify, places: [{key, name, lat, lng, seen, told}]}. `seen` is what
+   *  you last saw of a place, `told` what a notification last said, so neither repeats itself. */
+  async function watchList() {
+    try { return (await read("meta", "watch")) || { notify: false, places: [] }; }
+    catch (_) { return { notify: false, places: [] }; }
+  }
+
+  async function putWatch(watch) {
+    const db = await open();
+    const tx = db.transaction("meta", "readwrite");
+    tx.objectStore("meta").put(watch, "watch");
+    await finished(tx);
+  }
+
+  /** Saved places with news since they were `seen` (or `told`): [{key, name, said: [...], now}]. Places the kept
+   *  index doesn't have just now are left alone: a missing row isn't news. */
+  async function savedNews(watch, against = "seen") {
+    const places = await briefOf(watch.places);
+    return watch.places.flatMap(p => {
+      const place = places[p.key];
+      if (!place) return [];
+      const now = signature(place), said = changes(p[against], now);
+      return said.length ? [{ key: p.key, name: place.name || p.name, said, now }] : [];
+    });
+  }
+
   /** What the server last said its map was built from (the page notes it with every status check). */
   async function noteServer(built) {
     if (!built) return;
@@ -209,6 +287,8 @@ self.LocalDB = (() => {
     const cats = (params.get("categories") || "").split(",").filter(Boolean);
     const srcs = (params.get("sources") || "").split(",").filter(Boolean);
     const since = (params.get("added_since") || "").trim();
+    const dateKind = (params.get("date") || "").trim();
+    const dateFrom = (params.get("date_from") || "").trim(), dateTo = (params.get("date_to") || "").trim();
     const q = (params.get("q") || "").trim().slice(0, 80).toLowerCase();
     const test = row => {
       if (row[c.score] < minScore) return false;
@@ -219,6 +299,10 @@ self.LocalDB = (() => {
       if (cats.length && !cats.includes(row[c.category])) return false;
       if (srcs.length && !srcs.some(src => (row[c.sources] || "").includes(src))) return false;
       if (since && !(row[c.added] && row[c.added] > since)) return false;
+      if (dateKind && (dateFrom || dateTo)) {   // store.py's dates: "closed more than five years ago"
+        const day = (row[c.dates] || {})[dateKind];
+        if (!day || (dateFrom && day < dateFrom) || (dateTo && day >= dateTo)) return false;
+      }
       if (q && !(row[c.name] || "").toLowerCase().includes(q)
           && !(row[c.aliases] || []).some(a => a.toLowerCase().includes(q))) return false;
       if (best) {   // store.py's best spots (config.BEST)
@@ -338,10 +422,12 @@ self.LocalDB = (() => {
     const meta = await index();
     if (!meta) return null;
     if (searchParams.get("best") && !(meta.best && meta.best.vague_kinds)) return null;   // older rules: ask the server
+    if (searchParams.get("date") && !meta.columns.includes("dates")) return null;   // kept before dates: ask the server
     const result = pathname === "/api/map" ? await mapView(meta, searchParams)
       : pathname === "/api/list" ? await list(meta, searchParams) : null;
     return result && { ...result, version: null, built: meta.built, local: meta.built };
   }
 
-  return { putIndex, index, touchIndex, putDetails, detail, missing, counts, once, clear, respond, noteServer, current };
+  return { putIndex, index, touchIndex, putDetails, detail, missing, counts, once, clear, respond, noteServer, current,
+           briefOf, signature, watchList, putWatch, savedNews };
 })();

@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Iterator
 
-from .config import BEST
+from .config import BEST, DATE_FILTERS
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS osm_items (
@@ -46,18 +46,26 @@ CREATE TABLE IF NOT EXISTS tiles (
 CREATE TABLE IF NOT EXISTS sites (
     key TEXT PRIMARY KEY, name TEXT, lat REAL, lng REAL, score INTEGER, strength TEXT, category TEXT,
     condition TEXT, kind TEXT, sources TEXT, reasons TEXT, detail TEXT, first_seen TEXT, added TEXT,
-    aliases TEXT, entrances TEXT
+    aliases TEXT, entrances TEXT, reported TEXT, reported_as TEXT, reported_by TEXT, report TEXT, dates TEXT
 );
 CREATE INDEX IF NOT EXISTS sites_lat ON sites(lat);
 CREATE INDEX IF NOT EXISTS sites_score ON sites(score);
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS reports (
+    key TEXT, reporter TEXT, difficulty INTEGER, access TEXT, tags TEXT, at TEXT, PRIMARY KEY (key, reporter)
+);
+CREATE TABLE IF NOT EXISTS report_log (key TEXT, reporter TEXT, at TEXT, access TEXT, difficulty INTEGER);
+CREATE INDEX IF NOT EXISTS report_log_key ON report_log(key);
+CREATE TABLE IF NOT EXISTS report_touched (key TEXT PRIMARY KEY, at TEXT);
 """
 
 SITE_LIST_FIELDS = ("key, name, lat, lng, score, strength, category, condition, kind, sources, added, aliases, "
+                    "reported, reported_as, reported_by, report, "
                     "json_array_length(entrances) AS entrance_count")
 # Every place in brief, for phones to keep: enough to draw the map, fill the list and search offline.
 INDEX_COLUMNS = ["key", "name", "lat", "lng", "score", "strength", "category", "condition", "kind", "sources",
-                 "added", "first_seen", "aliases", "entrance_count", "summary"]
+                 "added", "first_seen", "aliases", "entrance_count", "summary", "reported", "reported_as", "reported_by",
+                 "report", "dates"]
 MAP_SITE_LIMIT = 400   # more matches than this in view and the map shows clusters instead
 # SQLite lets one connection write at a time. Every source refreshing at once (a restart, "Update all") queues for
 # that turn: waiting up to ten minutes for it, rather than giving up after 30 seconds with "database is locked".
@@ -65,6 +73,9 @@ BUSY_WAIT_S = 600
 # ...and no one write holds it for long: big writes go in batches of this many rows, each its own transaction.
 WRITE_BATCH = 5000
 SITES_DDL = re.search(r"CREATE TABLE IF NOT EXISTS sites (\(.*?\));", SCHEMA, re.S).group(1)
+
+
+DATE_FILTER_KEYS = {key for key, _ in DATE_FILTERS}
 
 
 def _batches(rows: list, size: int = WRITE_BATCH):
@@ -82,6 +93,11 @@ class Store:
     def __init__(self, path: Path):
         self.path = path
         path.parent.mkdir(parents=True, exist_ok=True)
+        self.ensure_schema()
+
+    def ensure_schema(self) -> None:
+        """The tables, and the columns added since they were made. At start, and again whenever a query finds a
+        column missing: an older copy of bandobuddy on the same data rebuilds the map in its own layout."""
         with self.connect() as db:
             db.execute("PRAGMA journal_mode=WAL")
             columns = {r["name"] for r in db.execute("PRAGMA table_info(sites)")}
@@ -92,7 +108,10 @@ class Store:
             for table, column, kind in (("osm_items", "extent_m", "REAL"), ("wd_items", "aliases", "TEXT"),
                                         ("od_items", "aliases", "TEXT"), ("osm_items", "edited", "TEXT"),
                                         ("wd_items", "modified", "TEXT"), ("od_items", "reported", "TEXT"),
-                                        ("od_items", "reported_as", "TEXT")):
+                                        ("od_items", "reported_as", "TEXT"), ("od_items", "dates", "TEXT"),
+                                        ("sites", "reported", "TEXT"), ("sites", "reported_as", "TEXT"),
+                                        ("sites", "reported_by", "TEXT"), ("sites", "report", "TEXT"),
+                                        ("sites", "dates", "TEXT")):
                 if column not in {r["name"] for r in db.execute(f"PRAGMA table_info({table})")}:
                     db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
 
@@ -151,16 +170,17 @@ class Store:
         """Records from an open register (Historic England, Canmore, Coflein, brownfield...)."""
         rows = [(i["dataset"], i["ref"], i["name"], i["lat"], i["lng"], i["kind"], i["evidence"], i["weight"],
                  i.get("url"), json.dumps(i.get("aliases") or [], ensure_ascii=False), i.get("reported"),
-                 i.get("reported_as"), seen_at, seen_at) for i in items]
+                 i.get("reported_as"), json.dumps(i.get("dates") or []), seen_at, seen_at) for i in items]
         for batch in _batches(rows):
             with self.connect() as db:
                 db.executemany(
                     """INSERT INTO od_items (dataset, ref, name, lat, lng, kind, evidence, weight, url, aliases,
-                       reported, reported_as, first_seen, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                       reported, reported_as, dates, first_seen, last_seen)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                        ON CONFLICT(dataset, ref) DO UPDATE SET name = excluded.name, lat = excluded.lat,
                        lng = excluded.lng, kind = excluded.kind, evidence = excluded.evidence,
                        weight = excluded.weight, url = excluded.url, aliases = excluded.aliases,
-                       reported = excluded.reported, reported_as = excluded.reported_as,
+                       reported = excluded.reported, reported_as = excluded.reported_as, dates = excluded.dates,
                        last_seen = excluded.last_seen, gone_at = NULL""",
                     batch,
                 )
@@ -170,7 +190,8 @@ class Store:
         with self.connect() as db:
             rows = db.execute(f"SELECT * FROM od_items WHERE {where} ORDER BY dataset, ref",
                               (dataset,) if dataset else ())
-            return [{**dict(r), "aliases": json.loads(r["aliases"] or "[]")} for r in rows]
+            return [{**dict(r), "aliases": json.loads(r["aliases"] or "[]"), "dates": json.loads(r["dates"] or "[]")}
+                    for r in rows]
 
     def import_labels(self) -> dict[str, int]:
         """The imported sets in the database, and how many places each holds."""
@@ -310,7 +331,9 @@ class Store:
                  s["kind"], s["sources"], json.dumps(s["reasons"], ensure_ascii=False),
                  json.dumps(s["detail"], ensure_ascii=False), s["first_seen"], s["added"],
                  json.dumps(s.get("aliases") or [], ensure_ascii=False),
-                 json.dumps(s.get("entrances") or [], ensure_ascii=False)) for s in sites]
+                 json.dumps(s.get("entrances") or [], ensure_ascii=False), s.get("reported"), s.get("reported_as"),
+                 s.get("reported_by"), json.dumps(s["report"]) if s.get("report") else None,
+                 json.dumps(s.get("dates") or {})) for s in sites]
         # Phones keep a copy of the map, and answer from it while it matches the server's. A rebuild that comes
         # out the same (a restart, or an update that found nothing new) leaves theirs current, and the table alone.
         # The best-spots rules count too: phones apply them to their copy, so new rules need a new copy.
@@ -329,7 +352,7 @@ class Store:
             db.execute(f"CREATE TABLE {table} {SITES_DDL}")
         for batch in _batches(rows):
             with self.connect() as db:
-                db.executemany(f"INSERT INTO {table} VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", batch)
+                db.executemany(f"INSERT INTO {table} VALUES ({', '.join('?' * 21)})", batch)
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")      # DDL doesn't start a transaction by itself: the swap is all or nothing
             db.execute("DROP TABLE sites")
@@ -338,6 +361,59 @@ class Store:
             db.execute("CREATE INDEX sites_score ON sites(score)")
             db.execute("INSERT OR REPLACE INTO settings VALUES ('sites_built', ?)", (json.dumps(now_iso()),))
             db.execute("INSERT OR REPLACE INTO settings VALUES ('sites_digest', ?)", (json.dumps(digest),))
+
+    # -- visitors' reports ---------------------------------------------------------------------
+    def save_report(self, key: str, reporter: str, difficulty: int | None, access: str | None, tags: list[str],
+                    at: str) -> None:
+        """A device's report on a place, in place of its last. Marking it accessible or inaccessible goes in the
+        place's history too: once a day per device, unless it changes its mind."""
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            before = db.execute("SELECT access, at FROM reports WHERE key = ? AND reporter = ?",
+                                (key, reporter)).fetchone()
+            db.execute("INSERT OR REPLACE INTO reports VALUES (?, ?, ?, ?, ?, ?)",
+                       (key, reporter, difficulty, access, json.dumps(tags), at))
+            if access and (not before or before["access"] != access or (before["at"] or "")[:10] != at[:10]):
+                db.execute("INSERT INTO report_log VALUES (?, ?, ?, ?, ?)", (key, reporter, at, access, difficulty))
+            db.execute("INSERT OR REPLACE INTO report_touched VALUES (?, ?)", (key, now_iso()))
+
+    def clear_report(self, key: str, reporter: str) -> None:
+        """Taken back: the report, and that device's marks in the place's history (a slip shouldn't stay)."""
+        with self.connect() as db:
+            db.execute("DELETE FROM reports WHERE key = ? AND reporter = ?", (key, reporter))
+            db.execute("DELETE FROM report_log WHERE key = ? AND reporter = ?", (key, reporter))
+            db.execute("INSERT OR REPLACE INTO report_touched VALUES (?, ?)", (key, now_iso()))
+
+    def reports_for(self, key: str) -> tuple[list[dict], list[dict]]:
+        """A place's reports, and its history of being marked accessible or not."""
+        with self.connect() as db:
+            rows = [{**dict(r), "tags": json.loads(r["tags"] or "[]")}
+                    for r in db.execute("SELECT * FROM reports WHERE key = ?", (key,))]
+            history = [dict(r) for r in db.execute("SELECT at, access, difficulty FROM report_log WHERE key = ?", (key,))]
+        return rows, history
+
+    def all_reports(self) -> dict[str, list[dict]]:
+        """Every report, by place: for the map's rebuild."""
+        out: dict[str, list[dict]] = {}
+        with self.connect() as db:
+            for r in db.execute("SELECT * FROM reports"):
+                out.setdefault(r["key"], []).append({**dict(r), "tags": json.loads(r["tags"] or "[]")})
+        return out
+
+    def reports_touched_since(self, at: str) -> list[str]:
+        """Places whose reports changed since then: a rebuild that read them earlier puts these back."""
+        with self.connect() as db:
+            return [r[0] for r in db.execute("SELECT key FROM report_touched WHERE at >= ?", (at,))]
+
+    def site_exists(self, key: str) -> bool:
+        with self.connect() as db:
+            return db.execute("SELECT 1 FROM sites WHERE key = ?", (key,)).fetchone() is not None
+
+    def set_site_report(self, key: str, summary: dict | None) -> None:
+        """A place's reports, straight onto the map: one row, as the next rebuild would leave it. (The rebuild
+        also weighs them for the place's last update; the panel shows that live meanwhile.)"""
+        with self.connect() as db:
+            db.execute("UPDATE sites SET report = ? WHERE key = ?", (json.dumps(summary) if summary else None, key))
 
     def sites_built(self) -> str:
         """When the map was last rebuilt (or, from before that was recorded, something that changes with it)."""
@@ -353,8 +429,10 @@ class Store:
         with self.connect() as db:
             rows = db.execute("SELECT key, name, ROUND(lat, 5), ROUND(lng, 5), score, strength, category, condition, "
                               "kind, sources, added, first_seen, aliases, "
-                              "json_array_length(entrances), json_extract(reasons, '$[0]') FROM sites ORDER BY key")
-            return [[*r[:12], json.loads(r[12] or "[]"), r[13] or 0, r[14] or ""] for r in rows]
+                              "json_array_length(entrances), json_extract(reasons, '$[0]'), reported, reported_as, "
+                              "reported_by, report, dates FROM sites ORDER BY key")
+            return [[*r[:12], json.loads(r[12] or "[]"), r[13] or 0, r[14] or "", *r[15:18], json.loads(r[18] or "null"),
+                     json.loads(r[19] or "{}")] for r in rows]
 
     def sites_by_key(self, keys: list[str]) -> list[dict]:
         """Everything about particular places (any that no longer exist are left out)."""
@@ -373,7 +451,7 @@ class Store:
             return [_decode_site(r) for r in rows]
 
     def _site_filter(self, bbox=None, min_score=0, categories=None, sources=None, added_since=None, q=None,
-                     best=False):
+                     best=False, date_kind=None, date_from=None, date_to=None):
         where, args = ["score >= ?"], [max(min_score, BEST["min_score"]) if best else min_score]
         if best:   # config.BEST: standing, empty or derelict, and somewhere to go and see
             where.append(f"(condition IN ({','.join('?' * len(BEST['conditions']))})"
@@ -397,6 +475,15 @@ class Store:
         if added_since:
             where.append("added > ?")
             args.append(added_since)
+        if date_kind in DATE_FILTER_KEYS and (date_from or date_to):   # "closed more than five years ago"
+            field = f"json_extract(dates, '$.{date_kind}')"
+            where.append(f"{field} IS NOT NULL")
+            if date_from:
+                where.append(f"{field} >= ?")
+                args.append(date_from)
+            if date_to:
+                where.append(f"{field} < ?")
+                args.append(date_to)
         if q:
             where.append("(name LIKE ? OR aliases LIKE ?)")   # "Bethel" finds Gripwood Quarry
             args += [f"%{q}%", f"%{q}%"]
@@ -494,6 +581,7 @@ def _tile_id(s: float, w: float, n: float, e: float) -> str:
 def _listed(row: sqlite3.Row) -> dict:
     site = dict(row)
     site["aliases"] = json.loads(site.get("aliases") or "[]")
+    site["report"] = json.loads(site.get("report") or "null")
     return site
 
 
@@ -503,4 +591,5 @@ def _decode_site(row: sqlite3.Row) -> dict:
     site["detail"] = json.loads(site["detail"])
     site["aliases"] = json.loads(site.get("aliases") or "[]")
     site["entrances"] = json.loads(site.get("entrances") or "[]")
+    site["report"] = json.loads(site.get("report") or "null")
     return site

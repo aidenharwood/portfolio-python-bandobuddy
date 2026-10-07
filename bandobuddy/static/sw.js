@@ -312,6 +312,51 @@ function offlineAnswer() {
                       { status: 503, headers: { "Content-Type": "application/json", "X-Bandobuddy-Offline": "1" } });
 }
 
+// News of saved places, in the background: where the browser offers it (Chrome on Android, once the app's
+// installed), it wakes this now and then. The copy of the map is brought up to date, then each saved place is
+// compared with what a notification last said about it. Nothing about your saved places leaves the phone.
+self.addEventListener("periodicsync", event => {
+  if (event.tag === "saved-places") event.waitUntil(tellSavedNews());
+});
+
+async function tellSavedNews() {
+  const watch = await LocalDB.watchList();
+  if (!watch.notify || !watch.places.length) return;
+  try {
+    const kept = await LocalDB.index();
+    const res = await fetch(`/api/index?${new URLSearchParams({ have: kept ? kept.built : "" })}`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.unchanged) await LocalDB.touchIndex();
+      else await LocalDB.putIndex(data);
+    }
+  } catch (_) { /* no signal: what's kept will do */ }
+  const news = await LocalDB.savedNews(watch, "told");
+  for (const n of news) {
+    await self.registration.showNotification(n.name, { body: n.said.join(" · "), tag: `saved:${n.key}`,
+                                                       data: { key: n.key }, icon: "/static/icon-192.png" });
+  }
+  if (news.length) {
+    const told = Object.fromEntries(news.map(n => [n.key, n.now]));
+    await LocalDB.putWatch({ ...watch, places: watch.places.map(p => (told[p.key] ? { ...p, told: told[p.key] } : p)) });
+  }
+}
+
+self.addEventListener("notificationclick", event => {
+  event.notification.close();
+  const key = event.notification.data && event.notification.data.key;
+  const url = key ? `/#site=${encodeURIComponent(key)}` : "/";
+  event.waitUntil((async () => {
+    for (const client of await self.clients.matchAll({ type: "window", includeUncontrolled: true })) {
+      if ("focus" in client) {
+        try { await client.navigate(url); } catch (_) { /* another page of ours: focusing it will do */ }
+        return client.focus();
+      }
+    }
+    return self.clients.openWindow(url);
+  })());
+});
+
 self.addEventListener("fetch", event => {
   const { request } = event;
   if (request.method !== "GET") return;                    // updates and settings need the server

@@ -69,6 +69,14 @@
     box-shadow:var(--shadow); font-size:14px; opacity:0; pointer-events:none; transition:opacity .2s }
   .toast.show { opacity:1 }
   .toast.action.show { pointer-events:auto; cursor:pointer }
+  .item .news { display:block; margin-top:2px; color:var(--accent); font-size:13px; font-weight:600 }
+  .switch.notify { margin:14px 0 4px }
+  .navmenu { position:fixed; z-index:1300; left:50%; bottom:calc(16px + env(safe-area-inset-bottom)); transform:translateX(-50%);
+    width:min(360px, calc(100% - 24px)); padding:16px; border-radius:16px; background:var(--panel); box-shadow:var(--shadow) }
+  .navmenu h3 { margin:0 0 12px; font-size:12px; letter-spacing:.05em; text-transform:uppercase; color:var(--muted) }
+  .navapps { display:grid; gap:8px }
+  .navremember { display:flex; align-items:center; gap:8px; margin-top:12px; color:var(--muted); font-size:14px }
+  @media (min-width: 900px) { .navmenu { left:212px; bottom:auto; top:180px } }
 
   /* floating locate button: rides on top of the sheet */
   .fabs { position:fixed; z-index:900; right:12px; bottom:calc(var(--sheet-h) + 30px); display:grid; gap:10px;
@@ -255,6 +263,24 @@
 
   /* filters */
   .cats { display:grid; grid-template-columns:1fr 1fr; gap:8px }
+  .fsec { display:grid; gap:14px }
+  .fhead { display:flex; align-items:baseline; justify-content:space-between; margin-bottom:8px }
+  .fhead h3 { margin:0 }
+  .frow { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:0 0 10px }
+  .flabel { min-width:128px; color:var(--muted); font-size:14px }
+  .frow select { flex:1; min-width:0 }
+  .fdate { padding-left:136px }
+  .fdate select { flex:0 1 auto }
+  .fdate input { width:72px }
+  #dateNote { margin:-2px 0 0 136px }
+  @media (max-width: 420px) { .fdate { padding-left:0 } #dateNote { margin-left:0 } }
+  .fsrc > summary { display:flex; align-items:baseline; justify-content:space-between; gap:12px; cursor:pointer; list-style:none }
+  .fsrc > summary::-webkit-details-marker { display:none }
+  .fsrc > summary h3 { margin:0 }
+  .fsrc > summary h3::before { content:"▸ "; color:var(--faint) }
+  .fsrc[open] > summary h3::before { content:"▾ " }
+  .fsrc > summary span { color:var(--muted); font-size:13px }
+  .fsrc[open] > summary { margin-bottom:10px }
   .cat { display:flex; align-items:center; gap:10px; min-height:48px; padding:8px; border:1px solid var(--line); border-radius:12px;
     background:var(--panel); text-align:left; font-size:14px; line-height:1.2 }
   .cat[aria-pressed="true"] { border-color:var(--c); box-shadow:inset 0 0 0 1px var(--c) }
@@ -277,6 +303,32 @@
   .seg button + button { border-left:1px solid var(--line) }
   .seg button[aria-pressed="true"] { background:var(--ink); color:var(--panel) }
   .seg.sorts { margin:0 0 10px }
+  .rep-card { display:grid; gap:14px; padding:14px; border:1px solid var(--line); border-radius:12px; background:var(--raised) }
+  .rep-top { display:grid; grid-template-columns:1fr 1fr; gap:16px }
+  .rep-stat b { font-size:26px; line-height:1; font-variant-numeric:tabular-nums }
+  .rep-stat .of { margin-left:2px; color:var(--muted); font-size:14px }
+  .rep-stat small { display:block; margin:3px 0 7px; color:var(--muted); font-size:12px }
+  .bar { height:6px; border-radius:3px; background:var(--line); overflow:hidden }
+  .bar > i { display:block; height:100%; border-radius:3px; background:var(--accent) }
+  .rep-tags { list-style:none; margin:0; padding:0; display:grid; gap:8px; font-size:13px }
+  .rep-tags li { display:grid; grid-template-columns:minmax(92px, 36%) 1fr 52px; gap:10px; align-items:center }
+  .rep-tags small { color:var(--muted); text-align:right; font-variant-numeric:tabular-nums }
+  .rep-card > .note { font-size:12px }
+  .rep-empty { margin:0; color:var(--muted); font-size:14px }
+  .rep-mine { display:grid; gap:12px; margin-top:16px; padding-top:14px; border-top:1px dashed var(--line) }
+  .rep-mine-head { display:flex; align-items:baseline; justify-content:space-between; font-size:14px }
+  .rep-mine-head small { color:var(--muted); font-weight:400 }
+  .rep-mine-head .linkbtn { padding:0; font-size:13px }
+  .rep-row { display:grid; gap:6px }
+  .rep-label { color:var(--muted); font-size:12px }
+  .rep .seg button { padding:8px 4px }
+  .chips { display:flex; flex-wrap:wrap; gap:6px }
+  .chip { padding:5px 11px; border:1px solid var(--line); border-radius:999px; background:var(--panel); color:var(--ink); font-size:13px }
+  .chip[aria-pressed="true"] { border-color:var(--accent); background:var(--raised); color:var(--accent); font-weight:600 }
+  .rep-history { list-style:none; margin:0; padding:0; display:grid; gap:5px; font-size:13px }
+  .rep-history li { display:flex; justify-content:space-between; gap:12px }
+  .rep-history .in { color:var(--accent); font-weight:600 }
+  .rep details.box { margin-top:10px }
   .seg.sorts button { padding:7px; font-size:13px }
   .sticky { position:sticky; bottom:0; padding:12px 0 4px; background:linear-gradient(transparent, var(--panel) 30%) }
 
@@ -348,6 +400,7 @@
       <button type="button" class="card" id="statusCard" hidden></button>
       <button type="button" class="card loc" id="locCard" hidden></button>
       <button type="button" class="card fresh" id="newCard" hidden></button>
+      <button type="button" class="card fresh" id="savedNewsCard" hidden></button>
       <ul class="list" id="list"></ul>
       <p class="note" id="listNote" hidden></p>
       <div class="foot">
@@ -368,6 +421,7 @@
     <div id="view-saved" hidden>
       <div class="head" data-drag>
         <div class="grow"><h2>Saved places</h2><p id="savedSub"></p></div>
+        <button type="button" class="linkbtn" id="savedSeen" hidden>Mark all as seen</button>
         <button type="button" class="icon-btn" data-close aria-label="Close saved places"></button>
       </div>
       <div class="seg sorts" id="savedSeg" role="group" aria-label="Which saved places">
@@ -376,6 +430,8 @@
       </div>
       <ul class="list" id="savedList"></ul>
       <p class="note" id="savedNote" hidden></p>
+      <label class="switch notify"><input type="checkbox" id="savedNotify">
+        <span><b>Tell me when saved places change</b><small id="notifyNote"></small></span></label>
       <div class="foot">
         <div class="exports"><button type="button" class="btn small" id="savedGpx">Download as GPX</button>
           <span class="note">for OsmAnd, Organic Maps or any GPS app</span></div>
@@ -390,34 +446,40 @@
         <button type="button" class="linkbtn" id="resetFilters">Reset</button>
         <button type="button" class="icon-btn" data-close aria-label="Close filters"></button>
       </div>
-      <div class="block" style="border-top:0; padding-top:0">
-        <div class="row" style="justify-content:space-between"><h3 style="margin:0">What was it?</h3><button type="button" class="linkbtn" id="allCats">Show all</button></div>
-        <div class="cats" id="catChips" style="margin-top:8px"></div>
-      </div>
-      <div class="block">
+      <div class="block fsec" style="border-top:0; padding-top:0">
         <label class="switch"><input type="checkbox" id="best">
           <span><b>Best spots only</b><small>Still standing, with good evidence it's empty or derelict, and somewhere to go and see: no bare land, capped shafts, shop units or places open to visitors.</small></span></label>
-      </div>
-      <div class="block" id="weakBlock">
-        <label class="switch"><input type="checkbox" id="weak">
+        <label class="switch" id="weakBlock"><input type="checkbox" id="weak">
           <span><b>Show weaker leads</b><small>Closed shop units, heritage ruins, caves and brownfield land. There are lots of these and most aren't worth the trip.</small></span></label>
       </div>
       <div class="block">
-        <h3>Found in</h3>
-        <div class="checks" id="srcChecks"></div>
+        <div class="fhead"><h3>What was it?</h3><button type="button" class="linkbtn" id="allCats">Show all</button></div>
+        <div class="cats" id="catChips"></div>
       </div>
       <div class="block">
-        <h3>Added</h3>
-        <select id="newMode" aria-label="When places were added">
-          <option value="">Any time</option>
-          <option value="visit">Since my last visit</option>
-          <option value="30">In the last 30 days</option>
-          <option value="90">In the last 90 days</option>
-        </select>
+        <h3>When</h3>
+        <div class="frow"><label class="flabel" for="newMode">Added to the map</label>
+          <select id="newMode">
+            <option value="">Any time</option>
+            <option value="visit">Since my last visit</option>
+            <option value="30">In the last 30 days</option>
+            <option value="90">In the last 90 days</option>
+          </select></div>
+        <div class="frow"><label class="flabel" for="dateKind">Dated</label><select id="dateKind"></select></div>
+        <div class="frow fdate" id="dateRange" hidden>
+          <select id="dateOp" aria-label="Within or older than"><option value="within">within the last</option><option value="before">more than</option></select>
+          <input type="number" id="dateN" min="1" max="999" value="5" aria-label="How many">
+          <select id="dateUnit" aria-label="Days, months or years"><option value="days">days</option><option value="months">months</option><option value="years" selected>years</option></select>
+          <span id="dateAgo" hidden>ago</span>
+        </div>
+        <p class="note" id="dateNote" hidden></p>
       </div>
+      <details class="block fsrc">
+        <summary><h3>Found in</h3><span id="srcSummary"></span></summary>
+        <div class="checks" id="srcChecks"></div>
+      </details>
       <div class="sticky"><button type="button" class="btn accent block" id="applyFilters" data-close>Show places</button></div>
     </div>
-
     <!-- Data, updates, about -->
     <div id="view-data" hidden>
       <div class="head" data-drag>
@@ -432,6 +494,10 @@
         <div class="checks"><label><input type="checkbox" id="autoUpdate"> Keep the data up to date</label></div>
         <div class="row"><span class="note">Refresh every</span><input type="number" id="updateDays" min="1" max="90" style="width:72px"><span class="note">days</span></div>
         <p class="note" id="dataDir"></p>
+      </div>
+      <div class="source" id="mapsBox">
+        <h3>Directions</h3>
+        <div class="row"><span class="note">Open in</span><select id="mapsApp" aria-label="Which maps app Directions opens"></select></div>
       </div>
       <div class="source" id="locBox" hidden>
         <h3><span>Your location</span><button type="button" class="btn small" id="locStop">Stop using it</button></h3>
@@ -480,6 +546,11 @@
   <button type="button" class="fab" id="locBtn" aria-label="Show my location"></button>
 </div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
+<div class="navmenu" id="navMenu" role="dialog" aria-label="Directions with" hidden>
+  <h3>Directions with</h3>
+  <div class="navapps" id="navApps"></div>
+  <label class="navremember"><input type="checkbox" id="navRemember"> Always use this app</label>
+</div>
 <div id="safeProbe" style="position:fixed; bottom:0; width:0; height:env(safe-area-inset-bottom); visibility:hidden"></div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
@@ -1067,7 +1138,11 @@ function renderMap(data) {
                                           opacity: s.key === S.selected ? 0 : 1 });
     m.sig = sigOf(s);
     m.on("click", () => openSite(s.key));
-    if (CAN_HOVER) m.bindTooltip(`${esc(s.name)}<br><small>${esc(s.condition)}</small>`, { direction: "top", offset: [0, -14] });
+    if (CAN_HOVER) {
+      const when = reportedText(s), found = reportBrief(s.report);
+      m.bindTooltip(`${esc(s.name)}<br><small>${esc(s.condition)}${when ? ` · ${esc(when)}` : ""}`
+                    + `${found ? `<br>${esc(found)}` : ""}</small>`, { direction: "top", offset: [0, -14] });
+    }
     m.addTo(S.siteLayer);
     S.markers.set(s.key, m);
   }
@@ -1185,7 +1260,38 @@ function filterParams() {
   const mode = $("newMode").value;
   if (mode === "visit" && S.prevVisit) p.set("added_since", S.prevVisit);
   else if (mode === "30" || mode === "90") p.set("added_since", new Date(Date.now() - Number(mode) * 864e5).toISOString());
+  const date = dateFilter();
+  if (date) { p.set("date", date.kind); p.set(date.before ? "date_to" : "date_from", date.day); }
   return p;
+}
+
+// "Closed more than 5 years ago": the kind of date, and the day it's counted from.
+function dateFilter() {
+  const kind = $("dateKind").value;
+  if (!kind) return null;
+  const n = Math.max(1, Math.min(999, Math.round(Number($("dateN").value) || 1)));
+  const unit = $("dateUnit").value, cut = new Date();
+  if (unit === "days") cut.setDate(cut.getDate() - n);
+  else if (unit === "months") cut.setMonth(cut.getMonth() - n);
+  else cut.setFullYear(cut.getFullYear() - n);
+  const day = `${cut.getFullYear()}-${String(cut.getMonth() + 1).padStart(2, "0")}-${String(cut.getDate()).padStart(2, "0")}`;
+  return { kind, before: $("dateOp").value === "before", n, unit, day };
+}
+
+function renderDateFilter() {
+  const date = dateFilter();
+  $("dateRange").hidden = !date;
+  $("dateAgo").hidden = !date || !date.before;
+  $("dateNote").hidden = !date;
+  if (date) {
+    const what = (BOOT.date_filters.find(d => d[0] === date.kind) || [, ""])[1];
+    $("dateNote").textContent = `${what}: ${date.before ? "before" : "since"} ${fmtDay(date.day)}`;
+  }
+}
+
+function renderSourceSummary() {
+  const on = pickedSources().length, all = BOOT.sources.length;
+  $("srcSummary").textContent = on === all ? `All ${all} sources` : `${on} of ${all} sources`;
 }
 
 function pickedSources() {
@@ -1196,7 +1302,7 @@ function pickedSources() {
 // ones. (Showing weaker leads hides nothing, so it doesn't count.)
 function renderFilterCount() {
   const hiding = selectedCats().length < BOOT.categories.length || pickedSources().length < BOOT.sources.length
-    || !!$("newMode").value;
+    || !!$("newMode").value || !!$("dateKind").value;
   $("filterCount").hidden = !hiding;
   const label = hiding ? "Filters (some places are hidden)" : "Filters";
   $("filterBtn").setAttribute("aria-label", label);
@@ -1285,6 +1391,7 @@ const hashKey = () => {
 async function openSite(key, { pan = false, push = true } = {}) {
   const wasSite = S.view === "site";
   S.selected = key;
+  if (S.savedNews[key]) markSeen([key]);
   if (push && hashKey() !== key) {
     const url = `#site=${encodeURIComponent(key)}`;
     if (wasSite && history.state && history.state.site) history.replaceState({ site: key }, "", url);
@@ -1317,6 +1424,7 @@ async function openSite(key, { pan = false, push = true } = {}) {
   }
   loadPhotos(site);
   loadAccess(site);
+  loadReports(site);
 }
 
 // What the map, the list and your saved places already know about a place: enough to show it and
@@ -1352,13 +1460,66 @@ function nearestEntrance(site) {
   return ways.reduce((a, b) => (metres(S.loc.pos, a) <= metres(S.loc.pos, b) ? a : b));
 }
 
-function directions(site) {
-  const target = nearestEntrance(site) || site;
-  const to = `${target.lat.toFixed(6)},${target.lng.toFixed(6)}`;
-  if (isApple()) return { href: `https://maps.apple.com/?daddr=${to}&q=${encodeURIComponent(site.name)}`, external: true };
-  if (/Android/.test(navigator.userAgent)) return { href: `geo:${to}?q=${to}(${encodeURIComponent(site.name)})`, external: false };
-  const from = S.loc.pos ? `${S.loc.pos.lat.toFixed(5)},${S.loc.pos.lng.toFixed(5)}` : "";
-  return { href: `https://www.openstreetmap.org/directions?route=${encodeURIComponent(`${from};${to}`)}`, external: true };
+// ---------- directions, in the maps app you choose ----------
+const MAPS_APPS = {
+  apple: { label: "Apple Maps", url: (to, name) => `https://maps.apple.com/?daddr=${to}&q=${encodeURIComponent(name)}` },
+  google: { label: "Google Maps", url: to => `https://www.google.com/maps/dir/?api=1&destination=${to}` },
+  waze: { label: "Waze", url: to => `https://waze.com/ul?ll=${to}&navigate=yes` },
+  phone: { label: "Another app on this phone", url: (to, name) => `geo:${to}?q=${to}(${encodeURIComponent(name)})` },
+  osm: { label: "OpenStreetMap", url: to => {
+    const from = S.loc.pos ? `${S.loc.pos.lat.toFixed(5)},${S.loc.pos.lng.toFixed(5)}` : "";
+    return `https://www.openstreetmap.org/directions?route=${encodeURIComponent(`${from};${to}`)}`;
+  } },
+};
+
+// The apps that make sense on this device, most likely first.
+function mapsAppsHere() {
+  if (isApple()) return ["apple", "google", "waze"];
+  if (/Android/.test(navigator.userAgent)) return ["google", "waze", "phone"];
+  return [/Mac/.test(navigator.platform) && "apple", "google", "osm"].filter(Boolean);
+}
+
+// The app you said to always use, or a choice.
+function openDirections(site) {
+  const always = loadPrefs().mapsApp;
+  if (always && mapsAppsHere().includes(always)) { goDirections(site, always); return; }
+  $("navApps").innerHTML = mapsAppsHere().map(app =>
+    `<button type="button" class="btn block" data-nav-app="${app}">${esc(MAPS_APPS[app].label)}</button>`).join("");
+  $("navRemember").checked = false;
+  $("navMenu").hidden = false;
+  S.navFor = site;
+  $("navApps").querySelector("button").focus();
+}
+
+function goDirections(site, app) {
+  const target = nearestEntrance(site) || site;   // the nearest way in, when a place has several
+  const url = MAPS_APPS[app].url(`${target.lat.toFixed(6)},${target.lng.toFixed(6)}`, site.name);
+  if (app === "phone") location.href = url;        // the phone asks which app itself
+  else window.open(url, "_blank", "noopener");
+}
+
+function initDirections() {
+  $("navApps").addEventListener("click", e => {
+    const b = e.target.closest("[data-nav-app]");
+    if (!b || !S.navFor) return;
+    if ($("navRemember").checked) { savePrefs({ mapsApp: b.dataset.navApp }); renderMapsSetting(); }
+    $("navMenu").hidden = true;
+    goDirections(S.navFor, b.dataset.navApp);
+  });
+  document.addEventListener("click", e => {
+    if (!$("navMenu").hidden && !e.target.closest("#navMenu, [data-directions]")) $("navMenu").hidden = true;
+  });
+  document.addEventListener("keydown", e => { if (e.key === "Escape") $("navMenu").hidden = true; });
+  $("mapsApp").addEventListener("change", () => savePrefs({ mapsApp: $("mapsApp").value || null }));
+  renderMapsSetting();
+}
+
+// In the menu: which app Directions opens, or ask each time.
+function renderMapsSetting() {
+  const chosen = loadPrefs().mapsApp || "";
+  $("mapsApp").innerHTML = ['<option value="">Ask each time</option>',
+    ...mapsAppsHere().map(app => `<option value="${app}">${esc(MAPS_APPS[app].label)}</option>`)].join("");
+  $("mapsApp").value = mapsAppsHere().includes(chosen) ? chosen : "";
 }
 
 const SOURCE_ABOUT = BOOT.about || {};   // [name, home page, licence] for every source, switched on here or not
@@ -1373,13 +1534,13 @@ function sourceRecords(site) {
     const [type, id] = String(m.osm_id).split("/");
     const url = `https://www.openstreetmap.org/${type}/${id}`;
     records.push({ source: "osm", what: m.name || m.kind.charAt(0).toUpperCase() + m.kind.slice(1), ref: `${type} ${id}`,
-                   when: reportedText(m), links: [["See it", url], ["What changed, and when", `${url}/history`]] });
+                   when: datesText(m), links: [["See it", url], ["What changed, and when", `${url}/history`]] });
   }
   for (const m of d.wikidata || [])
-    records.push({ source: "wikidata", what: m.name, ref: m.qid, when: reportedText(m),
+    records.push({ source: "wikidata", what: m.name, ref: m.qid, when: datesText(m),
                    links: [["Wikidata", m.url], ["Wikipedia", m.wikipedia_url]] });
   for (const m of d.open || [])
-    records.push({ source: m.source, what: m.name, ref: m.source === "imported" ? "" : m.ref, when: reportedText(m),
+    records.push({ source: m.source, what: m.name, ref: m.source === "imported" ? "" : m.ref, when: datesText(m),
                    links: registerLinks(m) });
   return records;
 }
@@ -1395,13 +1556,152 @@ function reportedText(m) {
   const day = m && fmtDay(m.reported);
   return day ? `${m.reported_as ? `${m.reported_as} ` : ""}${day}` : "";
 }
+// Every date a record gives, in order: "applied for 27 Nov 2018 · decided 2 Jan 2019".
+function datesText(m) {
+  const dates = (m && m.dates) || [];
+  return dates.length ? dates.map(([what, on]) => `${what} ${fmtDay(on)}`).join(" · ") : reportedText(m);
+}
+
+// ---------- what visitors found: fixed choices only, nothing typed, so nothing to moderate ----------
+const REPORT_TAGS = BOOT.report_tags || [];
+const tagLabel = key => (REPORT_TAGS.find(t => t[0] === key) || [key, key])[1];
+const DIFFICULTY = ["", "walk in", "easy", "some effort", "hard", "very hard"];
+const DEVICE_KEY = "bandobuddy:device";
+
+// A random name for this device, kept on it. The server keeps only a different hash of it for each place.
+function deviceId() {
+  try {
+    let id = localStorage.getItem(DEVICE_KEY);
+    if (!id) {
+      id = crypto.randomUUID ? crypto.randomUUID()
+        : Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, "0")).join("");
+      localStorage.setItem(DEVICE_KEY, id);
+    }
+    return id;
+  } catch (_) { return ""; }
+}
+
+// On hover: "access 3/5 · accessible · well preserved".
+function reportBrief(r) {
+  if (!r || !r.n) return "";
+  const bits = [], tried = (r.accessible || 0) + (r.inaccessible || 0);
+  if (r.difficulty) bits.push(`access ${Number(r.difficulty).toFixed(1)}/5`);
+  if (tried) bits.push(`got in ${r.accessible}/${tried}`);
+  const top = Object.entries(r.tags || {})[0];
+  if (top) bits.push(`${tagLabel(top[0]).toLowerCase()} ${top[1]}/${r.n}`);
+  return bits.join(" · ");
+}
+async function loadReports(site) {
+  if (!$("reports")) return;
+  const device = deviceId();
+  try {
+    const data = await api(`/api/report?${new URLSearchParams({ key: site.key, device })}`);
+    if (S.site !== site) return;
+    const mine = data.mine || {};
+    S.myReport = { site, difficulty: mine.difficulty || null, access: mine.access || null, tags: [...(mine.tags || [])],
+                   said: { reported: site.reported, reported_as: site.reported_as, reported_by: site.reported_by } };
+    renderReports(data);
+  } catch (_) {
+    if (S.site === site) $("reports").innerHTML = '<p class="note">What visitors found needs a connection.</p>';
+  }
+}
+
+function renderReports(data) {
+  const r = data.summary, mine = S.myReport;
+  const on = yes => `aria-pressed="${yes}"`;
+  const share = (k, n) => `${n ? Math.round(100 * k / n) : 0}%`;
+  let card = '<p class="rep-empty">No reports from visitors in the last three years.</p>';
+  if (r && r.n) {
+    const tried = r.accessible + r.inaccessible, stats = [], tags = Object.entries(r.tags || {});
+    if (r.difficulty) stats.push(`<div class="rep-stat"><b>${Number(r.difficulty).toFixed(1)}</b><span class="of">/5</span>
+      <small>access difficulty: ${DIFFICULTY[Math.round(r.difficulty)]}</small>
+      <div class="bar"><i style="width:${share(r.difficulty, 5)}"></i></div></div>`);
+    if (tried) stats.push(`<div class="rep-stat"><b>${r.accessible}</b><span class="of">/${tried}</span>
+      <small>got in</small><div class="bar"><i style="width:${share(r.accessible, tried)}"></i></div></div>`);
+    card = `<div class="rep-card">
+      ${stats.length ? `<div class="rep-top">${stats.join("")}</div>` : ""}
+      ${tags.length ? `<ul class="rep-tags">${tags.map(([k, n]) => `<li><span>${esc(tagLabel(k))}</span>
+        <div class="bar"><i style="width:${share(n, r.n)}"></i></div><small>${n} of ${r.n}</small></li>`).join("")}</ul>` : ""}
+      <p class="note">From ${r.n} report${r.n === 1 ? "" : "s"} in the last three years${r.latest ? `, the latest ${esc(fmtDay(r.latest))}` : ""}</p>
+    </div>`;
+  }
+  const history = (r && r.history) || [];
+  const marked = h => (h.access === "accessible" ? "accessible" : "inaccessible");
+  const log = history.length ? `<details class="box"><summary>Access history: last marked ${marked(history[0])}
+      ${esc(fmtDay(history[0].on))}</summary><div><ul class="rep-history">${history.map(h =>
+      `<li><span>${esc(fmtDay(h.on))}</span><span class="${h.access === "accessible" ? "in" : ""}">`
+      + `${marked(h)[0].toUpperCase()}${marked(h).slice(1)}${h.difficulty ? ` · ${h.difficulty}/5` : ""}</span></li>`).join("")}
+    </ul></div></details>` : "";
+  const groups = [["condition", "Condition"], ["security", "Security"], ["status", "Status"]];
+  $("reports").innerHTML = `${card}${log}
+    <div class="rep-mine">
+      <div class="rep-mine-head"><b>Your report${data.mine ? ` <small>· ${esc(fmtDay(data.mine.at))}</small>` : ""}</b>
+        ${data.mine ? '<button type="button" class="linkbtn" data-report-clear>Remove</button>' : ""}</div>
+      <div class="rep-row"><span class="rep-label">Access difficulty, from 1 (walk in) to 5 (very hard)</span>
+        <div class="seg" role="group" aria-label="Access difficulty">${[1, 2, 3, 4, 5].map(n =>
+          `<button type="button" data-difficulty="${n}" ${on(mine.difficulty === n)} title="${DIFFICULTY[n]}">${n}</button>`).join("")}</div></div>
+      <div class="rep-row"><span class="rep-label">Could you get in?</span>
+        <div class="seg">${[["accessible", "Accessible"], ["inaccessible", "Inaccessible"]].map(([a, label]) =>
+          `<button type="button" data-access="${a}" ${on(mine.access === a)}>${label}</button>`).join("")}</div></div>
+      ${groups.map(([group, label]) => `<div class="rep-row"><span class="rep-label">${label}</span>
+        <div class="chips">${REPORT_TAGS.filter(t => t[2] === group).map(([k, l]) =>
+          `<button type="button" class="chip" data-tag="${esc(k)}" ${on(mine.tags.includes(k))}>${esc(l)}</button>`).join("")}</div></div>`).join("")}
+    </div>`;
+  // The newest word on the place may be a visitor's, just now: say so under its name without waiting for a rebuild.
+  const site = mine.site, latest = r && r.latest;
+  Object.assign(site, latest && (!mine.said.reported || latest > mine.said.reported)
+    ? { reported: latest, reported_as: "visitor report", reported_by: "reports" } : mine.said);
+  const was = document.querySelector("#detail .site-head p.when");
+  if (was) was.outerHTML = lastReported(site) || "<span hidden></span>";
+  else if (lastReported(site)) document.querySelector("#detail .site-head .grow p").insertAdjacentHTML("afterend", lastReported(site));
+}
+
+let reportTimer = 0;
+function onReportChoice(el) {
+  const mine = S.myReport;
+  if (!mine || mine.site !== S.site) return;
+  if ("reportClear" in el.dataset) { clearTimeout(reportTimer); sendReport(mine, true); return; }
+  if (el.dataset.difficulty) {
+    const n = Number(el.dataset.difficulty);
+    mine.difficulty = mine.difficulty === n ? null : n;
+  } else if (el.dataset.access) {
+    mine.access = mine.access === el.dataset.access ? null : el.dataset.access;
+  } else if (el.dataset.tag) {
+    const t = el.dataset.tag;
+    mine.tags = mine.tags.includes(t) ? mine.tags.filter(x => x !== t) : [...mine.tags, t];
+  }
+  // Show the choice at once; send it once the tapping settles.
+  for (const b of $("reports").querySelectorAll("[data-difficulty]"))
+    b.setAttribute("aria-pressed", String(mine.difficulty === Number(b.dataset.difficulty)));
+  for (const b of $("reports").querySelectorAll("[data-access]")) b.setAttribute("aria-pressed", String(mine.access === b.dataset.access));
+  for (const b of $("reports").querySelectorAll("[data-tag]")) b.setAttribute("aria-pressed", String(mine.tags.includes(b.dataset.tag)));
+  clearTimeout(reportTimer);
+  reportTimer = setTimeout(() => sendReport(mine, false), 900);
+}
+
+async function sendReport(mine, clear) {
+  const site = mine.site;
+  const nothing = !mine.difficulty && !mine.access && !mine.tags.length;
+  const body = { key: site.key, device: deviceId(), ...(clear || nothing ? { clear: true }
+    : { difficulty: mine.difficulty, access: mine.access, tags: mine.tags }) };
+  try {
+    const data = await api("/api/report", body);
+    if (clear) Object.assign(mine, { difficulty: null, access: null, tags: [] });
+    if (S.site === site) renderReports(data);
+    toast(clear || nothing ? "Your report's removed." : "Thanks: your report's in.");
+  } catch (err) {
+    toast(`Couldn't send your report: ${err.message}`);
+  }
+}
 
 // The latest any source has said about a place: "Last update: decided 28 Jun 2024 (UK PlanIt)".
 function lastReported(site) {
-  const last = (site.detail || {}).last_reported;
+  const last = site.reported ? { on: site.reported, as: site.reported_as, source: site.reported_by }
+    : (site.detail || {}).last_reported;
   const said = last && reportedText({ reported: last.on, reported_as: last.as });
   if (!said) return "";
-  const from = (SOURCE_ABOUT[last.source] || [])[0] || ({ osm: "OpenStreetMap", wikidata: "Wikidata" })[last.source] || "";
+  const from = (SOURCE_ABOUT[last.source] || [])[0]
+    || ({ osm: "OpenStreetMap", wikidata: "Wikidata", reports: "visitors" })[last.source] || "";
   return `<p class="when">Last update: ${esc(said)}${from ? ` (${esc(from)})` : ""}</p>`;
 }
 
@@ -1476,7 +1776,6 @@ function researchLinks(site) {
 
 function renderSite(site) {
   const lk = site.links;
-  const nav = directions(site);
   const strength = site.strength === "strong" ? '<span class="tag strong">Strong evidence</span>'
     : site.strength === "weak" ? '<span class="tag">Weak lead</span>' : "";
   const osm = (site.detail.osm || [])[0];
@@ -1495,8 +1794,8 @@ function renderSite(site) {
       ${closeButton()}
     </div>
     <div class="actions">
-      <a class="act primary" href="${esc(nav.href)}"${nav.external ? ' target="_blank" rel="noopener"' : ""}
-         title="${nearestEntrance(site) ? "To the nearest entrance" : ""}">${svg(UI.nav)}Directions</a>
+      <button type="button" class="act primary" data-directions
+         title="${nearestEntrance(site) ? "To the nearest entrance" : ""}">${svg(UI.nav)}Directions</button>
       <button type="button" class="act want" data-save="want" aria-pressed="${savedState(site.key) === "want"}">${svg(UI.star)}${savedState(site.key) === "want" ? "Saved" : "Save"}</button>
       <button type="button" class="act" data-save="been" aria-pressed="${savedState(site.key) === "been"}">${svg(UI.check)}Been here</button>
       <button type="button" class="act" data-share>${svg(UI.share)}Share</button>
@@ -1506,6 +1805,7 @@ function renderSite(site) {
     <div class="block"><h3>Why it's on the map${strength}</h3>
       ${site.partial ? `<p class="note">${esc(site.partial)} The full details will load when you're back online.</p>` : ""}
       <ul class="reasons">${site.reasons.map(r => `<li>${esc(r)}</li>`).join("")}</ul></div>
+    <div class="block rep"><h3>What visitors found</h3><div id="reports"><p class="note">Looking…</p></div></div>
     <div class="block"><h3>Street-level photos</h3><div class="photos" id="photos"><p class="note">Looking…</p></div></div>
     ${(site.entrances || []).length ? `<div class="block"><h3>${site.entrances.length} ways in</h3><div id="entrances"></div></div>` : ""}
     <div class="block"><h3>Getting there</h3><div id="getThere"><p class="note">Looking at the paths around it…</p></div></div>
@@ -1954,10 +2254,23 @@ function initFilters() {
   $("srcChecks").innerHTML = BOOT.sources.map(([key, label]) =>
     `<label><input type="checkbox" value="${esc(key)}"${onSources.has(key) ? " checked" : ""}> ${esc(label)}</label>`).join("");
 
+  $("dateKind").innerHTML = '<option value="">Any time</option>'
+    + BOOT.date_filters.map(([key, label]) => `<option value="${key}">${esc(label)}</option>`).join("");
+  const date = prefs.date || {};
+  $("dateKind").value = BOOT.date_filters.some(d => d[0] === date.kind) ? date.kind : "";
+  $("dateOp").value = date.op === "before" ? "before" : "within";
+  $("dateN").value = date.n || 5;
+  $("dateUnit").value = ["days", "months", "years"].includes(date.unit) ? date.unit : "years";
+  renderDateFilter();
+  renderSourceSummary();
   const changed = () => {
     $("weakBlock").hidden = $("best").checked;
+    renderDateFilter();
+    renderSourceSummary();
     savePrefs({ categories: selectedCats(), knownCategories: BOOT.categories.map(c => c[0]), weak: $("weak").checked,
                 best: $("best").checked,
+                date: { kind: $("dateKind").value, op: $("dateOp").value, n: Number($("dateN").value) || 1,
+                        unit: $("dateUnit").value },
                 sources: pickedSources(), knownSources: BOOT.sources.map(s => s[0]) });
     renderFilterCount();
     renderNewCard();
@@ -1981,12 +2294,15 @@ function initFilters() {
     changed();
   });
   $("newMode").addEventListener("change", changed);
+  for (const id of ["dateKind", "dateOp", "dateUnit"]) $(id).addEventListener("change", changed);
+  $("dateN").addEventListener("input", changed);
   $("resetFilters").addEventListener("click", () => {
     for (const c of document.querySelectorAll("#catChips .cat")) c.setAttribute("aria-pressed", "true");
     $("weak").checked = false;
     $("best").checked = true;
     for (const box of document.querySelectorAll("#srcChecks input")) box.checked = true;
     $("newMode").value = "";
+    $("dateKind").value = "";
     changed();
   });
   S.sort = ["nearest", "evidence", "newest"].includes(prefs.sort) ? prefs.sort : "nearest";
@@ -2052,9 +2368,12 @@ function initControls() {
   });
 
   $("sheet").addEventListener("click", e => {
+    const choice = e.target.closest("#reports [data-difficulty], #reports [data-access], #reports [data-tag], #reports [data-report-clear]");
+    if (choice) { onReportChoice(choice); return; }
     const item = e.target.closest(".item[data-key]");
     if (item) { openSite(item.dataset.key, { pan: true }); return; }
     if (e.target.closest("[data-close]")) { S.view === "site" ? closeSite() : backToList(); return; }
+    if (e.target.closest("[data-directions]") && S.site) { openDirections(S.site); return; }
     if (e.target.closest("[data-share]") && S.site) { shareSite(S.site); return; }
     const save = e.target.closest("[data-save]");
     if (save && S.site) { toggleSaved(S.site, save.dataset.save); return; }
@@ -2343,6 +2662,7 @@ async function keepIndex(force = false) {
     }
   } catch (_) { /* try again when the map next settles */ }
   indexBusy = false;
+  checkSavedNews();
   if (S.view === "data") renderOffline();
 }
 
@@ -2455,6 +2775,7 @@ function remember(site, patch) {
   if (!entry.state && !entry.note) delete S.saved[site.key];   // nothing left worth keeping
   else S.saved[site.key] = entry;
   storeSaved();
+  syncWatch();
 }
 
 function toggleSaved(site, state) {
@@ -2501,7 +2822,8 @@ function renderSaved() {
     <li><button type="button" class="item" data-saved-key="${esc(e.key)}">
       ${badge(e.category)}
       <span><span class="name">${esc(e.name)}${listMark(e.key)}</span>
-        <span class="meta">${esc(e.condition || "")}${e.note ? ` · ${esc(e.note.slice(0, 60))}` : ""}</span></span>
+        <span class="meta">${esc(e.condition || "")}${e.note ? ` · ${esc(e.note.slice(0, 60))}` : ""}</span>
+        ${S.savedNews[e.key] ? `<span class="news">${esc(S.savedNews[e.key].said.join(" · "))}</span>` : ""}</span>
       <span class="dist">${fmtDist(e.away)}</span>
     </button></li>`).join("");
   const note = $("savedNote");
@@ -2510,6 +2832,120 @@ function renderSaved() {
     ? "Places you mark as \"Been here\" collect here, so you can see where you've been."
     : "Tap Save on a place to plan a trip. Saved places, and their notes, work offline too.";
   $("savedGpx").disabled = !all;
+}
+
+// ---------- news of saved places: worked out on this phone, from its own copy of the map ----------
+// Nothing about your saved places is sent anywhere. With the app open, news shows on the list and in Saved;
+// where the browser allows it (Chrome on Android, installed), the service worker also checks in the background
+// and notifies. iPhones don't let web apps check in the background, so there it's when you open the app.
+S.savedNews = {};
+
+// The places watched are the places saved; one newly saved starts from how it is now, so saving isn't news.
+async function syncWatch() {
+  if (!canKeep()) return;
+  try {
+    const watch = await LocalDB.watchList();
+    const had = Object.fromEntries(watch.places.map(p => [p.key, p]));
+    const saved = Object.entries(S.saved).filter(([, e]) => e.state);
+    const now = await LocalDB.briefOf(saved.map(([key, e]) => ({ key, lat: e.lat, lng: e.lng })));
+    const places = saved.map(([key, e]) => {
+      const was = had[key] || {};
+      const sig = now[key] ? LocalDB.signature(now[key]) : null;
+      return { key, name: e.name, lat: e.lat, lng: e.lng, seen: was.seen || sig, told: was.told || was.seen || sig };
+    });
+    await LocalDB.putWatch({ ...watch, places });
+  } catch (_) { /* storage blocked: no news, as before */ }
+}
+
+async function checkSavedNews() {
+  if (!canKeep()) return;
+  try {
+    await syncWatch();
+    const watch = await LocalDB.watchList();
+    S.savedNews = Object.fromEntries((await LocalDB.savedNews(watch)).map(n => [n.key, n]));
+    renderSavedNews();
+    // Not yet told: on screen now, or a notification if the app's in the background; either way, said once.
+    const fresh = await LocalDB.savedNews(watch, "told");
+    if (!fresh.length) return;
+    if (watch.notify && document.visibilityState === "hidden" && window.Notification && Notification.permission === "granted") {
+      const reg = await navigator.serviceWorker.ready;
+      for (const n of fresh) reg.showNotification(n.name, { body: n.said.join(" · "), tag: `saved:${n.key}`,
+                                                            data: { key: n.key }, icon: "/static/icon-192.png" });
+    }
+    const told = Object.fromEntries(fresh.map(n => [n.key, n.now]));
+    await LocalDB.putWatch({ ...watch, places: watch.places.map(p => (told[p.key] ? { ...p, told: told[p.key] } : p)) });
+  } catch (_) { /* storage blocked */ }
+}
+
+async function markSeen(keys) {
+  for (const key of keys) delete S.savedNews[key];
+  renderSavedNews();
+  try {
+    const watch = await LocalDB.watchList();
+    const now = await LocalDB.briefOf(watch.places.filter(p => keys.includes(p.key)));
+    await LocalDB.putWatch({ ...watch, places: watch.places.map(p => (now[p.key]
+      ? { ...p, seen: LocalDB.signature(now[p.key]), told: LocalDB.signature(now[p.key]) } : p)) });
+  } catch (_) { /* storage blocked */ }
+}
+
+function renderSavedNews() {
+  const news = Object.values(S.savedNews), card = $("savedNewsCard");
+  card.hidden = !news.length;
+  $("savedSeen").hidden = !news.length;
+  if (news.length) {
+    const first = news[0];
+    card.innerHTML = `${svg(UI.star)}<span class="grow"><b>${news.length} saved place${news.length === 1 ? " has" : "s have"} news</b>`
+      + `<small>${esc(first.name)}: ${esc(first.said.join(" · "))}${news.length > 1 ? " …" : ""}</small></span>`;
+  }
+  if (S.view === "saved") renderSaved();
+}
+
+async function setNotify(on) {
+  if (on) {
+    if (!window.Notification) { toast("This browser can't show notifications."); $("savedNotify").checked = false; return; }
+    if (await Notification.requestPermission() !== "granted") {
+      toast("Notifications are turned off for bandobuddy in this browser's settings.");
+      $("savedNotify").checked = false;
+      return;
+    }
+  }
+  try {
+    const watch = await LocalDB.watchList();
+    await LocalDB.putWatch({ ...watch, notify: on });
+  } catch (_) { toast("Couldn't keep that: this browser's storage is blocked."); }
+  renderNotifyNote(on, on ? await checkInBackground(true) : await checkInBackground(false));
+}
+
+// Where the browser offers it (Chrome on Android, with the app installed): a check now and then, app closed.
+async function checkInBackground(on) {
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    if (!("periodicSync" in reg)) return false;
+    if (!on) { await reg.periodicSync.unregister("saved-places"); return false; }
+    const status = await navigator.permissions.query({ name: "periodic-background-sync" });
+    if (status.state !== "granted") return false;
+    await reg.periodicSync.register("saved-places", { minInterval: 12 * 3600e3 });
+    return true;
+  } catch (_) { return false; }
+}
+
+function renderNotifyNote(on, background) {
+  $("notifyNote").textContent = !on
+    ? "Changes to saved places (demolished, a planning decision, a visitor's report) show here and on the list when you open the app."
+    : background ? "Checked in the background now and then, and whenever you open the app."
+    : isApple() ? "On iPhone you'll see changes when you open the app: iPhones don't let web apps check in the background."
+    : "Checked whenever the app is open. Installed on Android, it's checked in the background too.";
+}
+
+async function initSavedNews() {
+  $("savedNewsCard").addEventListener("click", () => { show("saved", "full"); renderSaved(); });
+  $("savedSeen").addEventListener("click", () => markSeen(Object.keys(S.savedNews)));
+  $("savedNotify").addEventListener("change", () => setNotify($("savedNotify").checked));
+  let on = false;
+  try { on = (await LocalDB.watchList()).notify && window.Notification && Notification.permission === "granted"; } catch (_) { /* blocked */ }
+  $("savedNotify").checked = !!on;
+  renderNotifyNote(!!on, on && await checkInBackground(true));
+  checkSavedNews();
 }
 
 function savedGpx() {
@@ -2632,6 +3068,8 @@ try {
 } catch (_) { /* storage blocked */ }
 
 initControls();
+initDirections();
+initSavedNews();
 initOffline();
 initInstall();
 initFilters();

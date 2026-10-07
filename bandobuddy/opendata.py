@@ -579,6 +579,16 @@ def _dated(value) -> str | None:
     return m.group(1) if m else None
 
 
+def latest_date(dates) -> tuple[str | None, str | None]:
+    """The most recent of a record's dates that isn't still to come, as (what, when). A bare year counts as its end
+    once it's begun ("on the register in 2025" is later than "closed 2025-03-31")."""
+    today = date.today().isoformat()
+    past = [(what, when) for what, when in dates or () if when and (when if len(when) > 4 else f"{when}-01-01") <= today]
+    if not past:
+        return None, None
+    return max(past, key=lambda d: d[1] + ("-12-31" if len(d[1]) == 4 else ""))
+
+
 def _har(row: dict) -> dict | None:
     kinds = {"Listed Building": ("listed building", 25), "Scheduled Monument": ("scheduled monument", 15)}
     if row.get("HeritageCa") not in kinds:  # conservation areas and parks are whole districts, not places
@@ -592,7 +602,7 @@ def _har(row: dict) -> dict | None:
         "evidence": f"Historic England has it on the Heritage at Risk register ({kind})",
         "weight": weight,
         "url": row.get("URL"),
-        "reported": str(HAR_YEAR), "reported_as": "on the register in",
+        "dates": [("on the register in", str(HAR_YEAR))],
     }
 
 
@@ -611,7 +621,8 @@ def _brownfield(row: dict) -> dict | None:
         "evidence": "On the council's brownfield land register" + (f": {notes[:120]}" if notes else ""),
         "weight": 10,
         "url": row.get("site-plan-url") or None,
-        "reported": _dated(row.get("entry-date")), "reported_as": "register entry updated",
+        "dates": [("first on the register", _dated(row.get("start-date"))),
+                  ("register entry updated", _dated(row.get("entry-date")))],
     }
 
 
@@ -631,7 +642,7 @@ def _canmore(row: dict) -> dict | None:
         "aliases": [a for a in aliases if a and a != name],
         "weight": weight,
         "url": row.get("URL"),
-        "reported": _dated(row.get("LASTUPDATE")), "reported_as": "record updated",
+        "dates": [("recorded", _dated(row.get("ENTRYDATE"))), ("record updated", _dated(row.get("LASTUPDATE")))],
     }
 
 
@@ -649,7 +660,7 @@ def _coflein(row: dict) -> dict | None:
         "evidence": f"Coflein records {_a(what)} here",
         "weight": weight,
         "url": row.get("url"),
-        "reported": _dated(row.get("lastupdate")), "reported_as": "record updated",
+        "dates": [("record updated", _dated(row.get("lastupdate")))],
     }
 
 
@@ -696,7 +707,7 @@ def _school(row: dict) -> dict | None:
                     + (", merged into another school" if merged else ""),
         "weight": weight,
         "url": f"https://get-information-schools.service.gov.uk/Establishments/Establishment/Details/{row.get('URN')}",
-        "reported": closed.isoformat() if closed else None, "reported_as": "closed",
+        "dates": [("closed", closed.isoformat() if closed else None)],
     }
 
 
@@ -736,7 +747,7 @@ def _vdl(row: dict) -> dict | None:
         "evidence": f"Scotland's land survey lists {said}",
         "weight": weight,
         "url": None,
-        "reported": row.get("survey"), "reported_as": "land survey of",
+        "dates": [("land survey of", row.get("survey"))],
     }
 
 
@@ -895,8 +906,7 @@ def _planit(row: dict) -> dict | None:
         "ref": str(row.get("name") or row.get("uid") or "").strip(),
         "name": name,
         "kind": kind,
-        "reported": decided or (row.get("start_date") or "")[:10] or None,
-        "reported_as": "decided" if decided else "applied for",
+        "dates": [("applied for", (row.get("start_date") or "")[:10] or None), ("decided", decided or None)],
         "evidence": f"Planning application ({state}): \"{_excerpt(said, focus or _STATE.search(said))}\""
                     + ("; someone was to live in a caravan on the plot meanwhile, so it couldn't be lived in then"
                        if doing_up and not (stalled or unlivable) else ""),
@@ -968,7 +978,7 @@ def _committee(row: dict) -> dict | None:
         "evidence": f"{row['council']}'s planning report ({row['ref']}{when}): \"{said[:280]}\"",
         "weight": weight,
         "url": row["url"],
-        "reported": row.get("meeting") or None, "reported_as": "committee meeting",
+        "dates": [("committee meeting", row.get("meeting") or None)],
     }
 
 
@@ -1006,7 +1016,7 @@ def _cqc(row: dict) -> dict | None:
         return {"ref": row["ref"], "name": row["centre"], "kind": "day centre", "weight": weight,
                 "evidence": f"The Care Quality Commission records it as closed in {row['ended'][:4]}: the last care "
                             f"service at {row['centre']} ended then, and none is registered there now",
-                "url": f"https://www.cqc.org.uk/location/{row['ref']}", "reported": row["ended"], "reported_as": "closed"}
+                "url": f"https://www.cqc.org.uk/location/{row['ref']}", "dates": [("closed", row["ended"])]}
     if row["care_home"]:
         kind = "nursing home" if re.search(r"nursing", said, re.I) else "care home"
         weight, what = (20 if row["beds"] >= 40 else 16), f"{_a(kind)} with {row['beds']} beds"
@@ -1022,7 +1032,7 @@ def _cqc(row: dict) -> dict | None:
     return {"ref": row["ref"], "name": row["name"], "kind": kind, "weight": weight,
             "evidence": f"The Care Quality Commission records it as closed in {row['ended'][:4]} ({what}); "
                         "no care service is registered there now",
-            "url": f"https://www.cqc.org.uk/location/{row['ref']}", "reported": row["ended"], "reported_as": "closed"}
+            "url": f"https://www.cqc.org.uk/location/{row['ref']}", "dates": [("closed", row["ended"])]}
 
 
 def _nhs_estate(row: dict) -> dict | None:
@@ -1041,8 +1051,7 @@ def _nhs_estate(row: dict) -> dict | None:
         weight = 18
     year = re.match(r"(\d{4})/(\d{2})", row.get("year") or "")
     return {"ref": row["ref"], "name": name, "kind": kind, "weight": weight, "evidence": said, "url": None,
-            "reported": f"{year.group(1)[:2]}{year.group(2)}-03-31" if year else None,
-            "reported_as": "estates return for the year to"}
+            "dates": [("estates return for the year to", f"{year.group(1)[:2]}{year.group(2)}-03-31" if year else None)]}
 
 
 def _railway_estate(row: dict) -> dict | None:
@@ -1056,7 +1065,8 @@ def _railway_estate(row: dict) -> dict | None:
     if reused:
         said += "; the line is now a path, so it has a new use"
     weight = 10 if reused else 26 if tunnel else 14
-    return {"ref": row["ref"], "name": name, "kind": kind, "weight": weight, "evidence": said, "url": None}
+    return {"ref": row["ref"], "name": name, "kind": kind, "weight": weight, "evidence": said, "url": None,
+            "dates": [("list updated", row.get("updated"))]}
 
 
 _MOD_KINDS = [(re.compile(p, re.I), k) for p, k in (
@@ -1086,7 +1096,7 @@ def _mod(row: dict) -> dict | None:
     return {"ref": row["ref"], "name": name[:90], "kind": kind, "weight": weight,
             "evidence": said + (f" (stage: {status})" if status else ""),
             "url": "https://www.gov.uk/government/publications/disposal-database-house-of-commons-report",
-            "reported": row.get("reported"), "reported_as": "reported to Parliament"}
+            "dates": [("reported to Parliament", row.get("reported"))]}
 
 
 CANMORE_TERMS = ("OBSERVATION POST", "BUNKER", "PILLBOX", "BATTERY", "AIRFIELD", "AERODROME", "COLLIERY",
@@ -1117,7 +1127,7 @@ DATASETS = {
                         "© Historic Environment Scotland",
             home="https://canmore.org.uk/",
             fetch=ArcGISByIds("https://inspire.hes.scot/arcgis/rest/services/CANMORE/Canmore_Points/MapServer/0",
-                              CANMORE_WHERES, fields="CANMOREID,SITENUMBER,NMRSNAME,ALTNAME,SITETYPE,BROADCLASS,URL,LASTUPDATE"),
+                              CANMORE_WHERES, fields="CANMOREID,SITENUMBER,NMRSNAME,ALTNAME,SITETYPE,BROADCLASS,URL,ENTRYDATE,LASTUPDATE"),
             judge=_canmore,
         ),
         Dataset(
@@ -1237,6 +1247,8 @@ def collect(dataset: Dataset, session: requests.Session, progress: Progress, can
             continue
         item["dataset"] = dataset.key
         item["lat"], item["lng"] = row["lat"], row["lng"]
+        item["dates"] = [[what, when] for what, when in item.get("dates") or () if when]
+        item["reported_as"], item["reported"] = latest_date(item["dates"])
         if not item["name"]:
             item["name"] = f"Unnamed {item['kind']}"
         yield item

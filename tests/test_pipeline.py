@@ -79,6 +79,19 @@ class SitesBuiltTests(unittest.TestCase):
             self.assertEqual(store.sites_built(), "2030-01-01T00:00:00+00:00")
         self.assertEqual([r[4] for r in store.index_rows()], [30, 31])
 
+    def test_the_latest_date_is_on_the_map(self):
+        # Markers say it on hover, so it's in the brief rows the map and the phone's copy use, not just the detail.
+        from bandobuddy.store import INDEX_COLUMNS
+        store = Store(Path(tempfile.mkdtemp()) / DB_NAME)
+        store.replace_sites([{**self.site("a"), "reported": "2019-01-02", "reported_as": "decided",
+                              "reported_by": "planit"}, self.site("b")])
+        row = dict(zip(INDEX_COLUMNS, store.index_rows()[0]))
+        self.assertEqual((row["reported"], row["reported_as"], row["reported_by"]), ("2019-01-02", "decided", "planit"))
+        _, rows = store.list_sites(min_score=0)
+        listed = {s["key"]: s for s in rows}
+        self.assertEqual(listed["a"]["reported"], "2019-01-02")
+        self.assertIsNone(listed["b"]["reported"])
+
     def test_written_beside_and_swapped_in(self):
         # In batches, so no one write holds the database for long; the map in use is whole until the swap.
         store = Store(Path(tempfile.mkdtemp()) / DB_NAME)
