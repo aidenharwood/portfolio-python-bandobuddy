@@ -60,7 +60,8 @@ CATEGORIES = [
                                         r"|congregational|minster|mission hall"),
     ("institutional", "Hospitals & schools", r"hospital|asylum|sanator|infirmary|\bschool|college|university|prison"
                                              r"|gaol|\bjail|workhouse|orphanage|courthouse|police|fire station|town hall"
-                                             r"|library|institute|clinic|nursing|care home|almshouse|\bnhs\b|hospice"),
+                                             r"|library|institute|clinic|nursing|care home|almshouse|\bnhs\b|hospice"
+                                             r"|day centre|resource centre"),
     ("leisure", "Shops & leisure", r"\bshop|\bpub\b|\binn\b|hotel|motel|cinema|movie|theat|lido|swimming|\bpool\b"
                                    r"|bowling|amusement|casino|night ?club|restaurant|\bcafe|\bbank\b|supermarket"
                                    r"|\bmall\b|retail|commercial|office|fuel|petrol|filling station|toilets|\bclub\b"
@@ -78,9 +79,11 @@ STRENGTHS = [(35, "strong"), (20, "good"), (0, "weak")]
 WEAK_BELOW = 20
 
 # "Best spots": somewhere still standing to go and see, with good evidence it's empty or derelict. Not bare land,
-# a capped shaft or a quarry hole, a shop unit, a place open to visitors, or a register entry that only says what
-# something is. Unnamed places only where that's normal (bunkers, tunnels, military sites, caves). The phone's copy
-# of the map is sent these too, so it answers exactly as the server does.
+# a capped shaft or a quarry hole, a shop unit, a car park or a pitch, a place open to visitors, or a register entry
+# that only says what something is. An unnamed place counts if what it is is known (an abandoned house, a disused
+# school, an adit), not when all that's mapped is "a structure" or "a ruin", unless it's a bunker, tunnel or military
+# site, where no name is normal. The phone's copy of the map is sent these too, so it answers as the server does,
+# and they're part of what the map's built from: change them and phones fetch it again.
 BEST = {
     "min_score": WEAK_BELOW,
     "conditions": ["Abandoned", "Disused", "Ruin", "At risk", "Empty", "Unfinished", "Old military", "Cave",
@@ -93,6 +96,14 @@ BEST = {
                    "travel agency", "mobile phone", "shoes", "furniture", "jewelry", "gift", "books", "laundry",
                    "dry cleaning", "car repair", "tyres", "car parts", "doityourself", "hardware", "variety store",
                    "department store", "electronics", "pet", "tattoo", "nails", "massage", "greengrocer", "deli",
-                   "alcohol", "off licence", "ice cream", "cafe;restaurant", "vacant"],
+                   "alcohol", "off licence", "ice cream", "cafe;restaurant", "vacant",
+                   # not places at all: somewhere to park, play or read a sign, or a thing rather than a building
+                   "parking", "parking space", "garages", "pitch", "playground", "farmland", "grass", "meadow",
+                   "allotments", "landfill", "information", "board", "guidepost", "map", "viewpoint", "picnic table",
+                   "level crossing", "embankment", "track", "hunting stand", "greenhouse", "shed", "foundation",
+                   "construction", "car", "mast", "pipeline", "bicycle parking"],
     "unnamed_ok": ["bunkers", "tunnels", "military"],
+    # Kinds that don't say what a place is: unnamed, there's nothing to go on.
+    "vague_kinds": ["structure", "building", "abandoned", "ruins", "yes", "roof", "wall", "citywalls", "disused",
+                    "historic"],
 }

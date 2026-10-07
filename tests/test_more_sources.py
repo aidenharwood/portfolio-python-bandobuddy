@@ -204,25 +204,28 @@ class PlanItTests(unittest.TestCase):
                  Resp(429, headers={"Retry-After": "90"}),
                  Resp(200, {"records": [self.record(3)], "total": 3}),
                  Resp(200, {"records": [self.record(4, app_state="Permitted")], "total": 1}),
-                 Resp(200, {"records": [self.record(5, "Completion of partially built dwelling")], "total": 1})]
+                 Resp(200, {"records": [self.record(5, "Completion of partially built dwelling")], "total": 1}),
+                 Resp(200, {"records": [self.record(6, "Siting of a caravan whilst the house is renovated")], "total": 1})]
         service = Service(lambda url, params: pages.pop(0))
         waits = []
         fetch = opendata.PlanIt(batch=2)
         with mock.patch.object(opendata.PlanIt, "_wait", lambda self, cancel, s: waits.append(s)):
             rows = list(fetch(service, nothing))
-        self.assertEqual([r["name"] for r in rows], ["Area/1", "Area/3", "Area/4", "Area/5"])   # one had no position
-        self.assertEqual(waits, [61, 90, 61, 61])                 # a minute between requests; longer when asked
+        self.assertEqual([r["name"] for r in rows], ["Area/1", "Area/3", "Area/4", "Area/5", "Area/6"])   # one had no position
+        self.assertEqual(waits, [61, 90, 61, 61, 61])             # a minute between requests; longer when asked
         asked = [c[1] for c in service.calls]
         # New applications in the last fortnight, then decisions in it, never "everything that changed";
-        # then every unfinished house there's ever been, a page of them.
+        # then every unfinished or unlivable house there's ever been, a page of them, and every one being done up.
         self.assertEqual([(a.get("recent"), a.get("decided"), a["page"]) for a in asked],
-                         [(14, None, 1), (14, None, 2), (14, None, 2), (None, 14, 1), (None, None, 1)])
+                         [(14, None, 1), (14, None, 2), (14, None, 2), (None, 14, 1), (None, None, 1), (None, None, 1)])
         self.assertNotIn("different", asked[0])
         self.assertIn("demolition derelict or demolish derelict", asked[0]["search"])
         self.assertIn('demolish "fire damaged"', asked[0]["search"])
         self.assertIn(' or derelict or dilapidated or ruinous or "fire damaged"', asked[0]["search"])   # demolition or not
         self.assertIn('"partially built dwelling" or ', asked[4]["search"])
+        self.assertIn(' or uninhabitable or "unfit for habitation"', asked[4]["search"])
         self.assertNotIn("demolition", asked[4]["search"])
+        self.assertIn('caravan renovated or caravan renovation', asked[5]["search"])
 
     def test_what_counts_as_a_lead(self):
         judge = opendata._planit
@@ -275,6 +278,39 @@ class PlanItTests(unittest.TestCase):
                                          "OPERATIONAL WORKS AND RETENTION OF PARTLY BUILT DWELLING AT PLOT 2"))
         self.assertIn("PARTLY BUILT DWELLING", long_one["evidence"])       # quoted around what matters
         self.assertTrue(long_one["evidence"].split('"')[1].startswith("…"))
+        # A house that can't be lived in, said of the house.
+        unfit = judge(self.record(14, "Renovation of semi derelict and uninhabitable cottage to provide a single dwelling"))
+        self.assertEqual((unfit["kind"], unfit["weight"]), ("house", 18))
+        gone = judge(self.record(15, "Demolish existing uninhabitable house and outbuildings and make ground good",
+                                 app_state="Permitted", decided_date="2023-08-01"))
+        self.assertEqual((gone["weight"], _condition_from(gone["evidence"])), (5, "Demolition approved"))
+        self.assertEqual(_condition_from(judge(self.record(16, "Demolition of existing house (condemned as unfit for "
+                                                               "habitation due to damp)"))["evidence"]), "Empty")
+        for part in ("Conversion of an existing uninhabitable loft space into a habitable bedroom",
+                     "Demolish uninhabitable annex/garage, single storey side and rear extension",
+                     "Renovation works to Annex which is currently uninhabitable",
+                     "Fell T1 Lime: secretion making the whole area uninhabitable"):
+            self.assertIsNone(judge(self.record(17, part)), part)
+        # Living in a caravan on the plot while the house is done up (3 Segensworth Road, Titchfield, in 2018:
+        # still empty years later). Most get finished, so it fades like any approval.
+        caravan = judge(self.record(18, "Siting of residential caravan to enable the refurbishment of the dwellinghouse"))
+        self.assertEqual((caravan["kind"], caravan["weight"]), ("house", 12))
+        self.assertIn("so it couldn't be lived in then", caravan["evidence"])
+        self.assertEqual(_condition_from(caravan["evidence"]), "Empty")
+        segensworth = judge(self.record(19, "Change Of Use Of Land For A Period Of Two Years For The Siting Of A Static "
+                                            "Caravan To Be Used As Part Of The Residential Use Of 3 Segensworth Road "
+                                            "Whilst The Property Is Being Renovated", app_state="Permitted",
+                                        decided_date="2019-01-20"))
+        self.assertEqual(segensworth["weight"], 5)
+        self.assertIn("so the work may well be done", segensworth["evidence"])
+        self.assertTrue(judge(self.record(20, "Lawful development certificate for proposed stationing of caravan "
+                                              "whilst the dwelling is being renovated")))       # says so all the same
+        for not_a_house in ("Reconfiguration of pitches; refurbishment of the holiday park's static caravans",
+                            "Change of use of land for one pitch including one static caravan, refurbishment of "
+                            "hardstanding to form a residential Gypsy/Traveller site",
+                            "Demolition of existing dwelling and erection of replacement dwelling, retention of static "
+                            "mobile home during reconstruction"):
+            self.assertIsNone(judge(self.record(21, not_a_house)), not_a_house)
         for nothing_decided in ("Pre-application advice for demolition of the former Wesleyan school",
                                 "Certificate of lawfulness for proposed demolition of redundant farm buildings"):
             self.assertIsNone(judge(self.record(7, nothing_decided)), nothing_decided)
