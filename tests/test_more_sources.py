@@ -1,6 +1,7 @@
 """Closed schools, Scotland's derelict land, demolition applications (PlanIt), OpenStreetMap's own
 demolitions, and the grid references the registers give their positions in."""
 import io
+import json
 import os
 import tempfile
 import unittest
@@ -208,7 +209,7 @@ class PlanItTests(unittest.TestCase):
                  Resp(200, {"records": [self.record(6, "Siting of a caravan whilst the house is renovated")], "total": 1})]
         service = Service(lambda url, params: pages.pop(0))
         waits = []
-        fetch = opendata.PlanIt(batch=2)
+        fetch = opendata.PlanIt(batch=2, conversions="")
         with mock.patch.object(opendata.PlanIt, "_wait", lambda self, cancel, s: waits.append(s)):
             rows = list(fetch(service, nothing))
         self.assertEqual([r["name"] for r in rows], ["Area/1", "Area/3", "Area/4", "Area/5", "Area/6"])   # one had no position
@@ -337,7 +338,7 @@ class PlanItTests(unittest.TestCase):
         waits = []
         quick = mock.patch.object(opendata.PlanIt, "_wait", lambda self, cancel, s: waits.append(s))
         with quick:
-            rows = list(opendata.PlanIt()(service, nothing, data_dir=tmp))
+            rows = list(opendata.PlanIt(conversions="")(service, nothing, data_dir=tmp))
         self.assertEqual(len(service.calls), 5)
         self.assertEqual(waits, [61] * 4)                         # a minute between requests, as ever
         around = service.calls[4][1]
@@ -357,7 +358,7 @@ class PlanItTests(unittest.TestCase):
         # Next week: what was found is remembered, and nobody's asked again for six months.
         answers[:] = [Resp(200, {"records": [caravan], "total": 1})] + [Resp(200, {"records": [], "total": 0})] * 3
         with quick:
-            rows = list(opendata.PlanIt()(service, nothing, data_dir=tmp))
+            rows = list(opendata.PlanIt(conversions="")(service, nothing, data_dir=tmp))
         self.assertEqual(len(service.calls), 9)
         self.assertEqual(opendata._planit(rows[0])["weight"], 20)
         # Knocking it down approved long enough ago to have lapsed: it may be gone.
@@ -393,6 +394,79 @@ class PlanItTests(unittest.TestCase):
                    "Single storey rear extension", "Details pursuant to condition 3 of P/23/0734/FP: demolition of "
                    "existing house", "Discharge of condition 2: replacement dwelling"):
             self.assertFalse(gave_up(no), no)
+
+    def test_a_house_converted_into_flats_again_and_again(self):
+        # Golden Hill, Belbins: built in 2004 and never lived in; approved for conversion into flats in 2019 and
+        # 2022, and applied for again in 2025 (UK PlanIt's own records).
+        gh = "Golden Hill Belbins Romsey Hampshire SO51 0PE"
+        tv = lambda ref, said, **kw: self.record(ref, said, name=f"TestValley/{ref}", **kw)   # noqa: E731
+        apps = [tv("18/02547/FULLS", "Conversion of existing house and garage into ten dwellings", address=gh,
+                   app_state="Conditions", start_date="2018-09-27", decided_date="2019-01-08"),
+                tv("19/00531/FULLS", "Conversion of existing house and garage into 11 dwellings",
+                   address="Golden Hill Belbins Romsey Romsey Extra", app_state="Withdrawn", start_date="2019-03-01"),
+                tv("22/00362/FULLS", "Conversion of existing house and garage into 10 flats", address=gh,
+                   app_state="Conditions", start_date="2022-02-10", decided_date="2022-06-01"),
+                tv("22/01999/DIS", "Discharge of condition 3 of 22/00362/FULLS: conversion of existing house into 10 "
+                                   "flats", address=gh, start_date="2023-01-05"),
+                tv("25/00599/FULLS", "Conversion of house into 8 flats, erection of 2 houses, and installation of "
+                                     "package treatment plant", address=gh, start_date="2025-03-13"),
+                # Split in two, again and again: ordinary.
+                self.record("Area/2", "Conversion of existing house into two flats", address="2 Mill Lane, Town",
+                            app_state="Permitted", start_date="2015-01-01", decided_date="2015-03-01"),
+                self.record("Area/3", "Conversion of existing house into two flats", address="2 Mill Lane, Town",
+                            start_date="2020-01-01"),
+                # Applied for again a few months on: a revised scheme, not a conversion that never happened.
+                self.record("Area/4", "Conversion of house into 6 flats", address="Oak House, Lea Road, Town",
+                            app_state="Permitted", start_date="2023-01-01", decided_date="2023-03-01"),
+                self.record("Area/5", "Conversion of house into 7 flats", address="Oak House, Lea Road, Town",
+                            start_date="2023-09-01")]
+        for app in apps:
+            app["name"] = "TestValley/" + app["name"].split("/", 1)[-1] if "FULLS" in app["name"] or "DIS" in app["name"] \
+                else app["name"]
+        leads = list(opendata._converted_again(apps))
+        self.assertEqual(len(leads), 1)
+        house = opendata._planit(leads[0])
+        self.assertEqual((house["kind"], house["weight"], house["name"]),
+                         ("house", 16, "Golden Hill Belbins Romsey Hampshire"))
+        self.assertIn("Planning applications to convert it into flats: approved in 2019 and 2022, and applied for "
+                      "again in 2025, so neither was carried out", house["evidence"])
+        self.assertEqual(house["ref"], "conversions/TestValley|golden hill belbins")
+        self.assertEqual(house["dates"], [("applied for", "2025-03-13"), ("decided", None)])
+
+    def test_conversions_asked_for_once_in_full_then_only_whats_new(self):
+        conv = lambda n, **kw: self.record(n, "Conversion of existing house into ten flats",   # noqa: E731
+                                           address="The Grange, Lea Road, Town", **kw)
+        answers = [Resp(200, {"records": [], "total": 0}),                       # the fortnight's demolitions
+                   Resp(200, {"records": [conv(1)], "total": 5}),                 # too many for one search: split
+                   Resp(200, {"records": [conv(1, app_state="Permitted", start_date="2015-01-01",
+                                               decided_date="2015-04-01"), conv(2)], "total": 3}),
+                   Resp(200, {"records": [conv(3)], "total": 3}),
+                   Resp(200, {"records": [conv(4, start_date="2020-06-01"), conv(5)], "total": 2})]
+        service = Service(lambda url, params: answers.pop(0))
+        tmp = Path(tempfile.mkdtemp())
+        waits = []
+        fetch = opendata.PlanIt(batch=2, slice_max=3, windows=("recent",), stalled="", caravans="")
+        with mock.patch.object(opendata.PlanIt, "_wait", lambda self, cancel, s: waits.append(s)):
+            rows = list(fetch(service, nothing, data_dir=tmp))
+            self.assertEqual(waits, [61] * 4)                       # a minute between requests, as ever
+            whole, first, first_next, second = [(c[1]["start_date"], c[1]["end_date"], c[1]["page"])
+                                                for c in service.calls[1:]]
+            today = date.today().isoformat()
+            self.assertEqual(whole, ("2000-01-01", today, 1))       # too many: the dates split in two
+            self.assertEqual((first[0], first_next[:2], first_next[2]), ("2000-01-01", first[:2], 2))
+            self.assertLess(first[1], second[0])
+            self.assertEqual((second[1], second[2]), (today, 1))
+            self.assertEqual([r["name"] for r in rows if r.get("conversions")], ["Area/5"])   # approved 2015, again 2020
+            memory = json.loads((tmp / "planit_conversions.json").read_text(encoding="utf-8"))
+            self.assertTrue(memory["backfilled"])
+            self.assertEqual(sorted(memory["apps"]), ["Area/1", "Area/2", "Area/3", "Area/4", "Area/5"])
+            # Next week: only what's been applied for lately, and the house again, from what's kept.
+            answers[:] = [Resp(200, {"records": [], "total": 0}), Resp(200, {"records": [], "total": 0})]
+            service.calls.clear()
+            rows = list(fetch(service, nothing, data_dir=tmp))
+        self.assertEqual([c[1].get("recent") for c in service.calls], [14, 14])
+        self.assertNotIn("start_date", service.calls[1][1])
+        self.assertEqual([r["name"] for r in rows if r.get("conversions")], ["Area/5"])
 
     def test_off_unless_switched_on_and_never_forgets_older_ones(self):
         self.assertFalse(opendata.DATASETS["planit"].enabled())

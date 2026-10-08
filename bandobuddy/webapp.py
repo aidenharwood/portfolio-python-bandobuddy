@@ -36,7 +36,6 @@ from . import __version__, access, export, geocode, imagery, lidar, opendata, re
 from .config import (BEST, CATEGORIES, DATA_DIR, DATE_FILTERS, DB_NAME, OTHER_CATEGORY, REPORT_TAGS, REPORTS_PER_HOUR,
                      UK_BBOX, WEAK_BELOW)
 from .geo import grid_ref, haversine_m, nation
-from .sites import build_sites
 from .store import INDEX_COLUMNS, Store, now_iso
 from .updater import ALL_SOURCES, SOURCE_ABOUT, SOURCE_LABELS, SOURCES, Updater
 
@@ -709,9 +708,9 @@ def serve(data_dir: Path, port: int = DEFAULT_PORT, open_browser: bool = True, a
         threading.Thread(target=server.shutdown, daemon=True).start()
 
     signal.signal(signal.SIGTERM, request_stop)
-    # Re-score what's already stored (picks up any rule changes), then keep things up to date.
-    threading.Thread(target=lambda: (build_sites(store), setattr(updater, "sites_version", updater.sites_version + 1)),
-                     daemon=True).start()
+    # Re-score what's already stored (picks up any rule changes), then keep things up to date. Through the updater,
+    # so it's never at the same time as a rebuild a source asks for.
+    threading.Thread(target=updater.rebuild, kwargs={"force": True}, daemon=True).start()
     if auto_update:
         threading.Thread(target=run_scheduler, args=(updater, stop), daemon=True).start()
     if open_browser:
