@@ -475,7 +475,7 @@ class Store:
         if added_since:
             where.append("added > ?")
             args.append(added_since)
-        if date_kind in DATE_FILTER_KEYS and (date_from or date_to):   # "closed more than five years ago"
+        if date_kind in DATE_FILTER_KEYS and (date_from or date_to):   # "last update more than five years ago"
             field = f"json_extract(dates, '$.{date_kind}')"
             where.append(f"{field} IS NOT NULL")
             if date_from:

@@ -299,7 +299,7 @@ self.LocalDB = (() => {
       if (cats.length && !cats.includes(row[c.category])) return false;
       if (srcs.length && !srcs.some(src => (row[c.sources] || "").includes(src))) return false;
       if (since && !(row[c.added] && row[c.added] > since)) return false;
-      if (dateKind && (dateFrom || dateTo)) {   // store.py's dates: "closed more than five years ago"
+      if (dateKind && (dateFrom || dateTo)) {   // store.py's dates: "last update more than five years ago"
         const day = (row[c.dates] || {})[dateKind];
         if (!day || (dateFrom && day < dateFrom) || (dateTo && day >= dateTo)) return false;
       }

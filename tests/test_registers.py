@@ -388,11 +388,11 @@ class ReportedTests(unittest.TestCase):
                    {"dates": [["closed", "2017"], ["last edited", "2024-02-01"]]},          # Wikidata: a bare year
                    {"dates": [["applied for", "2018-11-27"], ["decided", "2019-01-02"]]},
                    {"dates": [["reported to Parliament", "2099-01-01"]]}]                   # still to come: not yet
-        dates = site_dates(members, {"latest": "2026-10-07"})
-        self.assertEqual(dates, {"edited": "2024-02-01", "closed": "2017-12-31", "entered": "2018-11-27",
-                                 "decided": "2019-01-02", "visited": "2026-10-07", "any": "2026-10-07"})
+        self.assertEqual(site_dates(members, {"latest": "2026-10-07"}), {"any": "2024-02-01", "all": "2026-10-07"})
+        self.assertEqual(site_dates(members), {"any": "2024-02-01", "all": "2024-02-01"})
+        self.assertEqual(site_dates([{"dates": [["closed", "2017"]]}])["any"], "2017-12-31")       # a bare year: its end
         this_year = str(date.today().year)
-        self.assertEqual(site_dates([{"dates": [["on the register in", this_year]]}])["edited"], date.today().isoformat())
+        self.assertEqual(site_dates([{"dates": [["on the register in", this_year]]}])["any"], date.today().isoformat())
 
     def test_filtering_by_date(self):
         store = Store(Path(tempfile.mkdtemp()) / DB_NAME)
@@ -401,19 +401,19 @@ class ReportedTests(unittest.TestCase):
                                    "kind": "hospital", "sources": "osm", "reasons": ["x"],
                                    "detail": {"osm": [], "wikidata": [], "open": []}, "first_seen": "2026-01-01",
                                    "added": None, "dates": dates}
-        store.replace_sites([site("long-closed", {"closed": "2012-05-01", "any": "2025-01-01"}),
-                             site("just-closed", {"closed": "2025-06-01", "any": "2025-06-01"}),
-                             site("never-closed", {"edited": "2026-09-01", "any": "2026-09-01"})])
+        store.replace_sites([site("quiet", {"any": "2012-05-01", "all": "2012-05-01"}),
+                             site("visited", {"any": "2013-06-01", "all": "2026-09-01"}),
+                             site("busy", {"any": "2026-09-01", "all": "2026-09-01"})])
         keys = lambda **f: sorted(s["key"] for s in store.full_sites(min_score=0, **f))   # noqa: E731
-        self.assertEqual(keys(date_kind="closed", date_to="2021-10-07"), ["long-closed"])     # more than 5 years ago
-        self.assertEqual(keys(date_kind="closed", date_from="2021-10-07"), ["just-closed"])   # within the last 5
-        self.assertEqual(keys(date_kind="any", date_from="2026-01-01"), ["never-closed"])
-        self.assertEqual(keys(date_kind="nonsense", date_from="2026-01-01"), ["just-closed", "long-closed", "never-closed"])
+        self.assertEqual(keys(date_kind="any", date_to="2021-10-07"), ["quiet", "visited"])   # more than 5 years ago
+        self.assertEqual(keys(date_kind="all", date_to="2021-10-07"), ["quiet"])              # a visitor's been since
+        self.assertEqual(keys(date_kind="all", date_from="2026-01-01"), ["busy", "visited"])  # within this year
+        self.assertEqual(keys(date_kind="nonsense", date_from="2026-01-01"), ["busy", "quiet", "visited"])
         from bandobuddy.store import INDEX_COLUMNS        # the phone's copy carries them, to filter the same way
         self.assertIn("dates", INDEX_COLUMNS)
         from bandobuddy import webapp
-        self.assertEqual(webapp.parse_filters({"date": ["closed"], "date_to": ["2021-10-07"]})["date_to"], "2021-10-07")
-        for bad in ({"date": ["haunted"], "date_to": ["2021-10-07"]}, {"date": ["closed"], "date_to": ["last year"]}):
+        self.assertEqual(webapp.parse_filters({"date": ["any"], "date_to": ["2021-10-07"]})["date_to"], "2021-10-07")
+        for bad in ({"date": ["closed"], "date_to": ["2021-10-07"]}, {"date": ["any"], "date_to": ["last year"]}):
             with self.assertRaises(webapp.ApiError):
                 webapp.parse_filters(bad)
 

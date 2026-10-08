@@ -13,7 +13,7 @@ from difflib import SequenceMatcher
 
 from .geo import haversine_m
 from .osm import alt_names, best_name, classify, describe_kind, entrance_kind, gone_as, in_use_as
-from .config import DATE_KINDS, WEAK_BELOW
+from .config import WEAK_BELOW
 from .scoring import category_for, condition_for, score_site, strength_for
 from .store import Store, now_iso
 from . import reports as visitor_reports
@@ -321,8 +321,8 @@ def shown_name(name: str) -> str:
 
 
 def site_dates(members: list[dict], report: dict | None = None) -> dict:
-    """A place's latest date of each kind its records give ("closed", "edited", ...), and of all of them ("any"),
-    as days, for filtering. A bare year counts as its end, or today if that's still to come."""
+    """A place's last update from any source ("any"), and that or a visitor's report ("all"), as days, for
+    filtering. A bare year counts as its end, or today if that's still to come; dates still to come don't count."""
     today = date.today().isoformat()
     out: dict[str, str] = {}
 
@@ -333,13 +333,11 @@ def site_dates(members: list[dict], report: dict | None = None) -> dict:
         if day <= today and day > out.get(kind, ""):
             out[kind] = day
     for m in members:
-        for what, when in m.get("dates") or ():
-            if what in DATE_KINDS:
-                note(DATE_KINDS[what], when)
-                note("any", when)
+        for _, when in m.get("dates") or ():
+            note("any", when)
+            note("all", when)
     if report and report.get("latest"):
-        note("visited", report["latest"])
-        note("any", report["latest"])
+        note("all", report["latest"])
     return out
 
 

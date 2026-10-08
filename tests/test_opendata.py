@@ -85,14 +85,71 @@ class FetcherTests(unittest.TestCase):
         rows = list(wfs(service, nothing))
         self.assertEqual([r["nprn"] for r in rows], ["1", "3"])  # one had no position
         self.assertEqual([c[1]["startIndex"] for c in service.calls], [0, 2])
+        only = opendata.WFS("https://wales/wfs", "layer", fields="nprn,lat,long")
+        service = FakeService([{"features": []}])
+        list(only(service, nothing))
+        self.assertEqual(service.calls[0][1]["propertyName"], "nprn,lat,long")   # just the columns read
 
-        planning = opendata.PlanningData("brownfield-land", batch=2)
-        service = FakeService([
-            {"entities": [{"entity": 1, "point": "POINT (-2.5 51.3)"}, {"entity": 2, "point": ""}]},
-            {"entities": [{"entity": 3, "point": "POINT (-2.6 51.4)"}]},
-        ])
-        rows = list(planning(service, nothing))
-        self.assertEqual([(r["entity"], r["lat"], r["lng"]) for r in rows], [(1, 51.3, -2.5), (3, 51.4, -2.6)])
+    def test_old_os_map_labels(self):
+        # GB1900's labels, asked for by what they say, with the position under its own names.
+        fetch = opendata.DATASETS["old_maps"].fetch
+        service = FakeService([{"numberMatched": 1, "features": [{"properties": {
+            "pin_id": "58bef0a12c66dc982c0151de", "final_text": "Butserhill Lime Works", "latitude": 50.97931,
+            "longitude": -0.96454}}]}])
+        rows = list(fetch(service, nothing))
+        asked = service.calls[0][1]
+        self.assertEqual((asked["sortBy"], asked["typeName"]), ("pin_id", "nls:gb1900_21_December"))
+        self.assertIn("final_text_lower LIKE '%kiln%'", asked["CQL_FILTER"])
+        self.assertEqual((rows[0]["lat"], rows[0]["lng"]), (50.97931, -0.96454))
+        from bandobuddy.scoring import _condition_from
+        judge = lambda text: opendata._old_map({"pin_id": "1", "final_text": text, "lat": 51.0, "lng": -1.0})  # noqa
+        butser = judge("Butserhill Lime Works")         # at work then, but lime works leave lasting remains
+        self.assertEqual((butser["name"], butser["kind"], butser["weight"]), ("Butserhill Lime Works", "lime works", 6))
+        self.assertIn('six-inch map of 1888-1913 marks "Butserhill Lime Works" here', butser["evidence"])
+        self.assertEqual(butser["dates"], [("on the map by", "1913")])
+        kiln = judge("Old Limekiln")
+        self.assertEqual((kiln["kind"], kiln["weight"], _condition_from(kiln["evidence"])), ("lime kiln", 10, "Disused"))
+        chapel = judge("Chapel (In Ruins)")
+        self.assertEqual((chapel["name"], chapel["kind"], _condition_from(chapel["evidence"])), ("Chapel", "chapel", "Ruin"))
+        self.assertEqual((judge("Corn Mill (Disused)")["kind"], judge("Engine House (Pumping)")["kind"],
+                          judge("Level (Disused)")["kind"], judge("brick works (disused)")["name"]),
+                         ("mill", "engine house", "adit", "Brick Works"))
+        for not_one in ("Gas Works", "Brick Works", "Corn Mill",            # at work in 1900: long gone, or still going
+                        "Kiln Lane", "Limekiln Wood", "Old Mill Pond", "Old School House",   # named after one
+                        "Quarry (Disused)", "Burial Ground (Disused)", "Allt a' Chaoruinn", "Earthworks"):
+            self.assertIsNone(judge(not_one), not_one)
+        # The transcription's finished: asked for again each season, not each week.
+        from datetime import datetime, timedelta, timezone
+        tmp = Path(tempfile.mkdtemp())
+        up = Updater(Store(tmp / "t.db"), tmp, session_factory=lambda: None, log=lambda m: None, sources=("old_maps",))
+        crawl = up.store.start_crawl("old_maps")
+        up.store.set_crawl_status(crawl["id"], "done")
+        for days, due in ((30, []), (91, ["old_maps"])):
+            when = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(timespec="seconds")
+            with up.store.connect() as db:
+                db.execute("UPDATE crawls SET finished_at = ?", (when,))
+            self.assertEqual(up.due_sources(), due)
+
+    def test_planning_data_in_one_file(self):
+        # The whole register as one CSV, read as it arrives; entries taken off the register are left out.
+        csv_text = ("\ufeffentity,point,end-date,site-address\r\n"
+                    "1,POINT(-2.5 51.3),,1 High Street\r\n"
+                    "2,,,No position\r\n"
+                    "3,POINT(-2.6 51.4),,Mill Lane\r\n"
+                    "4,POINT(-2.7 51.5),2024-01-01,Taken off\r\n")
+
+        class Stream:
+            def get(self, url, headers=None, timeout=None, stream=False):
+                self.url = url
+                resp = mock.Mock(status_code=200)
+                resp.raise_for_status = lambda: None
+                body = csv_text.encode("utf-8")
+                resp.iter_content = lambda size: (body[i:i + 7] for i in range(0, len(body), 7))
+                return resp
+        session = Stream()
+        rows = list(opendata.PlanningData("brownfield-land")(session, nothing))
+        self.assertEqual([(r["entity"], r["lat"], r["lng"]) for r in rows], [("1", 51.3, -2.5), ("3", 51.4, -2.6)])
+        self.assertTrue(session.url.endswith("/dataset/brownfield-land.csv"))
 
 
 class JudgingTests(unittest.TestCase):

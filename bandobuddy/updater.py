@@ -40,7 +40,10 @@ MAX_TILE_DEPTH = 5            # 0.5 deg -> ~1.7 km boxes at most
 MAX_BUSY_RETRIES = 8
 POLITE_DELAY_S = 1.0          # between Wikidata queries
 INTRO_MAX_AGE_DAYS = 90
-REBUILD_EVERY_S = 20
+REBUILD_EVERY_S = 120          # while sources run, at least this long between rebuilds of the map...
+REBUILD_SHARE = 4              # ...and at least this many times as long as the last took: a rebuild of the UK is the
+                               # best part of a minute's work, and every source in this process waits while it runs
+SETTLE_S = 15                  # a source finishing waits this long for others to, and they share one rebuild
 RETRY_FAILED_AFTER_S = 3600
 
 
@@ -65,6 +68,9 @@ class Updater:
         self._lock = threading.Lock()
         self._rebuild_lock = threading.Lock()
         self._last_rebuild = 0.0
+        self._rebuild_took = 0.0
+        self._rebuild_wanted = False
+        self._rebuilder: threading.Thread | None = None
         self.sites_version = 0
         self.lines: list[str] = []
         self.sources = sources
@@ -73,6 +79,7 @@ class Updater:
         self._threads: dict[str, threading.Thread] = {}
         self._cancel = {src: threading.Event() for src in sources}
         self.polite_delay = POLITE_DELAY_S
+        self.settle_s = SETTLE_S
         self.intro_delay = 0.2
 
     # -- logging / progress -----------------------------------------------------------------------
@@ -99,7 +106,7 @@ class Updater:
             if by_user:
                 st["paused_by_user"] = False
             self._cancel[source].clear()
-        t = threading.Thread(target=self._run_safely, args=(source,), daemon=True, name=f"update-{source}")
+        t = threading.Thread(target=self._run_safely, args=(source, True), daemon=True, name=f"update-{source}")
         self._threads[source] = t
         t.start()
         return True
@@ -112,6 +119,9 @@ class Updater:
     def join(self, timeout: float | None = None) -> None:
         for t in list(self._threads.values()):
             t.join(timeout)
+        rebuilder = self._rebuilder
+        if rebuilder:
+            rebuilder.join(timeout)
 
     def run(self, source: str) -> None:
         """Update one source in the foreground (used by `bandobuddy update`)."""
@@ -121,7 +131,7 @@ class Updater:
         if self.state[source]["error"]:
             raise RuntimeError(self.state[source]["error"])
 
-    def _run_safely(self, source: str) -> None:
+    def _run_safely(self, source: str, settle: bool = False) -> None:
         try:
             if source == "osm":
                 self._run_osm()
@@ -138,7 +148,10 @@ class Updater:
         finally:
             with self._lock:
                 self.state[source].update(running=False, stage="")
-            self.rebuild(force=True)
+            if settle:
+                self.rebuild_soon()
+            else:   # in the foreground (`bandobuddy update`): the map's up to date when it returns
+                self.rebuild(force=True)
 
     # -- scheduling -------------------------------------------------------------------------------
     def due_sources(self) -> list[str]:
@@ -158,7 +171,8 @@ class Updater:
             unfinished = self.store.unfinished_crawl(src)
             dataset = opendata.DATASETS.get(src)
             # One that only asks for what changed lately has to come back before that window closes.
-            every = INCREMENTAL_EVERY_DAYS if dataset and dataset.incremental else days
+            every = INCREMENTAL_EVERY_DAYS if dataset and dataset.incremental \
+                else max(days, dataset.every_days) if dataset and dataset.every_days else days
             if unfinished or not last or datetime.fromisoformat(last["finished_at"]) < now - timedelta(days=every):
                 due.append(src)
         return due
@@ -194,13 +208,36 @@ class Updater:
 
     # -- rebuilding sites ---------------------------------------------------------------------------
     def rebuild(self, force: bool = False) -> None:
-        if not force and time.time() - self._last_rebuild < REBUILD_EVERY_S:
+        if not force and time.time() - self._last_rebuild < max(REBUILD_EVERY_S, REBUILD_SHARE * self._rebuild_took):
             return
         with self._rebuild_lock:
+            started = time.time()
             n = build_sites(self.store)
+            self._rebuild_took = time.time() - started
             self._last_rebuild = time.time()
             self.sites_version += 1
         self.log(f"map updated: {n:,} sites")
+
+    def rebuild_soon(self) -> None:
+        """A source has finished: rebuild once things settle, however many sources finish together."""
+        with self._lock:
+            self._rebuild_wanted = True
+            if self._rebuilder is None:
+                self._rebuilder = threading.Thread(target=self._settle_and_rebuild, daemon=True, name="rebuild")
+                self._rebuilder.start()
+
+    def _settle_and_rebuild(self) -> None:
+        while True:
+            time.sleep(self.settle_s)
+            with self._lock:
+                if not self._rebuild_wanted:
+                    self._rebuilder = None
+                    return
+                self._rebuild_wanted = False
+            try:
+                self.rebuild(force=True)
+            except Exception as exc:   # keep the app alive; the next one may do better
+                self.log(f"map rebuild failed - {exc}")
 
     def _finish(self, source: str, crawl: dict, complete: bool) -> None:
         dataset = opendata.DATASETS.get(source)

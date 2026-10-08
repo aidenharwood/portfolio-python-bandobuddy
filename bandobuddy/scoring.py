@@ -23,24 +23,29 @@ from .config import (
 _CATEGORY_RX = [(key, label, re.compile(rx, re.I)) for key, label, rx in CATEGORIES]
 
 
+# Each list as one pattern, made once: in the order given, so the first word listed that's in the name wins.
+_URBEX_NAME = [(word, re.compile(rf"\b{re.escape(word)}\b")) for word in URBEX_NAME_WORDS]
+_URBEX_ANY = re.compile("|".join(rf"\b{re.escape(word)}\b" for word in URBEX_NAME_WORDS))
+_DEAD_NAME = [(word, re.compile(rf"\b{re.escape(word)}\b")) for word in DEAD_NAME_WORDS]
+_DEAD_ANY = re.compile("|".join(rf"\b{re.escape(word)}\b" for word in DEAD_NAME_WORDS))
+
+
 def urbex_hit(site: dict) -> str | None:
     kinds = [e.get("kind", "") for e in (site.get("osm") or []) + (site.get("wikidata") or [])]
     for kind in kinds:
         if kind.lower().replace(" ", "_") in URBEX_TYPES:
             return kind.replace("_", " ")
     name = (site.get("name") or "").lower()
-    for word in URBEX_NAME_WORDS:
-        if re.search(rf"\b{re.escape(word)}\b", name):
-            return word
-    return None
+    if not _URBEX_ANY.search(name):      # most names: one search, not one per word
+        return None
+    return next(word for word, rx in _URBEX_NAME if rx.search(name))
 
 
 def dead_name_hit(name: str | None) -> str | None:
     lowered = (name or "").lower()
-    for word in DEAD_NAME_WORDS:
-        if re.search(rf"\b{re.escape(word)}\b", lowered):
-            return word
-    return None
+    if not _DEAD_ANY.search(lowered):
+        return None
+    return next(word for word, rx in _DEAD_NAME if rx.search(lowered))
 
 
 def strength_for(score: int) -> str:

@@ -25,7 +25,7 @@ flowchart LR
     GF["Geofabrik UK extract<br/>+ daily change files"]
     WD["Wikidata SPARQL<br/>(0.5° boxes, split on timeout)"]
     WP["Wikipedia intros"]
-    OD["Open registers<br/>(Historic England, Canmore, Coflein,<br/>brownfield, schools, Scottish land,<br/>PlanIt and committee reports if switched on)"]
+    OD["Open registers<br/>(Historic England, Canmore, Coflein,<br/>brownfield, schools, Scottish land,<br/>old OS maps, PlanIt and committee reports if switched on)"]
   end
   subgraph App["bandobuddy container"]
     UP["Updater<br/>one thread per source,<br/>scheduled + resumable"]
@@ -202,6 +202,7 @@ Wi-Fi is set to a *Private* network.
 | [Care Quality Commission](https://www.cqc.org.uk/about-us/transparency/using-cqc-data) closed locations | England | OGL v3 | Care homes and hospitals that closed, with nothing registered at the address since |
 | [Historical Railways Estate](https://nationalhighways.co.uk/our-work/historical-railways-estate/about-the-hre/) (National Highways) | Great Britain | Published by National Highways | Tunnels and viaducts on railway lines closed long ago |
 | [MOD disposals](https://www.gov.uk/government/publications/disposal-database-house-of-commons-report) | UK | OGL v3 | Barracks, airfields, ranges and depots the Ministry of Defence has given up or is giving up |
+| [Old OS maps (GB1900)](https://www.visionofbritain.org.uk/data/#tabgb1900), via the [National Library of Scotland](https://maps.nls.uk/projects/os1900/) | Great Britain | CC BY-SA 4.0 | What the six-inch maps of 1888-1913 called old, disused or in ruins, and lime works, kilns, engine houses and chimneys |
 | [NHS estates return (ERIC)](https://digital.nhs.uk/data-and-information/publications/statistical/estates-returns-information-collection) (optional, off by default) | England | OGL v3 | NHS sites standing wholly or mostly empty |
 | [UK PlanIt](https://www.planit.org.uk/) (optional, off by default) | UK | Planning register data | Applications to demolish buildings described as derelict, empty or redundant; applications that call a building derelict or falling down; houses begun and never finished |
 | Planning committee reports (optional, off by default) | 197 councils | Council papers, mostly OGL | A planning officer's own sentence saying the building on a site stands empty, unfinished or derelict |
@@ -250,6 +251,19 @@ found by its name and town with Nominatim, a second apart, and only once. Bare l
 fields) is left out. Sites already released are leads; those due to go in a later year are weak until then and show
 as *Closing*. Wikidata's barracks and airfields are read too, as faint leads for their Wikipedia articles to settle.
 
+**The old OS maps.** GB1900 is every word on the second edition of the Ordnance Survey's six-inch maps of Great
+Britain, surveyed 1888-1913: 2.5 million labels, typed in by volunteers. bandobuddy asks the National Library of
+Scotland's map server for the labels that could be a building or its ruins, about 28,000, and keeps about 8,700:
+anything the map already called old, disused or in ruins ("Old Limekiln", "Corn Mill (Disused)", "Chapel (In
+Ruins)", plain "Ruin"), and the works that leave lasting remains even if they were at work then (lime works, kilns,
+engine houses, chimneys, furnaces). A gas works or a brickworks at work in 1900 is most likely long gone, and
+"Kiln Lane" or "Old Mill Pond" is named after one, so those are left out. They're all weak leads: a century on, much
+of it has gone. But it's the only open source for some places, such as Butser Hill Lime Works above Petersfield
+("Butserhill Lime Works"), and it gives places already on the map their old name. Each links to the map on the
+NLS site. The transcription is finished, so it's asked for again only every 90 days. GB1900 is CC BY-SA:
+acknowledge the Great Britain Historical GIS, the GB1900 partners and volunteers, and share alike. Only this one
+edition has had its words transcribed for all of Great Britain; the other OS editions exist only as scanned images.
+
 **Empty NHS sites, optional.** NHS England's yearly estates return lists every NHS site with how much of it is
 unoccupied. Sites reported as wholly unoccupied, and those where at least half the floor (and 1,000 m² or more)
 stands empty, are placed by postcode: about 50, old ones built before 1948 counting for more. The file is on
@@ -269,7 +283,12 @@ habitation"): about 240 since 2000, a single page. It also asks for every applic
 while the house is renovated, about 500 and two pages, leaving out holiday parks, Traveller sites and houses being
 knocked down and replaced. That's how 3 Segensworth Road, Titchfield turns up: a caravan "whilst the property is
 being renovated" in 2018, empty since, and approved for demolition in 2024. Most such renovations are finished, so
-these are weaker leads, fading like any approval. Derelict barns up for conversion, of which there are a great
+these are weaker leads, fading like any approval, but a year and a half on each house (not one that was to be knocked down anyway) is looked up again, by where it
+is, for anything applied for at the same address since. If someone has since applied to knock it down or replace it,
+or to do it up all over again a year and a half on, the work never got done, and it becomes a good lead (a weaker one again if knocking it down
+was approved more than three years ago). Those look-ups are a request a minute too: up to 90 a run, the newest
+applications first, and each house again only every six months, with what's found kept in `planit_later.json` in the
+data folder. Derelict barns up for conversion, of which there are a great
 many, and unfinished houses (most are self-builds that were finished later) are weaker leads too. A description that
 uses those words of a tree, the windows, a loft, an annexe or a shed is ignored. Each application is saved as it arrives, so stopping part-way keeps what came.
 Garages, extensions and house replacements are ignored, and so are pre-application advice and lawful-development
@@ -421,7 +440,7 @@ or an old military site or a cave. It leaves out:
 Turn it off to see everything again, including *Show weaker leads*. The rules are in `config.BEST`, and the phone's
 copy of the map applies the same ones. Changing them counts as a change to the map, so phones fetch it again.
 
-**Filtering by date.** Under *When* in the filters, places can be narrowed by any of the dates their sources give: *Closed*, *Last edited or updated*, *First recorded*, *Planning decision or meeting*, *Visitor report*, or the last update from any of them. Then *within the last* or *more than ... ago*, in days, months or years: "closed more than 5 years ago", "last edited within 6 months". Each place keeps its latest date of each kind (`config.DATE_KINDS`), and the phone's copy filters the same way offline.
+**Filtering by date.** Under *When* in the filters, *Dated* narrows places by their last update: *Last update (any)*, the latest date any of its sources gives (a closure, an edit, a planning decision...), or *Last update (incl. visitor reports)*. Then *within the last* or *more than ... ago*, in days, months or years: "last update more than 5 years ago" finds places no source has said anything about in that time. The phone's copy filters the same way offline.
 
 **A place can have several ways in.** Cave entrances, adits and shafts that belong to a place are listed with it
 rather than as pins of their own: one joins a place within 400 m that shares a distinctive part of its name (or of

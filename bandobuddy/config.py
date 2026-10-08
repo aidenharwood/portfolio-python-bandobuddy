@@ -91,16 +91,9 @@ REPORT_TAGS = [
 ]
 REPORT_YEARS = 3          # reports older than this stop counting: places change
 
-# The dates a place can be filtered by, each the latest its records give of that kind: (key, label). "any" is the
-# latest of them all, the place's last update.
-DATE_FILTERS = [("any", "Last update, from any source"), ("closed", "Closed"), ("edited", "Last edited or updated"),
-                ("entered", "First recorded"), ("decided", "Planning decision or meeting"), ("visited", "Visitor report")]
-# What each record's dates say, by kind.
-DATE_KINDS = {"closed": "closed", "last edited": "edited", "record updated": "edited", "register entry updated": "edited",
-              "list updated": "edited", "on the register in": "edited", "estates return for the year to": "edited",
-              "land survey of": "edited", "reported to Parliament": "edited", "recorded": "entered",
-              "first on the register": "entered", "applied for": "entered", "imported": "entered",
-              "decided": "decided", "committee meeting": "decided"}
+# What a place can be filtered by date on: its last update from any source, or that or a visitor's report,
+# whichever is later. (key, label)
+DATE_FILTERS = [("any", "Last update (any)"), ("all", "Last update (incl. visitor reports)")]
 REPORTS_PER_HOUR = 30     # from one address: plenty for a day out, too few to swamp a place
 
 # "Best spots": somewhere still standing to go and see, with good evidence it's empty or derelict. Not bare land,
