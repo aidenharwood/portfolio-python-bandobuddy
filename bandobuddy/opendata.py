@@ -13,11 +13,13 @@ from __future__ import annotations
 import codecs
 import csv
 import io
+import json
 import os
 import re
 import threading
 import xml.etree.ElementTree as ET
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -110,6 +112,7 @@ class ArcGISByIds:
     wheres: list[str]
     fields: str = "*"
     batch: int = 400
+    at_once: int = 4
 
     def __call__(self, session: requests.Session, progress: Progress, cancel=None) -> Records:
         ids: list[int] = []
@@ -125,27 +128,39 @@ class ArcGISByIds:
         ids.sort()
         progress("downloading", 0, len(ids))
         done = 0
-        for start in range(0, len(ids), self.batch):
-            _stop(cancel)
-            batch = ids[start:start + self.batch]
-            for row in _points(_features(session, self.url, {"objectIds": ",".join(str(i) for i in batch),
-                                                             "outFields": self.fields})):
-                yield row
-                done += 1
-            progress("downloading", done, len(ids))
+        batches = [ids[start:start + self.batch] for start in range(0, len(ids), self.batch)]
+        fetch = lambda batch: _features(session, self.url, {"objectIds": ",".join(str(i) for i in batch),  # noqa: E731
+                                                            "outFields": self.fields})
+        with ThreadPoolExecutor(max_workers=self.at_once) as pool:      # in order, a few in flight at a time
+            for features in pool.map(fetch, batches):
+                _stop(cancel)
+                for row in _points(features):
+                    yield row
+                    done += 1
+                progress("downloading", done, len(ids))
 
 
 @dataclass
 class WFS:
-    """A GeoServer WFS layer (DataMap Wales)."""
+    """A GeoServer WFS layer (DataMap Wales). Only the columns read, in big pages: the whole record with its
+    geometry is several times the size, for 113,000 sites."""
 
     url: str
     layer: str
-    batch: int = PAGE
+    batch: int = 5000
+    fields: str = ""
+    sort_by: str = "nprn"          # pages need a steady order
+    where: str = ""                # a CQL filter, to ask for only what's wanted
+    lat_field: str = "lat"
+    lng_field: str = "long"
 
     def __call__(self, session: requests.Session, progress: Progress, cancel=None) -> Records:
         params = {"service": "WFS", "version": "2.0.0", "request": "GetFeature", "typeName": self.layer,
-                  "outputFormat": "application/json", "count": self.batch}
+                  "outputFormat": "application/json", "count": self.batch, "sortBy": self.sort_by}
+        if self.fields:
+            params["propertyName"] = self.fields
+        if self.where:
+            params["CQL_FILTER"] = self.where
         total, done, start = None, 0, 0
         while True:
             _stop(cancel)
@@ -155,40 +170,45 @@ class WFS:
             for feature in features:
                 props = feature.get("properties") or {}
                 try:  # a few rows carry spreadsheet leftovers ("#VALUE!") instead of a position
-                    lat, lng = float(props.get("lat")), float(props.get("long"))
+                    lat, lng = float(props.get(self.lat_field)), float(props.get(self.lng_field))
                 except (TypeError, ValueError):
                     continue
                 yield {**props, "lat": lat, "lng": lng}
                 done += 1
             progress("downloading", done, total if isinstance(total, int) else None)
-            if len(features) < self.batch:
+            # On to the total it says it has: a server may give fewer to a page than asked for.
+            done_all = start + len(features) >= total if isinstance(total, int) else len(features) < self.batch
+            if not features or done_all:
                 return
-            start += self.batch
+            start += len(features)
 
 
 @dataclass
 class PlanningData:
-    """planning.data.gov.uk, which collects the registers English councils publish."""
+    """planning.data.gov.uk, which collects the registers English councils publish: the whole dataset as one
+    file (20 MB for brownfield land), read as it arrives, rather than page after page of its API. Entries a
+    council has taken off its register (an end date) are left out."""
 
     dataset: str
-    url: str = "https://www.planning.data.gov.uk/entity.json"
-    batch: int = 500
+    url: str = "https://files.planning.data.gov.uk/dataset/{dataset}.csv"
 
     def __call__(self, session: requests.Session, progress: Progress, cancel=None) -> Records:
-        done, offset = 0, 0
-        while True:
-            _stop(cancel)
-            entities = _get(session, self.url, {"dataset": self.dataset, "limit": self.batch,
-                                                "offset": offset}).get("entities") or []
-            for row in entities:
-                point = _point(row.get("point"))
-                if point:
-                    yield {**row, "lat": point[0], "lng": point[1]}
-                    done += 1
-            progress("downloading", done, None)
-            if len(entities) < self.batch:
-                return
-            offset += self.batch
+        progress("downloading", 0, None)
+        resp = session.get(self.url.format(dataset=self.dataset), headers={"User-Agent": USER_AGENT},
+                           timeout=TIMEOUT, stream=True)
+        resp.raise_for_status()
+        done = 0
+        for i, row in enumerate(csv.DictReader(_lines(resp, "utf-8-sig"))):
+            if i % 2000 == 0:
+                _stop(cancel)
+                progress("downloading", done, None)
+            if row.get("end-date"):
+                continue
+            point = _point(row.get("point"))
+            if point:
+                yield {**row, "lat": point[0], "lng": point[1]}
+                done += 1
+        progress("downloading", done, done)
 
 
 def _lines(resp, encoding: str) -> Iterator[str]:
@@ -377,7 +397,14 @@ class PlanIt:
     minute apart. Run weekly, it builds up a picture as it goes; it never backfills.
 
     (Asking instead for every demolition application whose details changed lately found 4,756 in two
-    days, mostly council sites being re-read: hours of pages a week, and past PlanIt's 5,000 limit.)"""
+    days, mostly council sites being re-read: hours of pages a week, and past PlanIt's 5,000 limit.)
+
+    A house being done up, or one that couldn't be lived in or was never finished, should have been sorted out a
+    year and a half on, and most have. So each of those is looked up again, by where it is, for anything applied
+    for at the same house since: knocking it down, replacing it, or doing it up all over again says the work never
+    got done. (3 Segensworth Road, Titchfield: a caravan on the plot while it was renovated in 2018, then an
+    application to demolish the house in 2023.) A few hundred of them, a minute apart, a share each run; then each
+    again only every six months. What's found is kept in the data folder."""
 
     url: str = "https://www.planit.org.uk/api/applics/json"
     search: str = _planit_search()
@@ -387,6 +414,9 @@ class PlanIt:
     caravans: str = CARAVAN_SEARCH                           # ...and these: two pages
     batch: int = 300
     gap_s: float = 61
+    follow_ups: int = 90           # houses looked up again each run, at most: an hour and a half
+    recheck_days: int = 182
+    krad: float = 0.1              # how far around a house to look, in km: councils place one house differently
 
     FIELDS = ("name,uid,description,address,postcode,app_state,app_size,start_date,decided_date,"
               "location_x,location_y,link,url,area_name")
@@ -408,7 +438,12 @@ class PlanIt:
             self._wait(cancel, wait)
         raise RuntimeError("PlanIt kept asking us to slow down; trying again next time")
 
-    def __call__(self, session: requests.Session, progress: Progress, cancel=None) -> Records:
+    def __call__(self, session: requests.Session, progress: Progress, cancel=None,
+                 data_dir: Path | None = None) -> Records:
+        path = Path(data_dir) / "planit_later.json" if data_dir else None
+        memory = _load(path, {"checked": {}, "later": {}})
+        today = date.today()
+        due: dict[str, tuple[str, dict]] = {}        # houses to look up again, and when they last were
         asked = False
         asks = [(self.search, window, {"recent": "new applications", "decided": "decisions"}[window])
                 for window in self.windows]
@@ -431,12 +466,65 @@ class PlanIt:
                 for row in records:
                     if row.get("location_x") is None or row.get("location_y") is None:
                         continue
-                    yield {**row, "lat": float(row["location_y"]), "lng": float(row["location_x"])}
+                    row = {**row, "lat": float(row["location_y"]), "lng": float(row["location_x"])}
+                    key = str(row.get("name") or "")
+                    if memory["later"].get(key):
+                        row["later"] = memory["later"][key]
+                    if key and _worth_a_second_look(row, today):
+                        checked = memory["checked"].get(key) or ""
+                        if checked < (today - timedelta(days=self.recheck_days)).isoformat():
+                            due[key] = (checked, row)
+                    yield row
                 done += len(records)
                 progress(f"{what}, a minute between pages", done, total if isinstance(total, int) else None)
                 if len(records) < self.batch or (isinstance(total, int) and done >= total):
                     break
                 page += 1
+        # Then the houses that should have been sorted out by now: those never looked up first, then the longest
+        # since, and the newest applications before the oldest.
+        queue = sorted(due.items(), key=lambda kv: kv[1][1].get("start_date") or "", reverse=True)
+        queue = sorted(queue, key=lambda kv: kv[1][0])[:self.follow_ups]
+        for n, (key, (_, row)) in enumerate(queue, 1):
+            _stop(cancel)
+            if asked:
+                self._wait(cancel, self.gap_s)
+            asked = True
+            later = self._since(session, row, cancel)
+            memory["checked"][key] = today.isoformat()
+            if later:
+                memory["later"][key] = later
+            else:
+                memory["later"].pop(key, None)
+            _save(path, memory)
+            progress("houses looked up again for anything since, a minute apart", n, len(queue))
+            if later != row.get("later"):
+                yield {**row, "later": later}
+
+    def _since(self, session: requests.Session, row: dict, cancel) -> list[dict]:
+        """What's been applied for at the same house since that says the work never got done."""
+        data = self._ask(session, {"lat": row["lat"], "lng": row["lng"], "krad": self.krad,
+                                   "start_date": (row.get("start_date") or "")[:10], "pg_sz": self.batch,
+                                   "select": self.FIELDS, "sort": "-start_date", "compress": "on"}, cancel)
+        return [{k: r.get(k) for k in ("name", "description", "app_state", "start_date", "decided_date", "url")}
+                for r in data.get("records") or []
+                if r.get("name") != row.get("name") and (r.get("start_date") or "") > (row.get("start_date") or "")
+                and _same_house(row.get("address"), r.get("address")) and _gave_up_on(r, row.get("start_date"))]
+
+
+def _load(path: Path | None, empty: dict) -> dict:
+    if path and path.exists():
+        try:
+            return {**empty, **json.loads(path.read_text(encoding="utf-8"))}
+        except (OSError, ValueError):
+            pass
+    return empty
+
+
+def _save(path: Path | None, data: dict) -> None:
+    if path:
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, separators=(",", ":")), encoding="utf-8")
+        tmp.replace(path)
 
 
 _POINT = re.compile(r"POINT\s*\(\s*(-?[\d.]+)\s+(-?[\d.]+)\s*\)", re.I)
@@ -544,6 +632,7 @@ class Dataset:
     fetch: Callable[..., Records]
     judge: Callable[[dict], dict | None]
     incremental: bool = False     # each run brings only what's new, so nothing it leaves out has gone
+    every_days: int | None = None  # how often it's worth asking, if not the usual: a record that never changes
     opt_in: bool = False          # off unless BANDOBUDDY_<KEY>=1, or run by hand with `update --source`
     remembers: bool = False       # keeps notes in the data folder between runs (which reports it has read)
 
@@ -784,7 +873,8 @@ _PLANIT_DECIDED = {"Permitted": "approved", "Conditions": "approved", "Rejected"
 # approved, and the work is getting going.
 _FOLLOW_UP = re.compile(r"^\W*(?:application for |request for |proposed )?(?:the )?(?:discharge|details reserved"
                         r"|approval of (?:details|reserved matters)|reserved matters|confirmation)"
-                        r"|discharge of conditions?|details reserved by condition|non[- ]material amendment"
+                        r"|discharge of conditions?|details reserved by condition|details pursuant to"
+                        r"|non[- ]material amendment"
                         r"|minor material amendment|variation of conditions?|removal of conditions?"
                         r"|\bs(?:ection|\.)? ?96a\b", re.I)
 _POSTCODE = re.compile(r"\b[A-Z]{1,2}\d[A-Z\d]? ?\d[A-Z]{2}\b", re.I)
@@ -823,6 +913,67 @@ _SMALL_THING = re.compile(r"(?:derelict|dilapidated|ruinous|fire[- ]damaged|aban
                           r"|greenhouses?|outbuildings?|conservator(?:y|ies)|porch(?:es)?|roofs?|chimneys?|signs?"
                           r"|kiosks?|canop(?:y|ies)|caravans?|vehicles?|boats?|cars?)\b", re.I)
 _TREE_WORK = re.compile(r"\btrees?\b|\bT\d+\b|\bTPO\b|\bfell\b|\bpollard|\bcrown (?:reduc|lift|thin)", re.I)
+# The house itself knocked down or replaced: not a garage, an extension or a shed.
+_REPLACED = re.compile(r"demoli\w*\s+(?:of\s+)?(?:the\s+)?(?:existing\s+)?(?:[\w-]+\s+){0,2}?"
+                       r"(?:house|dwelling(?:house)?|bungalow|cottage|farmhouse|property|home)s?\b"
+                       r"|replacement (?:dwelling|house|bungalow|home)", re.I)
+# How an address can start without saying which house: "Land to the rear of 5 Mill Lane".
+_NEAR = re.compile(r"^(?:land|site|plot|garden|part)s?\b(?:\s+[\w/]+){0,4}?\s+(?:at|of|adj\w*|adjoining|behind"
+                   r"|opposite|next to)\s+", re.I)
+SORTED_OUT_DAYS = 548       # a year and a half: what an approval's given before the work's taken to be done
+
+
+def _said(row: dict) -> str:
+    return re.sub(r"\s+", " ", row.get("description") or "").strip()
+
+
+def _house_state(said: str) -> tuple:
+    """What an application says of the house: (begun and never finished, can't be lived in, being done up), as
+    matches or None."""
+    unlivable = _UNLIVABLE.search(said) \
+        if (_UNLIVABLE_HOME.search(said) or not _UNLIVABLE_PART.search(said)) and not _TREE_WORK.search(said) else None
+    doing_up = _DOING_UP.search(said) if not _NOT_DOING_UP.search(said) else None
+    return _STALLED.search(said), unlivable, doing_up
+
+
+def _worth_a_second_look(row: dict, today: date) -> bool:
+    """A house being done up, or one that couldn't be lived in or was never finished, applied for long enough ago
+    that it should have been sorted out. Not one that was to be knocked down anyway: applying again to knock it
+    down says nothing new."""
+    said = _said(row)
+    if _FOLLOW_UP.search(said) or re.search(r"demoli", said, re.I) or not any(_house_state(said)):
+        return False
+    try:
+        return date.fromisoformat((row.get("start_date") or "")[:10]) < today - timedelta(days=SORTED_OUT_DAYS)
+    except ValueError:
+        return False
+
+
+def _gave_up_on(row: dict, since: str | None) -> bool:
+    """A later application that says the work never got done: knock the house down or replace it, or do it up all
+    over again a year and a half on (not the same plan sent in again a few months later)."""
+    said = _said(row)
+    if _FOLLOW_UP.search(said):
+        return False
+    if _REPLACED.search(said):
+        return True
+    try:
+        again = date.fromisoformat((row.get("start_date") or "")[:10]) \
+            >= date.fromisoformat((since or "")[:10]) + timedelta(days=SORTED_OUT_DAYS)
+    except ValueError:
+        return False
+    return again and any(_house_state(said))
+
+
+def _same_house(address: str | None, other: str | None) -> bool:
+    """"3 Segensworth Road Titchfield Fareham PO15 5DY" and "Land at 3 Segensworth Road, Titchfield": one house.
+    13 Segensworth Road, or Oak Cottage next door, isn't."""
+    def words(a):
+        return re.findall(r"[a-z0-9]+", _NEAR.sub("", _POSTCODE.sub(" ", a or "").strip()).lower())
+    mine, theirs = words(address), words(other)
+    if len(mine) < 2 or len(theirs) < 2:
+        return False
+    return f" {' '.join(mine[:3])} " in f" {' '.join(theirs)} " or f" {' '.join(theirs[:3])} " in f" {' '.join(mine)} "
 
 
 def _excerpt(said: str, focus: re.Match | None, size: int = 160) -> str:
@@ -838,16 +989,13 @@ def _planit(row: dict) -> dict | None:
     redundant; one that calls the building itself derelict or falling down, or unfit to live in; one about a
     house begun and never finished, or never lived in; or one to live in a caravan on the plot while the house
     is done up."""
-    said = re.sub(r"\s+", " ", row.get("description") or "").strip()
-    unlivable = _UNLIVABLE.search(said) \
-        if (_UNLIVABLE_HOME.search(said) or not _UNLIVABLE_PART.search(said)) and not _TREE_WORK.search(said) else None
-    doing_up = _DOING_UP.search(said) if not _NOT_DOING_UP.search(said) else None
+    said = _said(row)
+    stalled, unlivable, doing_up = _house_state(said)
     # Advice before applying decides nothing, but an application that calls a house unlivable still says so.
     if _NO_DECISION.search(said) and not (unlivable or doing_up):
         return None
     demolition = bool(re.search(r"demoli", said, re.I))
     weight = kind = None
-    stalled = _STALLED.search(said)
     focus = stalled or unlivable or doing_up
     if unlivable and not stalled:
         weight, kind = 18, _kind_of(said) or "building"
@@ -883,7 +1031,7 @@ def _planit(row: dict) -> dict | None:
         weight = 5
     elif outcome == "approved" and decided:
         try:
-            long_ago = date.fromisoformat(decided) < date.today() - timedelta(days=548)
+            long_ago = date.fromisoformat(decided) < date.today() - timedelta(days=SORTED_OUT_DAYS)
         except ValueError:
             long_ago = False
         if demolition:
@@ -897,6 +1045,28 @@ def _planit(row: dict) -> dict | None:
         started = (row.get("start_date") or "")[:10]
         state = (f"applied to demolish it on {started}" if demolition else f"applied for on {started}") \
             + ", no decision yet"
+    # Since then, the same house in again to be knocked down, replaced or done up: the work never got done.
+    since, dates = "", [("applied for", (row.get("start_date") or "")[:10] or None), ("decided", decided or None)]
+    later = [r for r in row.get("later") or () if _gave_up_on(r, row.get("start_date"))] \
+        if focus and not demolition and not _FOLLOW_UP.search(said) else None
+    if later:
+        last = max(later, key=lambda r: r.get("start_date") or "")
+        then = _PLANIT_DECIDED.get(last.get("app_state") or "", "") or "undecided"
+        then_on = (last.get("decided_date") or "")[:10]
+        applied = (last.get("start_date") or "")[:10]
+        ref = str(last.get("name") or "").split("/", 1)[-1]
+        state = state.replace(", so the work may well be done", "")
+        weight, gone = 20, ""
+        try:      # knocking it down approved long enough ago to have lapsed, if it wasn't done: it may be gone
+            if then == "approved" and _REPLACED.search(_said(last)) \
+                    and date.fromisoformat(then_on) < date.today() - timedelta(days=3 * 365):
+                weight, gone = 12, ", and it may since have gone"
+        except ValueError:
+            pass
+        since = (f"; then, in {applied[:4]}, another application here ({ref}, "
+                 f"{then}{f' on {then_on}' if then_on and then != 'undecided' else ''}): "
+                 f"\"{_excerpt(_said(last), None, 120)}\", so it seems the work was never finished{gone}")
+        dates += [("applied again", applied or None), ("decided again", then_on or None)]
     # An address for a name: without its postcode, and not the whole of a long one with no commas.
     parts = [_POSTCODE.sub("", p).strip(" ,") for p in (row.get("address") or "").split(",")]
     name = ", ".join([p for p in parts if p][:2])
@@ -906,10 +1076,10 @@ def _planit(row: dict) -> dict | None:
         "ref": str(row.get("name") or row.get("uid") or "").strip(),
         "name": name,
         "kind": kind,
-        "dates": [("applied for", (row.get("start_date") or "")[:10] or None), ("decided", decided or None)],
+        "dates": dates,
         "evidence": f"Planning application ({state}): \"{_excerpt(said, focus or _STATE.search(said))}\""
                     + ("; someone was to live in a caravan on the plot meanwhile, so it couldn't be lived in then"
-                       if doing_up and not (stalled or unlivable) else ""),
+                       if doing_up and not (stalled or unlivable) else "") + since,
         "weight": weight,
         "url": row.get("url") or row.get("link"),
     }
@@ -1099,6 +1269,87 @@ def _mod(row: dict) -> dict | None:
             "dates": [("reported to Parliament", row.get("reported"))]}
 
 
+# -- the old Ordnance Survey six-inch maps (GB1900) ----------------------------------------------------------
+
+# GB1900: every word on the second edition of the OS six-inch maps of Great Britain (surveyed 1888-1913), typed in by
+# volunteers. Asked for are labels that might be a building or works still standing, or its ruins: anything the map
+# already called old, disused or ruined, and the kind of works that leaves lasting remains (lime kilns, engine
+# houses, chimneys). Butser Hill Lime Works, above Petersfield, is on the map as "Butserhill Lime Works" and in no
+# other open source.
+OLD_MAP_YEARS = ("1888", "1913")
+_OLD_MAP_WORDS = ("mill", "kiln", "works", "chapel", "church", "school", "smithy", "engine", "colliery", "pumping",
+                  "furnace", "foundry", "brewery", "warehouse", "station", "inn", "barracks", "fort", "battery",
+                  "lighthouse")
+
+
+def _old_map_where() -> str:
+    like = "final_text_lower LIKE '{}'".format
+    old = " OR ".join(like(f"%{w}%") for w in _OLD_MAP_WORDS)
+    return " OR ".join([like(t) for t in ("%works%", "%kiln%", "%engine house%", "%disused%", "%ruin%", "%chimney%")]
+                       + [f"({like('old %')} AND ({old}))"])
+
+
+# What a label is, read from its end: "Butserhill Lime Works", "Corn Mill (Disused)". (pattern, kind, lasting): a
+# lasting kind is worth a look even if it was working then; the rest only if the map already called it old,
+# disused or ruined. Anything else ending the label ("Kiln Lane", "Limekiln Wood", "Old Mill Pond") is a place
+# named after one, not the thing.
+_OLD_MAP_KINDS = [(re.compile(rf"(?:^|\b){p}$", re.I), kind, lasting) for p, kind, lasting in (
+    (r"lime ?works", "lime works", True),
+    (r"(?:lime ?|brick ?)?kilns?", "lime kiln", True),
+    (r"cement works", "cement works", True),
+    (r"(?:pumping |fire )?engine ?houses?", "engine house", True),
+    (r"chimneys?", "chimney", True),
+    (r"(?:blast )?furnaces?", "furnace", True),
+    (r"(?:brick|tile|pipe)(?: (?:&|and) (?:tile|pipe))? ?works", "brick works", False),
+    (r"(?:[\w&']+ )*works", "works", False),
+    (r"windmill", "windmill", False),
+    (r"(?:[\w']+ )?mill", "mill", False),
+    (r"colliery|(?:coal|lead|copper|tin|iron|ironstone|silver|zinc|barytes|manganese) mines?", "mine", False),
+    (r"level", "adit", False),
+    (r"(?:[\w.']+ )*(?:chapel|church|kirk|meeting house)", "chapel", False),
+    (r"school", "school", False),
+    (r"(?:[\w.']+ )*(?:castle|tower|abbey|priory)", "ruin", False),
+    (r"tannery|brewery|distillery|maltings?|foundry|warehouse|granary|smithy|inn", "building", False),
+    (r"(?:railway |signal |coastguard )?station|lighthouse|fort|battery|barracks", "building", False),
+    (r"ruins?|ruins? of [\w .']+", "ruin", False),
+)]
+_OLD_MAP_SAID = re.compile(r"\s*\((?:disused|in ruins?|ruins?|ruins? of|pumping)\)\s*", re.I)
+
+
+def _old_map(row: dict) -> dict | None:
+    """A label on the OS six-inch map of 1888-1913 for a works, kiln or mill, or anything it already called old,
+    disused or ruined."""
+    label = re.sub(r"\s+", " ", row.get("final_text") or "").strip()
+    lower = label.lower()
+    ruined = bool(re.search(r"\bruins?\b|\(in ruins?\)", lower))
+    disused = "(disused)" in lower or lower.startswith("old ")
+    base = _OLD_MAP_SAID.sub(" ", label).strip()
+    base = re.sub(r"^old\s+", "", base, flags=re.I).strip()
+    if lower.endswith("(pumping)"):
+        base += " (pumping)"
+    found = next(((kind, lasting) for rx, kind, lasting in _OLD_MAP_KINDS if rx.search(base.replace(" (pumping)", ""))),
+                 None)
+    if not found or len(base) < 3:
+        return None
+    kind, lasting = found
+    if not (ruined or disused or lasting):
+        return None          # a gas works or a mill at work in 1900 is most likely long gone, or still at work
+    name = _OLD_MAP_SAID.sub(" ", label).strip()
+    name = name if any(c.isupper() for c in name) else name.title()
+    then = " (in ruins even then)" if ruined else " (disused even then)" if disused else ""
+    lat, lng = float(row["lat"]), float(row["lng"])
+    return {
+        "ref": str(row.get("pin_id") or ""),
+        "name": name,
+        "kind": kind,
+        "weight": 10 if ruined or disused else 6,
+        "evidence": f"The Ordnance Survey six-inch map of {OLD_MAP_YEARS[0]}-{OLD_MAP_YEARS[1]} marks "
+                    f"\"{label}\" here{then}",
+        "url": f"https://maps.nls.uk/projects/os1900/#zoom=17.0&lat={lat:.5f}&lon={lng:.5f}",
+        "dates": [("on the map by", OLD_MAP_YEARS[1])],
+    }
+
+
 CANMORE_TERMS = ("OBSERVATION POST", "BUNKER", "PILLBOX", "BATTERY", "AIRFIELD", "AERODROME", "COLLIERY",
                  "MINE", "QUARR", "ADIT", "TUNNEL", "VIADUCT", "RAILWAY STATION", "MILL", "FACTORY", "FOUNDRY",
                  "BREWERY", "DISTILLERY", "ENGINE HOUSE", "IRONWORKS", "BRICKWORKS", "GASWORKS", "STEELWORKS",
@@ -1137,7 +1388,8 @@ DATASETS = {
             attribution="Site data from the National Monuments Record of Wales (RCAHMW)",
             home="https://coflein.gov.uk/",
             fetch=WFS("https://datamap.gov.wales/geoserver/wfs",
-                      "geonode:rcahmw_nmrw_terrestrialsites_rcahmw_bng"),
+                      "geonode:rcahmw_nmrw_terrestrialsites_rcahmw_bng",
+                      fields="nprn,name,site_type,lat,long,url,lastupdate"),
             judge=_coflein,
         ),
         Dataset(
@@ -1168,6 +1420,7 @@ DATASETS = {
             judge=_planit,
             incremental=True,
             opt_in=True,
+            remembers=True,
         ),
         Dataset(
             key="committees",
@@ -1222,6 +1475,19 @@ DATASETS = {
             fetch=registers.MoDisposals(),
             judge=_mod,
             remembers=True,
+        ),
+        Dataset(
+            key="old_maps",
+            label="Old OS maps (1888-1913)",
+            licence="CC BY-SA 4.0 (GB1900 gazetteer)",
+            attribution="GB1900 gazetteer: Great Britain Historical GIS, University of Portsmouth, the GB1900 partners "
+                        "and volunteers; served by the National Library of Scotland",
+            home="https://www.visionofbritain.org.uk/data/#tabgb1900",
+            fetch=WFS("https://geoserver.nls.uk/geoserver/wfs", "nls:gb1900_21_December",
+                      fields="pin_id,final_text,latitude,longitude", sort_by="pin_id", where=_old_map_where(),
+                      lat_field="latitude", lng_field="longitude"),
+            judge=_old_map,
+            every_days=90,     # the transcription's finished: six pages a season is plenty
         ),
         Dataset(
             key="brownfield",

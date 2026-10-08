@@ -315,6 +315,85 @@ class PlanItTests(unittest.TestCase):
                                 "Certificate of lawfulness for proposed demolition of redundant farm buildings"):
             self.assertIsNone(judge(self.record(7, nothing_decided)), nothing_decided)
 
+    def test_a_house_done_up_long_ago_is_looked_up_again(self):
+        # 3 Segensworth Road, Titchfield: a caravan on the plot while it was renovated in 2018, then in 2023 an
+        # application to knock the house down. Looked up again by where it is, and only the same house counts.
+        caravan = self.record(3, "Siting of a static caravan whilst the property is being renovated",
+                              address="3 Segensworth Road Titchfield Fareham PO15 5DY", app_state="Permitted",
+                              start_date="2018-11-27", decided_date="2019-01-02")
+        lately = self.record(4, "Siting of a caravan whilst the house is renovated")      # too soon to tell
+        nearby = [caravan,
+                  self.record(5, "Demolition Of Existing House And Construction Of 2 New Houses",
+                              address="3 Segensworth Road Titchfield Fareham PO15 5DY", app_state="Permitted",
+                              start_date="2023-05-23", decided_date="2024-06-28"),
+                  self.record(6, "Demolition of existing bungalow", address="13 Segensworth Road, Titchfield"),
+                  self.record(7, "Single storey rear extension", address="3 Segensworth Road, Titchfield",
+                              start_date="2020-03-01"),
+                  self.record(8, "Log cabin in the rear garden", address="Oak Cottage Mill Lane Titchfield")]
+        answers = [Resp(200, {"records": [caravan, lately], "total": 2})] + [Resp(200, {"records": [], "total": 0})] * 3 \
+            + [Resp(200, {"records": nearby, "total": 5})]
+        service = Service(lambda url, params: answers.pop(0))
+        tmp = Path(tempfile.mkdtemp())
+        waits = []
+        quick = mock.patch.object(opendata.PlanIt, "_wait", lambda self, cancel, s: waits.append(s))
+        with quick:
+            rows = list(opendata.PlanIt()(service, nothing, data_dir=tmp))
+        self.assertEqual(len(service.calls), 5)
+        self.assertEqual(waits, [61] * 4)                         # a minute between requests, as ever
+        around = service.calls[4][1]
+        self.assertEqual((around["lat"], around["lng"], around["krad"], around["start_date"]),
+                         (51.07, -1.8, 0.1, "2018-11-27"))
+        self.assertEqual([r["name"] for r in rows], ["Area/3", "Area/4", "Area/3"])   # again, with what came since
+        self.assertEqual([r["name"] for r in rows[2]["later"]], ["Area/5"])
+        house = opendata._planit(rows[2])
+        self.assertEqual(house["weight"], 20)
+        self.assertIn("(approved on 2019-01-02)", house["evidence"])
+        self.assertIn('then, in 2023, another application here (5, approved on 2024-06-28): "Demolition Of Existing '
+                      'House And Construction Of 2 New Houses", so it seems the work was never finished',
+                      house["evidence"])
+        self.assertEqual(_condition_from(house["evidence"]), "Empty")
+        self.assertIn(("applied again", "2023-05-23"), house["dates"])
+        self.assertEqual(opendata._planit(rows[0])["weight"], 5)    # the first time round: may well be done
+        # Next week: what was found is remembered, and nobody's asked again for six months.
+        answers[:] = [Resp(200, {"records": [caravan], "total": 1})] + [Resp(200, {"records": [], "total": 0})] * 3
+        with quick:
+            rows = list(opendata.PlanIt()(service, nothing, data_dir=tmp))
+        self.assertEqual(len(service.calls), 9)
+        self.assertEqual(opendata._planit(rows[0])["weight"], 20)
+        # Knocking it down approved long enough ago to have lapsed: it may be gone.
+        old = opendata._planit({**caravan, "later": [{**nearby[1], "decided_date": "2020-01-01"}]})
+        self.assertEqual(old["weight"], 12)
+        self.assertIn("it may since have gone", old["evidence"])
+
+    def test_which_later_applications_count(self):
+        same = opendata._same_house
+        self.assertTrue(same("3 Segensworth Road Titchfield Fareham PO15 5DY", "Land at 3 Segensworth Road, Titchfield"))
+        self.assertTrue(same("Land to the rear of 5 Mill Lane, Town", "5 Mill Lane Town AB1 2CD"))
+        self.assertFalse(same("3 Segensworth Road Titchfield", "13 Segensworth Road Titchfield"))
+        self.assertFalse(same("River Bank House Mill Lane Titchfield", "Oak Cottage Mill Lane Titchfield"))
+        self.assertFalse(same("", "3 Segensworth Road"))
+        gave_up = lambda said, on="2024-01-01": opendata._gave_up_on({"description": said, "start_date": on},  # noqa
+                                                                    "2018-01-01")
+        self.assertFalse(gave_up("Retention of a mobile home during renovation of the dwelling", "2018-09-01"))  # resent
+        self.assertTrue(gave_up("Demolition of the existing dwelling", "2018-09-01"))
+        # Not followed up when it was to be knocked down anyway: applying again to knock it down says nothing new.
+        old = {"description": "Demolish existing uninhabitable house and outbuildings", "start_date": "2020-01-01"}
+        self.assertFalse(opendata._worth_a_second_look(old, date.today()))
+        self.assertTrue(opendata._worth_a_second_look({**old, "description": "Renovation of uninhabitable cottage"},
+                                                      date.today()))
+        again = {"name": "Area/2", "description": "Demolition of the existing dwelling", "start_date": "2023-12-22"}
+        self.assertEqual(opendata._planit({**self.record(1, old["description"], start_date="2020-01-01"),
+                                           "later": [again]})["weight"], 18)       # as it was, no later news
+        for yes in ("Demolition of existing dwelling and erection of replacement dwelling",
+                    "Demolish existing bungalow and erect two houses",
+                    "Siting of a mobile home whilst the house is refurbished",
+                    "Completion of partially built dwelling"):
+            self.assertTrue(gave_up(yes), yes)
+        for no in ("Demolition of existing garage and erection of two storey side extension",
+                   "Single storey rear extension", "Details pursuant to condition 3 of P/23/0734/FP: demolition of "
+                   "existing house", "Discharge of condition 2: replacement dwelling"):
+            self.assertFalse(gave_up(no), no)
+
     def test_off_unless_switched_on_and_never_forgets_older_ones(self):
         self.assertFalse(opendata.DATASETS["planit"].enabled())
         with mock.patch.dict(os.environ, {"BANDOBUDDY_PLANIT": "1"}):
@@ -323,7 +402,7 @@ class PlanItTests(unittest.TestCase):
         store = Store(tmp / "t.db")
         batches = [[self.record(1)], [self.record(2, location_x=-1.81)]]
         dataset = opendata.Dataset(**{**opendata.DATASETS["planit"].__dict__,
-                                      "fetch": lambda session, progress, cancel=None: iter(
+                                      "fetch": lambda session, progress, cancel=None, data_dir=None: iter(
                                           [{**r, "lat": r["location_y"], "lng": r["location_x"]}
                                            for r in batches.pop(0)])})
         with mock.patch.dict(opendata.DATASETS, {"planit": dataset}):
@@ -336,7 +415,7 @@ class PlanItTests(unittest.TestCase):
         tmp = Path(tempfile.mkdtemp())
         store = Store(tmp / "t.db")
 
-        def fetch(session, progress, cancel=None):
+        def fetch(session, progress, cancel=None, data_dir=None):
             yield {**self.record(1), "lat": 51.07, "lng": -1.8}
             raise opendata.Cancelled()          # stopped while waiting a minute for the next page
         dataset = opendata.Dataset(**{**opendata.DATASETS["planit"].__dict__, "fetch": fetch})
