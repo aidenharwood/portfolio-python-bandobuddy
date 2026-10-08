@@ -113,6 +113,10 @@ class ReportingTests(unittest.TestCase):
         self.assertEqual(again["mine"]["difficulty"], 4)
         _, theirs = call(self.port, "GET", f"/api/report?key={self.key}&device=someone-else-entirely-0001")
         self.assertIsNone(theirs["mine"])
+        # Which places this device has reported on: for the marks on its map. Only its own id tells.
+        self.assertEqual(call(self.port, "GET", f"/api/report/mine?device={DEVICE}")[1], {"keys": [self.key]})
+        self.assertEqual(call(self.port, "GET", "/api/report/mine?device=someone-else-entirely-0001")[1], {"keys": []})
+        self.assertEqual(call(self.port, "GET", "/api/report/mine?device=short")[0], 400)
         # Nothing stored says which device it was.
         with self.updater.store.connect() as db:
             stored = " ".join(str(v) for row in db.execute("SELECT * FROM reports") for v in row)
@@ -120,6 +124,7 @@ class ReportingTests(unittest.TestCase):
         # Taken back.
         _, gone = call(self.port, "POST", "/api/report", {"key": self.key, "device": DEVICE, "clear": True})
         self.assertIsNone(gone["mine"])
+        self.assertEqual(call(self.port, "GET", f"/api/report/mine?device={DEVICE}")[1], {"keys": []})
 
     def test_an_older_copy_rebuilding_the_map_doesnt_break_this_one(self):
         # A second, older bandobuddy on the same data swaps in a map without the newer columns.

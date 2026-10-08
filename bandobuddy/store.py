@@ -81,7 +81,7 @@ DATE_FILTER_KEYS = {key for key, _ in DATE_FILTERS}
 def _batches(rows: list, size: int = WRITE_BATCH):
     for at in range(0, len(rows), size):
         yield rows[at:at + size]
-CLUSTER_PX = 64        # roughly how wide a cluster cell is on screen
+CLUSTER_PX = 80        # roughly how wide a cluster cell is on screen: wide enough to leave the map showing
 
 
 def now_iso() -> str:
@@ -406,6 +406,11 @@ class Store:
                     for r in db.execute("SELECT * FROM reports WHERE key = ?", (key,))]
             history = [dict(r) for r in db.execute("SELECT at, access, difficulty FROM report_log WHERE key = ?", (key,))]
         return rows, history
+
+    def report_pairs(self) -> list[tuple[str, str]]:
+        """(place, reporter) for every report: which device a reporter is, only that device can tell."""
+        with self.connect() as db:
+            return [(r["key"], r["reporter"]) for r in db.execute("SELECT key, reporter FROM reports")]
 
     def all_reports(self) -> dict[str, list[dict]]:
         """Every report, by place: for the map's rebuild."""

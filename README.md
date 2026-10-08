@@ -90,6 +90,7 @@ docker build --target test .
 | `BANDOBUDDY_NO_AUTO_UPDATE` | off | Don't refresh the data on a schedule |
 | `BANDOBUDDY_PLANIT` | off (on in `run.bat`) | Also sweep UK PlanIt weekly for demolition applications (see below) |
 | `BANDOBUDDY_COMMITTEES` | off (on in `run.bat`) | Also read councils' planning committee reports weekly (see below) |
+| `BANDOBUDDY_DISCLAIMERS` | off (on in `run.bat`) | Also read The Gazette's notices of the Crown disclaiming dissolved companies' land (see below) |
 | `BANDOBUDDY_NHS_ESTATES` | off | Also read NHS England's estates return for empty NHS sites (see below: its file host asks robots to stay away) |
 
 The refresh interval (7 days by default) is set in the app's **Data** panel, or with `bandobuddy update` from any scheduler. `/healthz` returns `{"ok": true, ...}` for container and Kubernetes health checks.
@@ -213,6 +214,7 @@ Wi-Fi is set to a *Private* network.
 | [NHS estates return (ERIC)](https://digital.nhs.uk/data-and-information/publications/statistical/estates-returns-information-collection) (optional, off by default) | England | OGL v3 | NHS sites standing wholly or mostly empty |
 | [UK PlanIt](https://www.planit.org.uk/) (optional, off by default) | UK | Planning register data | Applications to demolish buildings described as derelict, empty or redundant; applications that call a building derelict or falling down; houses begun and never finished |
 | Planning committee reports (optional, off by default) | 197 councils | Council papers, mostly OGL | A planning officer's own sentence saying the building on a site stands empty, unfinished or derelict |
+| [Crown disclaimers](https://www.thegazette.co.uk/all-notices/notice?noticetypes=2603) in The Gazette (optional, off by default) | England and Wales | OGL v3 | Buildings that belonged to dissolved companies, which the Crown disclaimed: nobody owns them |
 
 A national register saying a place exists isn't the same as saying it's abandoned, so most register
 entries are weak leads. Military and underground records are the exception: an observation post or a
@@ -350,6 +352,32 @@ Derry's Ebrington Square listed buildings ("vacant since 2002, are in a poor sta
 Widley ("in a state of disrepair and has been unoccupied for some time"). `run.bat` and the public site's Deployment
 switch it on; anywhere else set `BANDOBUDDY_COMMITTEES=1`, or run it by hand with
 `bandobuddy update --source committees`.
+
+### Land of dissolved companies
+
+When a company is dissolved, whatever it still owned passes to the Crown. Land and buildings nobody wants, the
+Treasury Solicitor (or the Duchy of Lancaster's or Cornwall's) disclaims, in a notice in The Gazette giving the
+company, its number, the title and the property: about 24,000 since 2008. bandobuddy asks for the freeholds whose
+notice mentions a building worth a trip (a chapel, mill, pub, hotel, school, hall, works and the like), about
+1,000, and reads each, ten seconds apart as the Gazette's robots.txt asks: about three hours the first time, newest
+first, and only what's new after that. Each notice is read once, and its words are kept in `gazette_disclaimers.json` in the data
+folder, so a change in how they're read or judged needs nothing asked again. A property is placed by its postcode
+(postcodes.io), or failing one by its address (Nominatim, a second apart).
+
+What counts is a building by its own name: "Ebridge Mill, Happisburgh Road, North Walsham", "St. John Rigby School,
+Layhams Road, West Wickham". A disclaimed freehold belongs to nobody, so it's a good lead, shown as *Ownerless*.
+Leases aren't asked for: a disclaimed lease goes back to the landlord, and is mostly an office suite or a hotel
+that's still trading (the odd one that comes along anyway is a weak lead). Not kept: flats, units,
+garages and parking spaces, strips of land, rent charges and petrol stations, and houses, since what a dissolved
+landlord leaves behind is usually somebody's home. Nor a building word that's only the street's or the village's
+("12 Church Street", "26 Swainby Road, Trimdon Station"). `run.bat`
+switches it on; anywhere else set `BANDOBUDDY_DISCLAIMERS=1`, or run it by hand with
+`bandobuddy update --source disclaimers`.
+
+The Land Registry's list of company-owned land (the CCOD), set against Companies House, would find more: land still
+registered to a company that's since been dissolved, or that has spent years in liquidation or receivership. It
+needs an account and a signed licence from HM Land Registry, and Companies House has no bulk list of dissolved
+companies, so each would be confirmed through its API: not done yet.
 
 ### Mining overlays
 
@@ -494,7 +522,9 @@ A place shows what its reports add up to: the average difficulty, how many of th
 and for every tag how many of its reports gave it ("Trashed: 3 of 5"), each with a bar. Reports older than three years drop out (`config.REPORT_YEARS`). Hovering a
 place gives it in brief ("access 2.7/5 · got in 4/5 · trashed 3/5"). Each time a place is marked accessible or
 inaccessible it goes in its **access history** with the day, so you can see when it was last open and when it was
-sealed up. The latest report counts towards the place's *Last update*.
+sealed up. The latest report counts towards the place's *Last update*. Places you've reported on carry a small
+blue clipboard on their pin and in the list. The phone keeps its own list of them, and on opening asks the server
+which places its id has reported on, which only that id can tell.
 
 Each device has one report per place, which it can change or remove; removing it also takes its marks out of the
 history. Devices aren't identified: the app gives itself a random id, and the server keeps a different hash of it for

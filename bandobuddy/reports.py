@@ -22,6 +22,10 @@ class Invalid(ValueError):
     """A report that isn't one of the fixed choices."""
 
 
+def valid_device(device) -> bool:
+    return isinstance(device, str) and bool(_DEVICE.fullmatch(device))
+
+
 def reporter_id(device: str, key: str) -> str:
     """A device as one place sees it: the same device reporting on another place can't be told to be the same."""
     return hashlib.blake2b(f"{device}\x1f{key}".encode("utf-8"), digest_size=12).hexdigest()

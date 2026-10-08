@@ -152,13 +152,22 @@
   .pin.weak { inset:6px; opacity:.85; border-width:1.5px }
   .pin.weak .ico { stroke-width:2.4 }
   .pin.been { opacity:.55; filter:saturate(.6) }
+  /* Zoomed out, pins shrink and lighten, so the map shows between them. */
+  .pin.mid { inset:8px; border-width:1.5px; box-shadow:0 1px 3px rgba(0,0,0,.4) }
+  .pin.far { inset:11px; border-width:1.5px; box-shadow:0 1px 2px rgba(0,0,0,.35) }
+  .pin.weak.mid { inset:8px } .pin.weak.far { inset:10px; opacity:.7 }
+  .pin.far .pin-mark, .pin.far .pin-rep, .pin.far .pin-new { transform:scale(.75) }
   .pin-mark { position:absolute; bottom:-4px; right:-4px; width:16px; height:16px; border-radius:50%; background:#fff;
     color:#1c1917; display:grid; place-items:center; box-shadow:0 1px 3px rgba(0,0,0,.45) }
   .pin-mark .ico { width:11px; height:11px; stroke-width:3 }
   .pin-mark.want { color:#ca8a04 } .pin-mark.want .ico { fill:currentColor }
   .pin-mark.been { color:#15803d }
+  /* You've reported on it: a mark of its own, beside the saved one. */
+  .pin-rep { position:absolute; bottom:-4px; left:-4px; width:16px; height:16px; border-radius:50%; background:var(--me);
+    color:#fff; display:grid; place-items:center; box-shadow:0 1px 3px rgba(0,0,0,.45) }
+  .pin-rep .ico { width:10px; height:10px; stroke-width:2.6 }
   .mark { display:inline-flex; vertical-align:-2px; margin-left:6px } .mark .ico { width:15px; height:15px }
-  .mark.want { color:#ca8a04 } .mark.want .ico { fill:currentColor } .mark.been { color:#15803d }
+  .mark.want { color:#ca8a04 } .mark.want .ico { fill:currentColor } .mark.been { color:#15803d } .mark.rep { color:var(--me) }
   .act[aria-pressed="true"] { background:var(--raised); border-color:var(--accent) }
   .act.want[aria-pressed="true"] .ico { fill:currentColor }
   .bearing { display:inline-flex; align-items:center; gap:6px; margin-top:6px; padding:4px 10px 4px 6px;
@@ -181,9 +190,10 @@
   .sel { width:46px; height:46px; border-radius:50% 50% 50% 0; transform:rotate(-45deg); background:var(--c); border:3px solid #fff;
     box-shadow:-2px 3px 8px rgba(0,0,0,.45); display:grid; place-items:center }
   .sel .ico { transform:rotate(45deg); color:#fff; width:24px; height:24px }
-  .cluster { width:100%; height:100%; border-radius:50%; background:var(--c); color:#fff; display:grid; place-items:center;
-    font:700 13px/1 system-ui; border:3px solid rgba(255,255,255,.95);
-    box-shadow:0 0 0 4px color-mix(in srgb, var(--c) 35%, transparent), 0 2px 6px rgba(0,0,0,.35) }
+  /* A count of places: small, and the map showing through it. */
+  .cluster { width:100%; height:100%; border-radius:50%; background:color-mix(in srgb, var(--c) 78%, transparent);
+    color:#fff; display:grid; place-items:center; font:700 12px/1 system-ui; border:2px solid rgba(255,255,255,.9);
+    box-shadow:0 1px 4px rgba(0,0,0,.3); text-shadow:0 1px 1px rgba(0,0,0,.35) }
   .me { width:22px; height:22px; border-radius:50%; background:var(--me); border:3px solid #fff; box-shadow:0 1px 5px rgba(0,0,0,.45); position:relative }
   .me::after { content:""; position:absolute; inset:-9px; border-radius:50%; background:var(--me); opacity:.3; animation:halo 2s ease-out infinite }
   /* Which way you're facing (the compass) or heading (GPS, while moving): the dot becomes an arrow. */
@@ -616,6 +626,7 @@ const UI = {
   lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
   arrow: '<path d="M12 2.5l6.5 17.5-6.5-4.2-6.5 4.2z"/>',
   check: '<path d="M4.5 12.5l4.5 4.5L19.5 7"/>',
+  report: '<rect x="5.5" y="4.5" width="13" height="16" rx="2"/><path d="M9 4.5h6v3H9zM9 13.5l2 2 4-4"/>',
   refresh: '<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/>',
 };
 const svg = (paths, cls = "") => `<svg class="ico ${cls}" viewBox="0 0 24 24" aria-hidden="true">${paths}</svg>`;
@@ -630,6 +641,7 @@ const S = {
   list: null, listNear: null, selected: null, site: null, status: null, prevVisit: null,
   view: "list", listSnap: "peek", sort: "nearest",
   wakeLock: null, installPrompt: null, kept: {}, heading: null, compassOn: false, saved: {}, savedTab: "want", lastMap: null,
+  reported: new Set(),
   course: null, orientationOk: null, orientationAsked: false,
   loc: { wanted: false, watch: null, pos: null, follow: false, first: false, quiet: false, auto: false, paused: false, warned: false },
   me: { dot: null, acc: null },
@@ -1142,19 +1154,22 @@ function renderBaseSeg() {
 }
 
 const Z_BY_STRENGTH = { strong: 300, good: 200, weak: 0 };
-const sigOf = s => `${s.category}|${s.strength}|${s.added ? 1 : 0}|${s.name}|${savedState(s.key)}`;
+// How far out the map is, for the pins: drawn smaller the further out, so the map shows between them.
+const pinBand = () => { const z = S.map ? S.map.getZoom() : 15; return z < 11 ? "far" : z < 14 ? "mid" : ""; };
+const sigOf = s => `${s.category}|${s.strength}|${s.added ? 1 : 0}|${s.name}|${savedState(s.key)}|${S.reported.has(s.key)}`
+  + `|${pinBand()}`;
 
 function siteIcon(s) {
   const size = s.strength === "weak" ? 32 : 40;  // the pin is drawn smaller; the rest is a bigger tap target
   return L.divIcon({ className: "bb-icon", iconSize: [size, size],
-    html: `<div class="pin ${esc(s.strength)} ${savedState(s.key)}" style="--c:${colour(s.category)}">${catIcon(s.category)}${s.added ? '<i class="pin-new"></i>' : ""}${pinMark(s.key)}</div>` });
+    html: `<div class="pin ${esc(s.strength)} ${savedState(s.key)} ${pinBand()}" style="--c:${colour(s.category)}">${catIcon(s.category)}${s.added ? '<i class="pin-new"></i>' : ""}${pinMark(s.key)}</div>` });
 }
 
 function renderMap(data) {
   S.lastMap = data;
   S.clusterLayer.clearLayers();
   for (const c of data.clusters) {
-    const size = c.count < 10 ? 36 : c.count < 100 ? 42 : c.count < 1000 ? 48 : 54;
+    const size = c.count < 10 ? 26 : c.count < 100 ? 32 : c.count < 1000 ? 38 : 44;
     const m = L.marker([c.lat, c.lng], {
       keyboard: false, zIndexOffset: 400,
       icon: L.divIcon({ className: "bb-icon", iconSize: [size, size],
@@ -1638,6 +1653,7 @@ async function loadReports(site) {
     const data = await api(`/api/report?${new URLSearchParams({ key: site.key, device })}`);
     if (S.site !== site) return;
     const mine = data.mine || {};
+    markReported(site.key, !!data.mine);
     S.myReport = { site, difficulty: mine.difficulty || null, access: mine.access || null, tags: [...(mine.tags || [])],
                    said: { reported: site.reported, reported_as: site.reported_as, reported_by: site.reported_by } };
     renderReports(data);
@@ -1728,6 +1744,7 @@ async function sendReport(mine, clear) {
   try {
     const data = await api("/api/report", body);
     if (clear) Object.assign(mine, { difficulty: null, access: null, tags: [] });
+    markReported(site.key, !!data.mine);
     if (S.site === site) renderReports(data);
     toast(clear || nothing ? "Your report's removed." : "Thanks: your report's in.");
   } catch (err) {
@@ -2388,6 +2405,8 @@ function initControls() {
   $("filterBtn").addEventListener("click", () => (S.view === "filters" ? backToList() : show("filters", "full")));
   $("statusCard").addEventListener("click", () => show("data", "full"));
   S.saved = loadSaved();
+  S.reported = loadReported();
+  syncReported();
   S.kept = loadKept();
   $("keepAll").addEventListener("click", keepEverything);
   $("clearKept").addEventListener("click", clearKept);
@@ -2517,14 +2536,16 @@ function initOffline() {
 
   // The worker opened the copy of the app it kept, then fetched a newer one: switch to it now, not next time.
   navigator.serviceWorker?.addEventListener("message", e => {
+    if (e.data && e.data.type === "site-updated") { S.siteNews = e.data.key; refreshOpenSite(); return; }
     if (!e.data || e.data.type !== "page-updated") return;
     S.updateReady = true;
     reloadWhenIdle();
   });
   // ...or as soon as that wouldn't lose anything: typing done, a menu closed, the app put away.
-  document.addEventListener("focusout", () => setTimeout(reloadWhenIdle, 300));
-  document.addEventListener("visibilitychange", reloadWhenIdle);
-  setInterval(reloadWhenIdle, 5000);
+  const whenIdle = () => { reloadWhenIdle(); refreshOpenSite(); };
+  document.addEventListener("focusout", () => setTimeout(whenIdle, 300));
+  document.addEventListener("visibilitychange", whenIdle);
+  setInterval(whenIdle, 5000);
   if ("serviceWorker" in navigator && window.isSecureContext) {
     navigator.serviceWorker.register("/sw.js").catch(() => { /* fine: the app just won't work offline */ });
   }
@@ -2538,6 +2559,29 @@ function busyForUpdate() {
   return !!(a && (a.matches("input, textarea, select") || a.isContentEditable))
     || !$("navMenu").hidden || !$("layersPanel").hidden || document.body.classList.contains("dragging")
     || Date.now() - (S.reportTappedAt || 0) < 4000;
+}
+
+// The place that's open opened from what the phone kept; the server's newer word on it has come since. Show it
+// where the old one was, scrolled to the same spot, once that wouldn't lose anything (a report being sent).
+async function refreshOpenSite() {
+  const key = S.siteNews;
+  if (!key) return;
+  if (S.view !== "site" || !S.site || S.site.key !== key) { S.siteNews = null; return; }
+  if (busyForUpdate()) return;
+  S.siteNews = null;
+  let site;
+  try { site = await api(`/api/site/${encodeURIComponent(key)}`); } catch (_) { return; }
+  if (S.view !== "site" || !S.site || S.site.key !== key) return;
+  const body = document.querySelector("#sheet .sheet-body"), top = body ? body.scrollTop : 0;
+  S.site = site;
+  renderSite(site);
+  renderEntrances();
+  drawEntrances(site);
+  renderBearing();
+  loadPhotos(site);
+  loadAccess(site);
+  loadReports(site);
+  if (body) body.scrollTop = top;
 }
 
 function reloadWhenIdle() {
@@ -2836,12 +2880,38 @@ const savedState = key => (S.saved[key] || {}).state || "";
 
 function pinMark(key) {
   const state = savedState(key);
-  return state ? `<i class="pin-mark ${state}">${svg(state === "been" ? UI.check : UI.star)}</i>` : "";
+  return (state ? `<i class="pin-mark ${state}">${svg(state === "been" ? UI.check : UI.star)}</i>` : "")
+    + (S.reported.has(key) ? `<i class="pin-rep" title="You've reported on it">${svg(UI.report)}</i>` : "");
 }
 
 function listMark(key) {
   const state = savedState(key);
-  return state ? `<span class="mark ${state}" title="${state === "been" ? "Been here" : "Saved"}">${svg(state === "been" ? UI.check : UI.star)}</span>` : "";
+  return (state ? `<span class="mark ${state}" title="${state === "been" ? "Been here" : "Saved"}">${svg(state === "been" ? UI.check : UI.star)}</span>` : "")
+    + (S.reported.has(key) ? `<span class="mark rep" title="You've reported on it">${svg(UI.report)}</span>` : "");
+}
+
+// The places this phone has reported on, kept on it: each report is tied to the place, not to the phone.
+const REPORTED_KEY = "bandobuddy:reported";
+
+function loadReported() {
+  try { return new Set(JSON.parse(localStorage.getItem(REPORTED_KEY)) || []); } catch (_) { return new Set(); }
+}
+
+function markReported(key, yes) {
+  if (S.reported.has(key) === yes) return;
+  if (yes) S.reported.add(key); else S.reported.delete(key);
+  try { localStorage.setItem(REPORTED_KEY, JSON.stringify([...S.reported])); } catch (_) { /* private mode */ }
+  refreshSavedMarks();
+}
+
+// ...and asked of the server once a visit, for reports sent before this phone kept the list.
+async function syncReported() {
+  try {
+    const data = await api(`/api/report/mine?${new URLSearchParams({ device: deviceId() })}`);
+    S.reported = new Set(data.keys || []);
+    try { localStorage.setItem(REPORTED_KEY, JSON.stringify([...S.reported])); } catch (_) { /* private mode */ }
+    refreshSavedMarks();
+  } catch (_) { /* offline: the phone's own list will do */ }
 }
 
 function remember(site, patch) {

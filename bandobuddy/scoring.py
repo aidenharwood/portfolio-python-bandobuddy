@@ -96,6 +96,8 @@ def _condition_from(evidence: str) -> str | None:
         return "Heritage site"
     if "demolition approved" in text:
         return "Demolition approved"
+    if "ownerless" in text:            # the Crown disclaimed a dissolved company's freehold
+        return "Ownerless"
     if "as cleared vacant land" in text:
         return "Vacant land"
     if "new use" in text:
