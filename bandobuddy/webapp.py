@@ -650,13 +650,31 @@ def run_scheduler(updater: Updater, stop: threading.Event, check_every: float = 
         stop.wait(check_every)
 
 
+def already_running(port: int) -> bool:
+    """Is bandobuddy already answering on this port, on this computer?"""
+    try:
+        resp = requests.get(f"http://127.0.0.1:{port}/api/status", timeout=3)
+        return resp.ok and "sites_version" in resp.json()
+    except (requests.RequestException, ValueError):
+        return False
+
+
 def serve(data_dir: Path, port: int = DEFAULT_PORT, open_browser: bool = True, auto_update: bool = True,
           session_factory: Callable[[], requests.Session] = requests.Session, host: str = "0.0.0.0",
-          read_only: bool = False, allowed_hosts: Iterable[str] = ()) -> None:
+          read_only: bool = False, allowed_hosts: Iterable[str] = ()) -> bool:
+    """Serve the map until stopped. False if it didn't start, because a copy is already running here."""
+    container = in_container()
+    # A second copy would share the database and update it too, and on Windows it can even share the port, with the
+    # older copy still answering. So open the one that's running instead.
+    if not container and port and already_running(port):
+        print(f"bandobuddy is already running at http://127.0.0.1:{port}/, so this copy won't start another.\n"
+              "To restart it (to pick up an update, say), close its window first.")
+        if open_browser:
+            webbrowser.open(f"http://127.0.0.1:{port}/")
+        return False
     store = Store(data_dir / DB_NAME)
     updater = Updater(store, data_dir, session_factory=session_factory)
     app = App(store, updater, session_factory, read_only=read_only)
-    container = in_container()
     if not container:  # e.g. desktop.example.com on a work network
         allowed_hosts = [*allowed_hosts, socket.gethostname(), socket.getfqdn()]
     # In a container the published port is fixed, so never quietly move to another one.
@@ -698,3 +716,4 @@ def serve(data_dir: Path, port: int = DEFAULT_PORT, open_browser: bool = True, a
             updater.pause(src)
         updater.join(timeout=20)
         server.server_close()
+    return True

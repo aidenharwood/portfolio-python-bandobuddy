@@ -55,6 +55,18 @@ class WebAppTests(unittest.TestCase):
         payload = json.loads(raw) if ctype.startswith("application/json") else raw
         return resp.status, payload, resp
 
+    def test_a_second_copy_opens_the_first(self):
+        # Two copies would share the database, and on Windows even the port, with the older one still answering.
+        self.assertTrue(webapp.already_running(self.port))
+        with mock.patch.object(webapp.webbrowser, "open") as opened, \
+                mock.patch.object(webapp, "in_container", return_value=False), mock.patch("builtins.print"):
+            self.assertFalse(webapp.serve(self.tmp, port=self.port))
+        opened.assert_called_once_with(f"http://127.0.0.1:{self.port}/")
+        with socket.socket() as spare:
+            spare.bind(("127.0.0.1", 0))
+            free = spare.getsockname()[1]
+        self.assertFalse(webapp.already_running(free))
+
     def test_a_page_that_stopped_waiting(self):
         # The browser drops a map request when the map moves on; that's not worth a stack trace.
         import email.message

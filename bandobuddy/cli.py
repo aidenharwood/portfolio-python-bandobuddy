@@ -144,10 +144,10 @@ def main(argv: list[str] | None = None) -> int:
 
     from .webapp import serve
 
-    serve(args.data_dir, port=args.port, open_browser=not args.no_browser, auto_update=not args.no_auto_update,
-          host=args.host, read_only=args.public,
-          allowed_hosts=(args.allowed_host or []) + _env_list("BANDOBUDDY_ALLOWED_HOSTS"))
-    return 0
+    started = serve(args.data_dir, port=args.port, open_browser=not args.no_browser,
+                    auto_update=not args.no_auto_update, host=args.host, read_only=args.public,
+                    allowed_hosts=(args.allowed_host or []) + _env_list("BANDOBUDDY_ALLOWED_HOSTS"))
+    return 0 if started else 1      # run.bat then waits, so its message can be read
 
 
 if __name__ == "__main__":

@@ -30,7 +30,7 @@ import requests
 
 from . import committees, registers
 from .config import USER_AGENT
-from .geo import bng_to_wgs84
+from .geo import bng_to_wgs84, haversine_m
 from .osm import Cancelled
 
 PAGE = 1000
@@ -1282,6 +1282,59 @@ _OLD_MAP_WORDS = ("mill", "kiln", "works", "chapel", "church", "school", "smithy
                   "lighthouse")
 
 
+# A quarry the map shows air shafts beside was worked underground: Bethel Quarry, under Bradford-on-Avon, is a
+# "Quarry" by Frome Road with "Air Shaft"s across the hill, and in no other open source. (Railway tunnels have air
+# shafts too, so a quarry by one is a false lead now and then. So do mines: not one with a mine's old shafts
+# or levels near.)
+_QUARRY_LABELS = ("quarry", "quarries", "old quarry", "old quarries", "quarry (disused)", "stone quarry")
+_SHAFT = re.compile(r"\b(?:air|slope|ventilating|ventilation) shafts?\b", re.I)
+# ...unless the shafts are a mine's: a quarry in a lead or coal field, with old shafts and levels all round.
+_MINE = re.compile(r"\bold shafts?\b|\bshafts? \(disused\)|\b(?:old )?levels?\b(?! crossing)|\blevel \(disused\)"
+                   r"|\bmines?\b|\badits?\b|engine house|\bwhim\b|\bcoal pits?\b", re.I)
+UNDERGROUND_WITHIN_M = 500
+
+
+@dataclass
+class OldMaps:
+    """GB1900's labels, from the National Library of Scotland's map server: those _old_map judges, then every
+    quarry with an air shaft within UNDERGROUND_WITHIN_M, marked as worked underground."""
+
+    url: str = "https://geoserver.nls.uk/geoserver/wfs"
+    layer: str = "nls:gb1900_21_December"
+
+    def _ask(self, where: str) -> WFS:
+        return WFS(self.url, self.layer, fields="pin_id,final_text,latitude,longitude,parish", sort_by="pin_id",
+                   where=where, lat_field="latitude", lng_field="longitude")
+
+    def __call__(self, session: requests.Session, progress: Progress, cancel=None) -> Records:
+        yield from self._ask(_old_map_where())(session, progress, cancel)
+        quarries = "final_text_lower IN ({})".format(", ".join(f"'{q}'" for q in _QUARRY_LABELS))
+        others = " OR ".join(f"final_text_lower LIKE '%{w}%'" for w in ("shaft", "level", "mine", "adit", "engine house",
+                                                                       "whim", "coal pit"))
+        found, shafts, mines = [], {}, {}
+        for row in self._ask(f"{quarries} OR {others}")(session, progress, cancel):
+            text = (row.get("final_text") or "").strip()
+            cell = (round(row["lat"], 2), round(row["lng"], 2))
+            if _SHAFT.search(text):
+                shafts.setdefault(cell, []).append(row)
+            elif _MINE.search(text):
+                mines.setdefault(cell, []).append(row)
+            elif text.lower() in _QUARRY_LABELS:
+                found.append(row)
+        for quarry in found:
+            near = _near(quarry, shafts)
+            if near and not _near(quarry, mines):
+                yield {**quarry, "air_shafts": len(near)}
+
+
+def _near(row: dict, cells: dict) -> list[dict]:
+    """What's in `cells` (rows by position to 0.01 degrees) within UNDERGROUND_WITHIN_M of the row."""
+    la, ln = round(row["lat"], 2), round(row["lng"], 2)
+    return [s for dla in (-0.01, 0, 0.01) for dln in (-0.01, 0, 0.01)
+            for s in cells.get((round(la + dla, 2), round(ln + dln, 2)), ())
+            if haversine_m(row["lat"], row["lng"], s["lat"], s["lng"]) <= UNDERGROUND_WITHIN_M]
+
+
 def _old_map_where() -> str:
     like = "final_text_lower LIKE '{}'".format
     old = " OR ".join(like(f"%{w}%") for w in _OLD_MAP_WORDS)
@@ -1321,6 +1374,21 @@ def _old_map(row: dict) -> dict | None:
     disused or ruined."""
     label = re.sub(r"\s+", " ", row.get("final_text") or "").strip()
     lower = label.lower()
+    lat, lng = float(row["lat"]), float(row["lng"])
+    if row.get("air_shafts"):
+        parish = (row.get("parish") or "").strip().title()
+        shafts = row["air_shafts"]
+        return {
+            "ref": str(row.get("pin_id") or ""),
+            "name": f"Underground quarry, {parish}" if lower in _QUARRY_LABELS and parish else label,
+            "kind": "underground quarry",
+            "weight": 20,
+            "evidence": f"The Ordnance Survey six-inch map of {OLD_MAP_YEARS[0]}-{OLD_MAP_YEARS[1]} marks \"{label}\" "
+                        f"here, with {shafts} air shaft{'' if shafts == 1 else 's'} within {UNDERGROUND_WITHIN_M} m: worked "
+                        "underground",
+            "url": f"https://maps.nls.uk/projects/os1900/#zoom=17.0&lat={lat:.5f}&lon={lng:.5f}",
+            "dates": [("on the map by", OLD_MAP_YEARS[1])],
+        }
     ruined = bool(re.search(r"\bruins?\b|\(in ruins?\)", lower))
     disused = "(disused)" in lower or lower.startswith("old ")
     base = _OLD_MAP_SAID.sub(" ", label).strip()
@@ -1337,7 +1405,6 @@ def _old_map(row: dict) -> dict | None:
     name = _OLD_MAP_SAID.sub(" ", label).strip()
     name = name if any(c.isupper() for c in name) else name.title()
     then = " (in ruins even then)" if ruined else " (disused even then)" if disused else ""
-    lat, lng = float(row["lat"]), float(row["lng"])
     return {
         "ref": str(row.get("pin_id") or ""),
         "name": name,
@@ -1483,9 +1550,7 @@ DATASETS = {
             attribution="GB1900 gazetteer: Great Britain Historical GIS, University of Portsmouth, the GB1900 partners "
                         "and volunteers; served by the National Library of Scotland",
             home="https://www.visionofbritain.org.uk/data/#tabgb1900",
-            fetch=WFS("https://geoserver.nls.uk/geoserver/wfs", "nls:gb1900_21_December",
-                      fields="pin_id,final_text,latitude,longitude", sort_by="pin_id", where=_old_map_where(),
-                      lat_field="latitude", lng_field="longitude"),
+            fetch=OldMaps(),
             judge=_old_map,
             every_days=90,     # the transcription's finished: six pages a season is plenty
         ),
