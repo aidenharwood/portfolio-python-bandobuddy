@@ -14,7 +14,7 @@
 self.LocalDB = (() => {
   const NAME = "bandobuddy";
   const MAP_SITE_LIMIT = 400;   // store.py: more than this in view and the map shows clusters
-  const CLUSTER_PX = 64;        // store.py: how wide a cluster cell is on screen
+  const CLUSTER_PX = 80;        // store.py: how wide a cluster cell is on screen
   const LIST_LIMIT = 100;       // webapp.py
   const EARTH_RADIUS_M = 6371008.8;
   const HELD_SQUARES = 60;      // 1° squares of the index held in memory between questions

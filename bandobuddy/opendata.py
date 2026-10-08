@@ -28,7 +28,7 @@ from urllib.parse import urljoin
 
 import requests
 
-from . import committees, registers
+from . import committees, gazette, registers
 from .config import USER_AGENT
 from .geo import bng_to_wgs84, haversine_m
 from .osm import Cancelled
@@ -1417,6 +1417,61 @@ def _old_map(row: dict) -> dict | None:
     }
 
 
+# -- the Crown's disclaimers of dissolved companies' land (gazette.py) -------------------------------------------
+
+# What the property is, from its own words rather than its street's: "The Old Chapel, Chapel Street" is a chapel,
+# "12 Church Street" isn't.
+_STREET = re.compile(r"\b[\w'.-]+ (?:street|road|lane|way|avenue|close|place|row|walk|hill|square|terrace|drive"
+                     r"|gardens|grove|court|mews|yard|green|crescent|parade|wharf|rise|vale|end|side|chase|ridge"
+                     r"|meadows?|fields?|park)\b", re.I)
+_DISCLAIMED_KINDS = [(re.compile(r"\bmills?\b", re.I), "mill"),
+                     (re.compile(r"\bworks\b|factory|foundry", re.I), "industrial building"),
+                     (re.compile(r"hospital|infirmary", re.I), "hospital"),
+                     (re.compile(r"\bstation\b", re.I), "station"),
+                     (re.compile(r"\bhall\b", re.I), "hall")] + _PLANNED_KINDS
+# Not a building to go and see: a flat or a unit in one, a parking space, a strip of land, the airspace above.
+_NOT_A_BUILDING = re.compile(r"^(?:flat|apartment|maisonette|unit|plot|parking|garage|car park|store|bin store|land"
+                             r"|strip|roadway|verge|access|airspace|roof|basement|kiosk|substation)\b"
+                             r"|\bflats? \d|\bapartments?\b|\bmaisonette|\bunit \d|parking space|\bgarages?\b|\bplots?\b"
+                             r"|\bairspace\b|\bverges?\b|\broadway\b|strip of land|\bsubstation\b"
+                             r"|service station|filling station|petrol|forecourt|rent ?charge", re.I)
+
+
+def _disclaimer(row: dict) -> dict | None:
+    """A building that belonged to a dissolved company and that the Crown, which then owned it, disclaimed."""
+    prop = (row.get("property") or "").strip()
+    if not prop or _NOT_A_BUILDING.search(prop):
+        return None
+    # Its own name, the first part of the address ("Ebridge Mill, Happisburgh Road, ..."); not the village it's in
+    # ("26 Swainby Road, Trimdon, Trimdon Station").
+    part = next((p.strip(" ()") for p in _POSTCODE.sub("", prop).split(",") if p.strip(" ()")), "")
+    kind = next((k for rx, k in _DISCLAIMED_KINDS if rx.search(_STREET.sub("", part))), None)
+    if not kind:
+        return None                 # a house, an office: what a dissolved landlord leaves, not a place to explore
+    freehold = (row.get("interest") or "").lower() == "freehold"
+    company = _title(row.get("company") or "") or "a company"
+    number = row.get("number")
+    dissolved = row.get("dissolved")
+    signed = row.get("signed") or row.get("published")
+    when = f" in {dissolved[:4]}" if dissolved else ""
+    if freehold:
+        said = (f"The Crown disclaimed it{f' on {signed}' if signed else ''}: {company}, which owned the freehold, was "
+                f"dissolved{when} and nobody took it on, so it's ownerless")
+    else:
+        said = (f"{company}, which held the lease, was dissolved{when}, and the Crown disclaimed the lease"
+                f"{f' on {signed}' if signed else ''}: it went back to the landlord")
+    return {
+        "ref": str(row.get("id") or ""),
+        "name": part[:90],
+        "kind": kind,
+        "weight": 20 if freehold else 12,
+        "evidence": f"{said} (The Gazette{f', title {row['title']}' if row.get('title') else ''})",
+        "url": row.get("url"),
+        "aliases": [f"{company} ({number})"] if number else [],
+        "dates": [("dissolved", dissolved), ("disclaimed", signed)],
+    }
+
+
 CANMORE_TERMS = ("OBSERVATION POST", "BUNKER", "PILLBOX", "BATTERY", "AIRFIELD", "AERODROME", "COLLIERY",
                  "MINE", "QUARR", "ADIT", "TUNNEL", "VIADUCT", "RAILWAY STATION", "MILL", "FACTORY", "FOUNDRY",
                  "BREWERY", "DISTILLERY", "ENGINE HOUSE", "IRONWORKS", "BRICKWORKS", "GASWORKS", "STEELWORKS",
@@ -1499,6 +1554,18 @@ DATASETS = {
             judge=_committee,
             incremental=True,
             opt_in=True,
+            remembers=True,
+        ),
+        Dataset(
+            key="disclaimers",
+            label="Dissolved companies' land the Crown disclaimed",
+            licence="Open Government Licence v3.0",
+            attribution="Contains notices from The Gazette, Crown copyright, under the Open Government Licence",
+            home="https://www.thegazette.co.uk/all-notices/notice?noticetypes=2603",
+            fetch=gazette.Disclaimers(),
+            judge=_disclaimer,
+            incremental=True,
+            opt_in=True,       # ten seconds between requests, as the Gazette asks: hours to read them all
             remembers=True,
         ),
         Dataset(

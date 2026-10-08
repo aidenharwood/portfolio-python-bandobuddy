@@ -200,16 +200,23 @@ async function view(request) {
   }
 }
 
-// One place: what the phone kept, straight away, while the server's newer word is fetched and kept for next
-// time; or the server, when nothing's kept (and keep what it says); otherwise what the phone knows.
+// One place: what the phone kept, straight away, while the server's newer word is fetched and kept; when that
+// says something different, the page is told, so the place open on it shows it now rather than next time. Or
+// the server, when nothing's kept (and keep what it says); otherwise what the phone knows.
 async function place(request, event) {
   const kept = LocalDB.detail(decodeURIComponent(new URL(request.url).pathname.slice("/api/site/".length)))
     .catch(() => null);
   if (await kept && navigator.onLine) {
-    event.waitUntil(fetch(request).then(r => (r.ok ? r.json() : null))
-      .then(site => site && LocalDB.putDetails([site])).catch(() => {}));
     const answer = await fromPhoneFirst(request.url);
-    if (answer) return answer;
+    if (answer) {
+      const shown = answer.clone().json().catch(() => null);
+      event.waitUntil(fetch(request).then(r => (r.ok ? r.json() : null)).then(async site => {
+        if (!site) return;
+        await LocalDB.putDetails([site]);
+        if (said(await shown) !== said(site)) await tell({ type: "site-updated", key: site.key });
+      }).catch(() => {}));
+      return answer;
+    }
   }
   try {
     const response = await patience(fetch(request), (await kept) ? SLOW_MS : 0);
@@ -274,6 +281,11 @@ border:0;border-radius:10px;background:#fb923c;color:#1a1206;font:inherit;font-w
 <body><div><h1>bandobuddy</h1><p>You're offline, and this phone doesn't have the app saved yet.<br>
 Open it once with a signal and it'll work offline after that.</p>
 <button onclick="location.reload()">Try again</button></div></body></html>`;
+
+// What a place's page says, to tell whether the server's word on it has changed.
+const said = site => JSON.stringify(site && [site.name, site.score, site.strength, site.condition, site.kind,
+  site.category, site.reasons, site.reported, site.reported_as, site.reported_by, site.report, site.aliases,
+  site.entrances, site.detail && site.detail.last_reported]);
 
 async function tell(message) {
   for (const client of await self.clients.matchAll({ type: "window" })) client.postMessage(message);

@@ -289,6 +289,15 @@ class App:
         key, device = (qs.get("key") or [""])[0], (qs.get("device") or [""])[0]
         return self._reports_of(key, device)
 
+    def my_reports(self, qs: dict) -> dict:
+        """The places this device has reported on. Nothing stored links them: each report is tested against the
+        device's id, which only the device knows."""
+        device = (qs.get("device") or [""])[0]
+        if not reports.valid_device(device):
+            raise ApiError(400, "This device has no id")
+        return {"keys": sorted({key for key, reporter in self.store.report_pairs()
+                                if reporter == reports.reporter_id(device, key)})}
+
     def _reports_of(self, key: str, device: str) -> dict:
         rows, history = self.store.reports_for(key)
         reporter = reports.reporter_id(device, key) if device else None
@@ -570,6 +579,8 @@ def make_handler(app: App, allowed_hosts: Iterable[str] = ()) -> type[BaseHTTPRe
                 self._dispatch(lambda: app.photos(qs))
             elif path == "/api/report":
                 self._dispatch(lambda: app.reports(qs))
+            elif path == "/api/report/mine":
+                self._dispatch(lambda: app.my_reports(qs))
             elif path == "/api/access":
                 self._dispatch(lambda: app.access(qs))
             elif path == "/api/search":
