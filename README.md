@@ -90,7 +90,6 @@ docker build --target test .
 | `BANDOBUDDY_NO_AUTO_UPDATE` | off | Don't refresh the data on a schedule |
 | `BANDOBUDDY_PLANIT` | off (on in `run.bat`) | Also sweep UK PlanIt weekly for demolition applications (see below) |
 | `BANDOBUDDY_COMMITTEES` | off (on in `run.bat`) | Also read councils' planning committee reports weekly (see below) |
-| `BANDOBUDDY_DISCLAIMERS` | off (on in `run.bat`) | Also read The Gazette's notices of the Crown disclaiming dissolved companies' land (see below) |
 | `BANDOBUDDY_NHS_ESTATES` | off | Also read NHS England's estates return for empty NHS sites (see below: its file host asks robots to stay away) |
 
 The refresh interval (7 days by default) is set in the app's **Data** panel, or with `bandobuddy update` from any scheduler. `/healthz` returns `{"ok": true, ...}` for container and Kubernetes health checks.
@@ -214,7 +213,7 @@ Wi-Fi is set to a *Private* network.
 | [NHS estates return (ERIC)](https://digital.nhs.uk/data-and-information/publications/statistical/estates-returns-information-collection) (optional, off by default) | England | OGL v3 | NHS sites standing wholly or mostly empty |
 | [UK PlanIt](https://www.planit.org.uk/) (optional, off by default) | UK | Planning register data | Applications to demolish buildings described as derelict, empty or redundant; applications that call a building derelict or falling down; houses begun and never finished |
 | Planning committee reports (optional, off by default) | 197 councils | Council papers, mostly OGL | A planning officer's own sentence saying the building on a site stands empty, unfinished or derelict |
-| [Crown disclaimers](https://www.thegazette.co.uk/all-notices/notice?noticetypes=2603) in The Gazette (optional, off by default) | England and Wales | OGL v3 | Buildings that belonged to dissolved companies, which the Crown disclaimed: nobody owns them |
+| [Crown disclaimers](https://www.thegazette.co.uk/all-notices/notice?noticetypes=2603) in The Gazette | England and Wales | OGL v3 | Buildings that belonged to dissolved companies, which the Crown disclaimed: nobody owns them |
 
 A national register saying a place exists isn't the same as saying it's abandoned, so most register
 entries are weak leads. Military and underground records are the exception: an observation post or a
@@ -370,9 +369,8 @@ Leases aren't asked for: a disclaimed lease goes back to the landlord, and is mo
 that's still trading (the odd one that comes along anyway is a weak lead). Not kept: flats, units,
 garages and parking spaces, strips of land, rent charges and petrol stations, and houses, since what a dissolved
 landlord leaves behind is usually somebody's home. Nor a building word that's only the street's or the village's
-("12 Church Street", "26 Swainby Road, Trimdon Station"). `run.bat`
-switches it on; anywhere else set `BANDOBUDDY_DISCLAIMERS=1`, or run it by hand with
-`bandobuddy update --source disclaimers`.
+("12 Church Street", "26 Swainby Road, Trimdon Station"). It's on by default, like the other registers; run it
+by hand with `bandobuddy update --source disclaimers`.
 
 The Land Registry's list of company-owned land (the CCOD), set against Companies House, would find more: land still
 registered to a company that's since been dissolved, or that has spent years in liquidation or receivership. It
