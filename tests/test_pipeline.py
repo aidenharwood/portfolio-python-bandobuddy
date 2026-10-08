@@ -224,6 +224,39 @@ class UpdaterTests(unittest.TestCase):
         # Reused the split boxes from last time: no timeouts, no re-splitting.
         self.assertEqual(up.store.tile_counts("wikidata"), {"done": 4})
 
+    def test_two_rebuilds_at_once_in_one_process(self):
+        # The map rebuilt at start-up while a source asked for one: each wrote "sites_next_<pid>" and one dropped
+        # the other's ("no such table: sites_next_12884"), and the source failed with it.
+        import threading
+        tmp = Path(tempfile.mkdtemp())
+        up = make_updater(tmp)
+        up.run("osm")
+        site = up.store.full_sites(min_score=0)[0]
+        errors = []
+
+        def swap():
+            try:
+                for _ in range(5):
+                    up.store.replace_sites([site])
+            except Exception as exc:   # noqa: BLE001
+                errors.append(exc)
+        threads = [threading.Thread(target=swap) for _ in range(3)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(errors, [])
+        # A rebuild a source asks for along the way that fails anyway: logged, and the source carries on.
+        logged = []
+        up.log = logged.append
+        with mock.patch("bandobuddy.updater.build_sites", side_effect=RuntimeError("disk full")):
+            up._last_rebuild = 0
+            up.rebuild()
+            up._last_rebuild = 0
+            with self.assertRaises(RuntimeError):
+                up.rebuild(force=True)          # ...but one asked for outright says so
+        self.assertEqual(logged, ["map rebuild failed - RuntimeError: disk full"])
+
     def test_a_crawl_that_stopped_before_queuing_its_boxes(self):
         # Wikidata, 7 October 2026: an update stopped before it queued its boxes (the database busy, perhaps); the
         # next one resumed it, found only the last crawl's boxes, all done, fetched nothing and took all 49,675

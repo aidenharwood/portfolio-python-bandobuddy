@@ -12,6 +12,7 @@ import json
 import math
 import os
 import re
+import threading
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -360,8 +361,8 @@ class Store:
             return
         # Written beside the map in use, a batch at a time, then swapped in at once. Written in one go, 160,000
         # places held the database for over a minute, and every source refreshing meanwhile gave up waiting.
-        # Readers see the old map until the swap. Named for this process: another may be rebuilding too.
-        table = f"sites_next_{os.getpid()}"
+        # Readers see the old map until the swap. Named for this process and thread: another may be rebuilding too.
+        table = f"sites_next_{os.getpid()}_{threading.get_ident()}"
         with self.connect() as db:
             db.execute(f"DROP TABLE IF EXISTS {table}")
             db.execute(f"CREATE TABLE {table} {SITES_DDL}")

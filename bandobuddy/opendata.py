@@ -376,6 +376,14 @@ STALLED_PHRASES = ("unfinished dwelling", "unfinished house", "unfinished buildi
 CARAVAN_SEARCH = " or ".join(f"{home} {work}" for home in ("caravan", '"mobile home"')
                              for work in ("renovated", "renovation", "renovating", "refurbishment", "refurbished"))
 
+# A house approved for conversion into flats, and applied for again a year and a half later: the conversion was
+# never done, and the house may well stand empty meanwhile. Golden Hill, Belbins, near Romsey: a mansion built in
+# 2004 and never lived in, approved for conversion into flats in 2019 and 2022, and applied for again in 2025. About
+# 12,000 since 2000, asked for in full the first time (date by date, under PlanIt's 5,000 a search), then only
+# what's new each week. People revise their plans for houses they still live in, so it's a weak lead on its own.
+CONVERSION_SEARCH = ('"conversion of existing house" flats or "conversion of house" flats or "conversion of existing '
+                     'dwelling" flats or "conversion of existing house" dwellings or "conversion of house" dwellings')
+
 
 def _quoted(words) -> list[str]:
     return [f'"{w}"' if " " in w else w for w in words]
@@ -412,6 +420,9 @@ class PlanIt:
     windows: tuple = ("recent", "decided")   # made lately, and decided lately
     stalled: str = " or ".join(_quoted(STALLED_PHRASES))   # asked for in full, every time: a page or so
     caravans: str = CARAVAN_SEARCH                           # ...and these: two pages
+    conversions: str = CONVERSION_SEARCH                     # ...and these, all of them once: forty-odd pages
+    since: str = "2000-01-01"
+    slice_max: int = 4500          # PlanIt answers up to 5,000 a search: more, and the dates are split in two
     batch: int = 300
     gap_s: float = 61
     follow_ups: int = 90           # houses looked up again each run, at most: an hour and a half
@@ -445,6 +456,7 @@ class PlanIt:
         today = date.today()
         due: dict[str, tuple[str, dict]] = {}        # houses to look up again, and when they last were
         asked = False
+        paced = {"asked": False}                       # shared with the conversions, below
         asks = [(self.search, window, {"recent": "new applications", "decided": "decisions"}[window])
                 for window in self.windows]
         asks += [(search, None, what) for search, what in ((self.stalled, "unfinished and unlivable buildings"),
@@ -480,6 +492,11 @@ class PlanIt:
                 if len(records) < self.batch or (isinstance(total, int) and done >= total):
                     break
                 page += 1
+        # Then houses approved for conversion into flats and applied for again since.
+        if self.conversions:
+            paced["asked"] = asked
+            yield from self._conversions(session, progress, cancel, data_dir, paced)
+            asked = paced["asked"]
         # Then the houses that should have been sorted out by now: those never looked up first, then the longest
         # since, and the newest applications before the oldest.
         queue = sorted(due.items(), key=lambda kv: kv[1][1].get("start_date") or "", reverse=True)
@@ -499,6 +516,64 @@ class PlanIt:
             progress("houses looked up again for anything since, a minute apart", n, len(queue))
             if later != row.get("later"):
                 yield {**row, "later": later}
+
+    def _conversions(self, session: requests.Session, progress: Progress, cancel, data_dir, paced: dict) -> Records:
+        """Every application to convert a house into flats, kept in the data folder: all of them the first time,
+        a slice of dates at a time (a stopped run carries on where it was), then the last fortnight's each run.
+        Yields each house approved for conversion and applied for again since."""
+        path = Path(data_dir) / "planit_conversions.json" if data_dir else None
+        memory = _load(path, {"apps": {}, "pending": None, "backfilled": False})
+        if memory["pending"] is None and not memory["backfilled"]:
+            memory["pending"] = [[self.since, date.today().isoformat()]]
+
+        def ask(params: dict) -> dict:
+            _stop(cancel)
+            if paced["asked"]:
+                self._wait(cancel, self.gap_s)
+            paced["asked"] = True
+            return self._ask(session, {"search": self.conversions, "pg_sz": self.batch, "select": self.FIELDS,
+                                       "sort": "start_date", "compress": "on", **params}, cancel)
+
+        def keep(records: list) -> None:
+            for row in records:
+                if row.get("location_x") is not None and row.get("location_y") is not None and row.get("name"):
+                    memory["apps"][str(row["name"])] = {k: row.get(k) for k in (
+                        "name", "address", "description", "app_state", "start_date", "decided_date", "url", "link",
+                        "location_x", "location_y")}
+
+        while memory["pending"]:           # the first time: every one, a slice of dates at a time
+            start, end = memory["pending"][0]
+            page = 1
+            while True:
+                data = ask({"start_date": start, "end_date": end, "page": page})
+                total = data.get("total")
+                if page == 1 and isinstance(total, int) and total > self.slice_max:
+                    middle = (date.fromisoformat(start) + (date.fromisoformat(end) - date.fromisoformat(start)) / 2)
+                    memory["pending"][:1] = [[start, middle.isoformat()],
+                                             [(middle + timedelta(days=1)).isoformat(), end]]
+                    break
+                records = data.get("records") or []
+                keep(records)
+                progress("applications to convert houses into flats, a minute between pages", len(memory["apps"]),
+                         None)
+                if len(records) < self.batch or (isinstance(total, int) and page * self.batch >= total):
+                    memory["pending"].pop(0)
+                    break
+                page += 1
+            _save(path, memory)
+        if not memory["backfilled"]:
+            memory["backfilled"] = True
+        else:                              # since: what's been applied for, and decided, lately
+            for window in self.windows:
+                page = 1
+                while True:
+                    records = ask({window: self.days, "page": page}).get("records") or []
+                    keep(records)
+                    if len(records) < self.batch:
+                        break
+                    page += 1
+        _save(path, memory)
+        yield from _converted_again(memory["apps"].values())
 
     def _since(self, session: requests.Session, row: dict, cancel) -> list[dict]:
         """What's been applied for at the same house since that says the work never got done."""
@@ -984,11 +1059,88 @@ def _excerpt(said: str, focus: re.Match | None, size: int = 160) -> str:
     return ("…" if start else "") + said[start:start + size] + ("…" if start + size < len(said) else "")
 
 
+_NUMBERS = {w: n for n, w in enumerate("one two three four five six seven eight nine ten eleven twelve thirteen "
+                                        "fourteen fifteen sixteen seventeen eighteen nineteen twenty".split(), 1)}
+_INTO = re.compile(r"\binto (?:(\d+)|(" + "|".join(_NUMBERS) + r"))\s+(?:no\.?\s+)?(?:[\w-]+\s+){0,2}?"
+                   r"(?:flats|dwellings|apartments|units|homes)\b", re.I)
+
+
+def _units(said: str) -> int | None:
+    m = _INTO.search(said)
+    if not m:
+        return None
+    return int(m.group(1)) if m.group(1) else _NUMBERS[m.group(2).lower()]
+
+
+def _house_key(app: dict) -> str | None:
+    """Which house an application's about: its council, and the start of its address ("TestValley|golden hill
+    belbins"), however the address goes on."""
+    words = re.findall(r"[a-z0-9]+", _NEAR.sub("", _POSTCODE.sub(" ", app.get("address") or "").strip()).lower())
+    council = str(app.get("name") or "").split("/", 1)[0]
+    return f"{council}|{' '.join(words[:3])}" if len(words) >= 2 and council else None
+
+
+def _converted_again(apps) -> Records:
+    """Each house approved for conversion into three or more flats, and applied for again at least a year and a
+    half after: the conversion was never carried out."""
+    houses: dict[str, list[dict]] = {}
+    for app in apps:
+        said = _said(app)
+        if _FOLLOW_UP.search(said) or _NO_DECISION.search(said) or (_units(said) or 3) < 3:
+            continue                       # a house split in two is ordinary
+        key = _house_key(app)
+        if key:
+            houses.setdefault(key, []).append(app)
+    for key, group in houses.items():
+        group.sort(key=lambda a: a.get("start_date") or "")
+        lapsed = []
+        for i, app in enumerate(group):
+            if _PLANIT_DECIDED.get(app.get("app_state") or "") != "approved" or not app.get("decided_date"):
+                continue
+            try:
+                due = date.fromisoformat(app["decided_date"][:10]) + timedelta(days=SORTED_OUT_DAYS)
+            except ValueError:
+                continue
+            if any((later.get("start_date") or "")[:10] >= due.isoformat() for later in group[i + 1:]):
+                lapsed.append(app)
+        if lapsed:
+            last = group[-1]
+            yield {"conversions": group, "lapsed": lapsed, "house": key, "name": last["name"],
+                   "address": last.get("address"), "url": last.get("url") or last.get("link"),
+                   "lat": float(last["location_y"]), "lng": float(last["location_x"])}
+
+
+def _conversion(row: dict) -> dict:
+    """A house approved for conversion into flats, and applied for again since: it was never converted."""
+    lapsed, last = row["lapsed"], row["conversions"][-1]
+    years = [a["decided_date"][:4] for a in lapsed]
+    approved = " and ".join(dict.fromkeys(years))
+    never = {1: "it was never", 2: "neither was"}.get(len(lapsed), "none was")
+    said = (f"Planning applications to convert it into flats: approved in {approved}, and applied for again in "
+            f"{(last.get('start_date') or '')[:4]}, so {never} carried out")
+    parts = [_POSTCODE.sub("", p).strip(" ,") for p in (row.get("address") or "").split(",")]
+    name = ", ".join([p for p in parts if p][:2])
+    if len(name) > 60:
+        name = name[:60].rsplit(" ", 1)[0]
+    return {
+        "ref": f"conversions/{row['house']}",
+        "name": name,
+        "kind": "house",
+        "weight": 16 if len(lapsed) > 1 else 12,
+        "evidence": f"{said} (latest: \"{_excerpt(_said(last), None, 120)}\")",
+        "url": row.get("url"),
+        "dates": [("applied for", (last.get("start_date") or "")[:10] or None),
+                  ("decided", (last.get("decided_date") or "")[:10] or None)],
+    }
+
+
 def _planit(row: dict) -> dict | None:
     """A planning application worth knowing about: one to demolish something derelict, empty or
     redundant; one that calls the building itself derelict or falling down, or unfit to live in; one about a
     house begun and never finished, or never lived in; or one to live in a caravan on the plot while the house
-    is done up."""
+    is done up. Or a house approved for conversion into flats and applied for again since (_converted_again)."""
+    if row.get("conversions"):
+        return _conversion(row)
     said = _said(row)
     stalled, unlivable, doing_up = _house_state(said)
     # Advice before applying decides nothing, but an application that calls a house unlivable still says so.

@@ -313,6 +313,15 @@ because the building has probably gone or is going. `run.bat` switches it on; an
 `BANDOBUDDY_PLANIT=1` (the Docker image leaves it off; the public site's Deployment sets it), or run it by hand with
 `bandobuddy update --source planit`. A pilot sweep found 43 leads in a fortnight across the UK.
 
+It also keeps every application to convert a house into flats, about 12,000 since 2000: all of them the first
+time, in slices of dates small enough for PlanIt's 5,000 a search (a stopped run carries on where it was), then the
+fortnight's new ones each run, kept in `planit_conversions.json` in the data folder. A house approved for conversion
+into three or more flats, and applied for again a year and a half or more later, never had it done. Golden Hill, at
+Belbins near Romsey, was built in 2004 and never lived in: approved for conversion in 2019 and in 2022, and applied
+for again in 2025. People revise their plans for houses they still live in, so it's a weak lead on its own, a little
+stronger when two approvals have lapsed. A house split in two, or a scheme sent in again a few months on, doesn't
+count.
+
 ### Planning committee reports
 
 Before a planning committee decides an application, an officer writes a report that describes the site, and says

@@ -212,7 +212,15 @@ class Updater:
             return
         with self._rebuild_lock:
             started = time.time()
-            n = build_sites(self.store)
+            try:
+                n = build_sites(self.store)
+            except Exception as exc:
+                if force:
+                    raise
+                # Asked for along the way by a source: it carries on, and the next rebuild may do better.
+                self.log(f"map rebuild failed - {type(exc).__name__}: {exc}")
+                self._last_rebuild = time.time()
+                return
             self._rebuild_took = time.time() - started
             self._last_rebuild = time.time()
             self.sites_version += 1
