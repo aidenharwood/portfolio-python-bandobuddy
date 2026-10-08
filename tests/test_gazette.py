@@ -189,10 +189,10 @@ class DisclaimerTests(unittest.TestCase):
                                                                             "Happisburgh Road, North Walsham"}, places))
         self.assertEqual(search.call_count, 1)                   # once, then remembered
 
-    def test_off_unless_switched_on(self):
-        self.assertFalse(opendata.DATASETS["disclaimers"].enabled())
-        with mock.patch.dict("os.environ", {"BANDOBUDDY_DISCLAIMERS": "1"}):
-            self.assertTrue(opendata.DATASETS["disclaimers"].enabled())
+    def test_on_by_default(self):
+        self.assertTrue(opendata.DATASETS["disclaimers"].enabled())
+        from bandobuddy.updater import SOURCES
+        self.assertIn("disclaimers", SOURCES)
 
 
 if __name__ == "__main__":

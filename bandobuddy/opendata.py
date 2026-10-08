@@ -1565,7 +1565,6 @@ DATASETS = {
             fetch=gazette.Disclaimers(),
             judge=_disclaimer,
             incremental=True,
-            opt_in=True,       # ten seconds between requests, as the Gazette asks: hours to read them all
             remembers=True,
         ),
         Dataset(
