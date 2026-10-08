@@ -84,6 +84,10 @@ def category_for(site: dict) -> str:
     return OTHER_CATEGORY[0]
 
 
+# Worked underground: a stone mine under Bradford-on-Avon or Box, galleries to walk.
+_UNDERGROUND = re.compile(r"worked underground|underground (?:quarr|mine|workings|galler)", re.I)
+
+
 def _condition_from(evidence: str) -> str | None:
     text = evidence.lower()
     if "heritage at risk" in text:
@@ -119,6 +123,8 @@ def _condition_from(evidence: str) -> str | None:
         return "Brownfield"
     if "cave entrance" in text:
         return "Cave"
+    if _UNDERGROUND.search(text):
+        return "Underground"
     if re.search(r"old (mine|quarry|colliery)|adit|mineshaft|mine_shaft", text):
         return "Old workings"
     if re.search(r"bunker|pillbox|observation post|observer corps|monitoring post|\broc\b post", text):
@@ -142,6 +148,8 @@ def condition_for(site: dict) -> str:
     if site.get("in_use"):
         return site["in_use"]["kind"]
     members = sorted(members_of(site), key=lambda m: -m["weight"])
+    if any(_UNDERGROUND.search(m.get("evidence") or "") for m in members):
+        return "Underground"     # whatever else is said of it: "old quarry" undersells galleries to walk
     for m in members:
         found = _condition_from(m.get("evidence", ""))
         if found:

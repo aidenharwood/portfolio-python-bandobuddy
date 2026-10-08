@@ -76,6 +76,9 @@ def _site_names(site: dict) -> set[str]:
     return names
 
 
+_WORKINGS = re.compile(r"quarr|mine|workings|shaft|adit|\blevel|cave|tunnel", re.I)
+
+
 def _best_match(item: dict, candidates: list[dict]) -> dict | None:
     best, best_score = None, 0.0
     mine = _names(item)
@@ -84,6 +87,12 @@ def _best_match(item: dict, candidates: list[dict]) -> dict | None:
         if d > MATCH_M:
             continue
         sim = max((_similar(a, b) for a in mine for b in _site_names(c)), default=0.0)
+        # Galleries under a village aren't the school or the farm above them, nor they the galleries, even if both
+        # are named for the village.
+        theirs = [m.get("kind") or "" for m in _members(c)]
+        if (item.get("kind") == "underground quarry" and not any(map(_WORKINGS.search, theirs))) \
+                or ("underground quarry" in theirs and not _WORKINGS.search(item.get("kind") or "")):
+            continue
         # A brownfield plot or heritage listing sitting on a ruin is that ruin, not a second place.
         loose = d <= LOOSE_M and min(item["weight"], _strongest(c)) < WEAK_BELOW
         if d <= SAME_SPOT_M or sim >= 0.6 or loose:
@@ -488,7 +497,8 @@ def build_sites(store: Store) -> int:
               "first_seen": row["first_seen"], "source": row["dataset"], "aliases": row.get("aliases") or [],
               "reported": row.get("reported"), "reported_as": row.get("reported_as"),
               "dates": row.get("dates") or ([[row["reported_as"], row["reported"]]] if row.get("reported") else []),
-              "entrance": _entrance_from_text(said)}
+              # A quarry worked underground is the place, not a way into one, for all its air shafts.
+              "entrance": None if row["kind"] == "underground quarry" else _entrance_from_text(said)}
         near = grid.near(row["lat"], row["lng"])
         # "Track II" and "Incline III" of the same quarry are one place to visit, named for the quarry.
         found = _same_complex(ev, [s for s in near if s["open"] and not s["osm"] and not s["wikidata"]])
@@ -539,7 +549,8 @@ def build_sites(store: Store) -> int:
             "strength": strength_for(score),
             "category": category_for(site),
             "condition": condition_for(site),
-            "kind": best["kind"],
+            # Worked underground, whatever its strongest source calls it: not just a quarry, galleries to walk.
+            "kind": next((m["kind"] for m in members if m["kind"] == "underground quarry"), best["kind"]),
             "sources": sources,
             "reasons": reasons,
             "detail": {"osm": site["osm"], "wikidata": site["wikidata"], "open": site["open"],

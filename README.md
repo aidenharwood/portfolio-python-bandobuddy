@@ -116,6 +116,10 @@ pip install -r requirements.txt
 python -m bandobuddy          # opens http://127.0.0.1:8642 here, and serves your network
 ```
 
+If it's already running, starting it again just opens the copy that's running: two would share the database and
+both update it (and on Windows, both listen on the port, with the older one still answering). To restart it, after
+an update say, close its window first.
+
 ### On your phone
 
 bandobuddy is open to every device on your network, so a phone on the same Wi-Fi can use it too. It prints
@@ -170,7 +174,10 @@ weren't kept still opens with what the brief copy knows (its name, what it was, 
 A new version only takes over once it has everything the app needs to open, so an update that half-downloads
 on a weak signal can't leave you with nothing offline. A new release retires the old caches automatically,
 because the service worker is stamped with the version. And because the app opens from its kept copy, a newer
-one is fetched behind it: when it differs, the app says "bandobuddy has been updated" and a tap reloads it.
+one is fetched behind it: when it differs, the app switches to it by itself, keeping the map where it was and
+the place you had open. It waits while that would lose something (a note or a search half typed, a menu open, a
+report still sending) and goes ahead when you're done or the app's put away. (If it's just done so and is told
+again within a minute, it asks instead, so it can never go round in circles.)
 
 **News of saved places.** Whenever the phone's copy of the map is refreshed, the app compares each saved place with
 how it was when you last looked. It checks whether the condition has changed, whether a source has a newer date (a
@@ -213,7 +220,9 @@ colliery shaft is disused by definition. Entries that land on top of a place alr
 rather than doubling it up, and each place links back to the register that listed it.
 
 Every register is fetched with its own updater, so one being slow or down never blocks the others, and
-each can be refreshed or paused on its own from the **Data** panel.
+each can be refreshed or paused on its own from the **Data** panel. A complete update takes whatever it didn't
+see as gone from the source, unless it saw nothing at all: that's an update gone wrong, not a source emptied
+overnight, so nothing's taken as gone.
 
 **Closed schools.** The Department for Education's register lists every school in England, open or closed, in
 one daily download (about 65 MB, read as it arrives rather than saved). A closed school only counts if it shut
@@ -263,6 +272,11 @@ of it has gone. But it's the only open source for some places, such as Butser Hi
 NLS site. The transcription is finished, so it's asked for again only every 90 days. GB1900 is CC BY-SA:
 acknowledge the Great Britain Historical GIS, the GB1900 partners and volunteers, and share alike. Only this one
 edition has had its words transcribed for all of Great Britain; the other OS editions exist only as scanned images.
+It also finds quarries worked underground. A "Quarry" with an "Air Shaft" within 500 m was mined, not dug: that's
+how Bethel Quarry, under Bradford-on-Avon, and the stone mines around Box and Corsham turn up, about 480 of them.
+Mines have air shafts too, so a quarry with a mine's old shafts or levels near is left out. Underground quarries
+are good leads, shown as *Underground*, and a place that's on the map already (Gripwood Quarry, from Wikidata)
+takes that on. They stay separate from whatever's on the surface above them.
 
 **Empty NHS sites, optional.** NHS England's yearly estates return lists every NHS site with how much of it is
 unoccupied. Sites reported as wholly unoccupied, and those where at least half the floor (and 1,000 m² or more)
@@ -350,7 +364,7 @@ their records as data.
 
 ### LiDAR relief
 
-**LiDAR relief** (from the layers button on the map) shades the shape of the ground from airborne laser surveys, with trees and
+**LiDAR relief** (its own button on the map, above the layers button) shades the shape of the ground from airborne laser surveys, with trees and
 buildings taken away, so filled shafts, spoil heaps, tramways, old railway cuttings and earthworks stand out,
 including ones in woods. It comes with a **slider**: the map to the left of the line, the LiDAR to the right,
 so you can sweep the shape of the ground against the roads and names. Drag the handle (or use the arrow keys on
@@ -428,7 +442,7 @@ Places with only weak evidence are **weaker leads**: hidden unless you turn on *
 
 **Best spots only**, on by default, narrows the map to places worth the trip. That means somewhere still standing,
 with good evidence it's abandoned, disused, ruined, empty, unfinished, at risk, closed (*Closed 2019*) or closing,
-or an old military site or a cave. It leaves out:
+or an old military site, a cave, or a quarry worked underground (*Underground*). It leaves out:
 
 - bare land: brownfield and cleared plots
 - capped shafts, spoil heaps and quarry holes

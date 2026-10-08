@@ -224,6 +224,32 @@ class UpdaterTests(unittest.TestCase):
         # Reused the split boxes from last time: no timeouts, no re-splitting.
         self.assertEqual(up.store.tile_counts("wikidata"), {"done": 4})
 
+    def test_a_crawl_that_stopped_before_queuing_its_boxes(self):
+        # Wikidata, 7 October 2026: an update stopped before it queued its boxes (the database busy, perhaps); the
+        # next one resumed it, found only the last crawl's boxes, all done, fetched nothing and took all 49,675
+        # items as gone. Now it queues its own boxes and fetches them.
+        tmp = Path(tempfile.mkdtemp())
+        up = make_updater(tmp)
+        up.run("wikidata")
+        before = len(up.store.active_wd())
+        crawl = up.store.start_crawl("wikidata")         # ...and stopped there
+        up.store.set_crawl_status(crawl["id"], "running")
+        up.run("wikidata")
+        self.assertEqual(len(up.store.active_wd()), before)
+        self.assertEqual(up.store.last_finished("wikidata")["status"], "done")
+        self.assertEqual(up.store.tiles_of("wikidata", crawl["id"]), up.store.tile_counts("wikidata")["done"])
+
+    def test_a_crawl_that_found_nothing_takes_nothing_as_gone(self):
+        tmp = Path(tempfile.mkdtemp())
+        session = FakeSession()
+        up = make_updater(tmp, session)
+        up.run("wikidata")
+        before = len(up.store.active_wd())
+        session.wikidata.clear()                         # it answers, with nothing at all
+        up.run("wikidata")
+        self.assertEqual(len(up.store.active_wd()), before)
+        self.assertEqual(up.store.last_finished("wikidata")["status"], "failed")
+
     def test_wikidata_resumes_after_pause(self):
         tmp = Path(tempfile.mkdtemp())
         session = FakeSession()

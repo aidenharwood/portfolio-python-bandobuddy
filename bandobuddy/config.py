@@ -105,7 +105,7 @@ REPORTS_PER_HOUR = 30     # from one address: plenty for a day out, too few to s
 BEST = {
     "min_score": WEAK_BELOW,
     "conditions": ["Abandoned", "Disused", "Ruin", "At risk", "Empty", "Unfinished", "Old military", "Cave",
-                   "Demolition approved", "Closing"],      # ...and "Closed 1998" and the like
+                   "Demolition approved", "Closing", "Underground"],      # ...and "Closed 1998" and the like
     "skip_kinds": ["brownfield land", "brownfield", "vacant land", "telephone", "public bookcase", "petroleum well",
                    "old workings", "spoil heap", "mine shaft", "mineshaft", "shaft", "air shaft", "quarry", "mine dump",
                    "slag heap", "heap", "pit", "retail", "kiosk", "restaurant", "cafe", "fast food", "bank", "newsagent",

@@ -242,7 +242,12 @@ class Updater:
     def _finish(self, source: str, crawl: dict, complete: bool) -> None:
         dataset = opendata.DATASETS.get(source)
         if complete and not (dataset and dataset.incremental):
-            # Only a complete crawl can say what has disappeared (one that only asks what's new can't).
+            # Only a complete crawl can say what has disappeared (one that only asks what's new can't), and not
+            # one that saw nothing at all: that's a crawl gone wrong, not a source emptied overnight.
+            if not self.store.seen_since(source, crawl["started_at"]):
+                self.log(f"{SOURCE_LABELS[source]}: the update found nothing, so nothing's taken as gone")
+                self.store.set_crawl_status(crawl["id"], "failed", "found nothing")
+                return
             gone = self.store.mark_gone(source, crawl["started_at"])
             if gone:
                 self.log(f"{SOURCE_LABELS[source]}: {gone:,} items no longer in the source")
@@ -320,10 +325,12 @@ class Updater:
         progress = self._progress("wikidata")
         session = self.session_factory()
         crawl = self.store.unfinished_crawl("wikidata")
-        if crawl:
+        # Resume only from the crawl's own boxes. One that stopped before it queued them (the database busy, say)
+        # would otherwise find the last crawl's, all done, fetch nothing, and take everything as gone.
+        if crawl and self.store.tiles_of("wikidata", crawl["id"]):
             self.log("Wikidata: resuming where the last update stopped")
         else:
-            crawl = self.store.start_crawl("wikidata")
+            crawl = crawl or self.store.start_crawl("wikidata")
             self.store.seed_tiles("wikidata", crawl["id"], grid_boxes(self.uk_bbox, WIKIDATA_BOX_DEG))
         self.store.set_crawl_status(crawl["id"], "running")
         seen_at = crawl["started_at"]

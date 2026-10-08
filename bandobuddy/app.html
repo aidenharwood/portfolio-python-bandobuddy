@@ -90,14 +90,21 @@
   .fab.follow { background:var(--me); color:#fff }
   .fab.searching svg { animation:pulse 1s ease-in-out infinite alternate }
   .fab.lit { color:var(--accent) }   /* an overlay, or a map style other than the plain map, is on */
-  /* map style and overlays: a card beside the layers button */
-  .layers-panel { position:absolute; right:64px; bottom:0; width:min(300px, calc(100vw - 92px));
-    max-height:min(70vh, calc(100vh - var(--sheet-h) - 150px)); overflow-y:auto; padding:14px;
+  /* map style and overlays: a card across the bottom on phones, over the sheet; beside the buttons on wide screens */
+  .layers-panel { position:fixed; z-index:1300; left:12px; right:12px; bottom:calc(12px + env(safe-area-inset-bottom));
+    max-height:min(75vh, calc(100vh - 100px)); overflow-y:auto; padding:6px 16px 16px;
     background:var(--panel); color:var(--ink); border-radius:16px; box-shadow:var(--shadow) }
+  .layers-head { display:flex; justify-content:space-between; align-items:center; margin-right:-10px }
   .layers-panel h3 { margin:0 0 8px; font-size:12px; letter-spacing:.05em; text-transform:uppercase; color:var(--muted) }
-  .layers-panel h3 + .seg { margin-bottom:16px }
+  .layers-head h3 { margin:0 }
+  .layers-head + .seg { margin:4px 0 16px }
+  .layers-panel .seg button { padding:12px 9px }
   .layers-panel .checks { flex-direction:column; gap:0 }
+  .layers-panel .checks label { min-height:44px }
   .layers-panel .note { margin-top:8px; font-size:12px }
+  @media (min-width: 900px) {
+    .layers-panel { left:auto; right:84px; bottom:36px; width:300px; max-height:min(70vh, calc(100vh - 120px)) }
+  }
   @keyframes pulse { to { opacity:.3 } }
 
   /* the sheet: bottom sheet on phones, side panel on wide screens */
@@ -347,6 +354,8 @@
   /* LiDAR shading darkens the map beneath rather than covering it: roads and names still show. */
   /* the raw LiDAR slider: a line across the map with a handle; only the handle catches taps */
   .swipe { position:fixed; z-index:500; top:0; bottom:0; left:0; width:0; pointer-events:none }
+  .swipe.squeezed { visibility:hidden }   /* too little map showing to drag it across */
+  .swipe.no-left .swipe-tag.left, .swipe.no-right .swipe-tag.right { display:none }
   .swipe-line { position:absolute; top:0; bottom:0; left:-1px; width:2px; background:#fff; box-shadow:0 0 4px rgba(0,0,0,.55) }
   .swipe-handle { position:absolute; left:-21px; top:var(--swipe-y, 50%); width:42px; height:42px; margin-top:-21px;
     border:2px solid #fff; border-radius:50%; background:var(--accent); color:var(--accent-ink); box-shadow:var(--shadow);
@@ -528,20 +537,20 @@
   </div>
 </section>
 
+<!-- Map style and overlays, opened from the layers button -->
+<div class="layers-panel" id="layersPanel" role="dialog" aria-label="Map layers" hidden>
+  <div class="layers-head"><h3>Map style</h3>
+    <button type="button" class="icon-btn" id="layersClose" aria-label="Close map layers"></button></div>
+  <div class="seg" id="baseSeg"></div>
+  <h3>Overlays</h3>
+  <div class="checks" id="overlayChecks"></div>
+  <p class="note" id="overlayHint" hidden></p>
+  <p class="note"><b>LiDAR relief</b> has a button of its own. <b>Coal mining</b> data &copy; Mining Remediation
+    Authority, under the Open Government Licence; it shows from village level.</p>
+</div>
 <div class="fabs" id="fabs">
-  <!-- Map style and overlays, opened from the layers button beside it -->
-  <div class="layers-panel" id="layersPanel" role="dialog" aria-label="Map layers" hidden>
-    <h3>Map style</h3>
-    <div class="seg" id="baseSeg"></div>
-    <h3>Overlays</h3>
-    <div class="checks" id="overlayChecks"></div>
-    <p class="note" id="overlayHint" hidden></p>
-    <p class="note"><b>LiDAR relief</b> is the shape of the ground from airborne laser surveys, with trees and
-      buildings taken away: filled shafts, spoil heaps, tramways and earthworks stand out. Drag the slider on the
-      map to sweep between it and the map. Environment Agency,
-      Scottish Government (where surveyed) and Welsh Government. <b>Coal mining</b> data &copy; Mining Remediation
-      Authority. All under the Open Government Licence; they show from village level.</p>
-  </div>
+  <button type="button" class="fab" id="lidarBtn" aria-label="LiDAR relief" aria-pressed="false"
+          title="LiDAR relief: the bare ground, with trees and buildings taken away"></button>
   <button type="button" class="fab" id="layersBtn" aria-label="Map style and overlays" aria-expanded="false" aria-controls="layersPanel"></button>
   <button type="button" class="fab" id="locBtn" aria-label="Show my location"></button>
 </div>
@@ -593,6 +602,7 @@ const UI = {
   locate: '<circle cx="12" cy="12" r="7"/><circle class="dot" cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>',
   layers: '<path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 12.5 9 5 9-5"/><path d="m3 17 9 5 9-5"/>',
   swipe: '<path d="M9 7l-5 5 5 5M15 7l5 5-5 5"/>',
+  relief: '<path d="m2 19 6.5-11 4 6.5 2.5-4L22 19Z"/><path d="M6.5 15.5h3M14 15.5h2.5"/>',
   nav: '<path d="M3 11 21 3l-8 18-2-8z"/>',
   share: '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 13.5 6.8 4M15.4 6.5l-6.8 4"/>',
   pin: '<path d="M12 21s-7-6.2-7-11.5a7 7 0 0 1 14 0C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/>',
@@ -969,11 +979,12 @@ function initMap() {
   renderBaseSeg();
   renderOverlays(new Set(prefs.overlays || []));
   renderLayersBtn();
+  renderLidarBtn();
   initSwipe();
 }
 
 function renderOverlays(on) {
-  $("overlayChecks").innerHTML = Object.entries(S.overlays).map(([key, o]) =>
+  $("overlayChecks").innerHTML = Object.entries(S.overlays).filter(([key]) => key !== "lidar").map(([key, o]) =>
     `<label><input type="checkbox" data-overlay="${esc(key)}"${on.has(key) ? " checked" : ""}> ${esc(o.label)}</label>`).join("");
   for (const key of on) S.overlays[key]?.layer.addTo(S.map);
 }
@@ -998,8 +1009,26 @@ function toggleOverlay(key, wanted) {
   else S.map.removeLayer(overlay.layer);
   renderOverlayHint();
   renderLayersBtn();
+  renderLidarBtn();
   syncSwipe();
-  savePrefs({ overlays: [...document.querySelectorAll("#overlayChecks input:checked")].map(i => i.dataset.overlay) });
+  savePrefs({ overlays: Object.keys(S.overlays).filter(k => S.map.hasLayer(S.overlays[k].layer)) });
+}
+
+// LiDAR has a button of its own: of all the layers, it's the one flicked on and off.
+function renderLidarBtn() {
+  if (!S.map) return;
+  const on = S.map.hasLayer(S.overlays.lidar.layer);
+  $("lidarBtn").classList.toggle("lit", on);
+  $("lidarBtn").setAttribute("aria-pressed", String(on));
+}
+
+function toggleLidar() {
+  const on = !S.map.hasLayer(S.overlays.lidar.layer);
+  toggleOverlay("lidar", on);
+  if (on && S.map.getZoom() >= S.overlays.lidar.from && !loadPrefs().lidarTold) {   // (too far out says so itself)
+    toast("LiDAR relief: the bare ground, with trees and buildings taken away. Drag the slider to compare it with the map.", 6000);
+    savePrefs({ lidarTold: true });
+  }
 }
 
 function syncZoomControl() {
@@ -1017,10 +1046,10 @@ function setBase(name) {
   renderLayersBtn();
 }
 
-// The layers button: map style and overlays, in a card beside it. Lit while anything's on beyond the plain map.
+// The layers button: map style and overlays, in a card. Lit while anything's on beyond the plain map (LiDAR aside).
 function renderLayersBtn() {
   if (!S.map) return;
-  const lit = S.base !== "Map" || Object.values(S.overlays).some(o => S.map.hasLayer(o.layer));
+  const lit = S.base !== "Map" || Object.entries(S.overlays).some(([k, o]) => k !== "lidar" && S.map.hasLayer(o.layer));
   const open = !$("layersPanel").hidden;
   $("layersBtn").classList.toggle("lit", lit);
   $("layersBtn").setAttribute("aria-expanded", String(open));
@@ -1053,8 +1082,19 @@ function placeSwipe() {
   S.overlays.lidar.layer.eachLayer(layer => { const c = layer.getContainer(); if (c) c.style.clip = clip; });
   const el = $("swipe");
   el.style.transform = `translateX(${x}px)`;
-  el.style.setProperty("--swipe-y", `${Math.round((r.y0 + r.y1) / 2)}px`);
-  el.style.setProperty("--swipe-tag-y", `${Math.round(r.y0 + 12)}px`);
+  // In the middle of the open map, clear of the buttons; gone while there's too little map to drag it across
+  // (the sheet pulled up over a place), rather than tucked under the search bar.
+  el.classList.toggle("squeezed", r.y1 - r.y0 < 150);
+  let y = (r.y0 + r.y1) / 2;
+  const fabs = $("fabs").getBoundingClientRect(), box = S.map.getContainer().getBoundingClientRect();
+  if (!$("fabs").classList.contains("hide") && x + 29 > fabs.left - box.left && y + 29 > fabs.top - box.top
+      && y - 29 < fabs.bottom - box.top)
+    y = Math.max(r.y0 + 29, fabs.top - box.top - 29);
+  el.style.setProperty("--swipe-y", `${Math.round(y)}px`);
+  // Its "Map" and "LiDAR" labels just above it, out in the open map too, and only where there's room for them.
+  el.classList.toggle("no-left", x - r.x0 < 56);
+  el.classList.toggle("no-right", r.x1 - x < 64);
+  el.style.setProperty("--swipe-tag-y", `${Math.round(Math.max(r.y0 + 8, y - 50))}px`);
   $("swipeHandle").setAttribute("aria-valuenow", String(Math.round(S.swipe * 100)));
 }
 
@@ -1658,6 +1698,7 @@ function renderReports(data) {
 
 let reportTimer = 0;
 function onReportChoice(el) {
+  S.reportTappedAt = Date.now();   // sent once the tapping settles: no reloading for a new version meanwhile
   const mine = S.myReport;
   if (!mine || mine.site !== S.site) return;
   if ("reportClear" in el.dataset) { clearTimeout(reportTimer); sendReport(mine, true); return; }
@@ -2332,6 +2373,8 @@ function initControls() {
   $("clearBtn").innerHTML = svg(UI.close);
   $("locBtn").innerHTML = svg(UI.locate);
   $("layersBtn").innerHTML = svg(UI.layers);
+  $("lidarBtn").innerHTML = svg(UI.relief);
+  $("layersClose").innerHTML = svg(UI.close);
   for (const b of document.querySelectorAll("[data-close]:empty")) b.innerHTML = svg(UI.close);
   $("versionText").textContent = `Version ${BOOT.version}.`;
   const registerLink = ([label, home, attribution]) =>
@@ -2362,6 +2405,8 @@ function initControls() {
   });
   $("locBtn").addEventListener("click", onLocateButton);
   $("layersBtn").addEventListener("click", () => showLayers($("layersPanel").hidden));
+  $("lidarBtn").addEventListener("click", toggleLidar);
+  $("layersClose").addEventListener("click", () => { showLayers(false); $("layersBtn").focus(); });
   $("locStop").addEventListener("click", () => {
     stopLocate();
     toast("Stopped using your location. The location button starts it again.");
@@ -2470,16 +2515,46 @@ function initOffline() {
     if (firstVisit && S.map) S.map.eachLayer(layer => { if (layer instanceof L.TileLayer) layer.redraw(); });
   });
 
-  // The worker opened the copy of the app it kept, then fetched a newer one: offer it now, not next time.
+  // The worker opened the copy of the app it kept, then fetched a newer one: switch to it now, not next time.
   navigator.serviceWorker?.addEventListener("message", e => {
     if (!e.data || e.data.type !== "page-updated") return;
-    toast("bandobuddy has been updated. Tap here to use the new version.", 60000);
-    $("toast").classList.add("action");
-    $("toast").onclick = () => location.reload();
+    S.updateReady = true;
+    reloadWhenIdle();
   });
+  // ...or as soon as that wouldn't lose anything: typing done, a menu closed, the app put away.
+  document.addEventListener("focusout", () => setTimeout(reloadWhenIdle, 300));
+  document.addEventListener("visibilitychange", reloadWhenIdle);
+  setInterval(reloadWhenIdle, 5000);
   if ("serviceWorker" in navigator && window.isSecureContext) {
     navigator.serviceWorker.register("/sw.js").catch(() => { /* fine: the app just won't work offline */ });
   }
+}
+
+// Switching to a new version of the app reloads the page: the map view and the open place come back as they were.
+// Not while something would be lost: a note or a search half typed, a menu open, a report still being sent.
+function busyForUpdate() {
+  if (document.visibilityState !== "visible") return false;
+  const a = document.activeElement;
+  return !!(a && (a.matches("input, textarea, select") || a.isContentEditable))
+    || !$("navMenu").hidden || !$("layersPanel").hidden || document.body.classList.contains("dragging")
+    || Date.now() - (S.reportTappedAt || 0) < 4000;
+}
+
+function reloadWhenIdle() {
+  if (!S.updateReady || busyForUpdate()) return;
+  // Not twice in a minute: a page that kept saying it's been updated would never settle. Offer it instead.
+  let last = 0;
+  try { last = Number(sessionStorage.getItem("bandobuddy-updated-at")) || 0; } catch (_) { /* private mode */ }
+  if (Date.now() - last < 60000) {
+    S.updateReady = false;
+    toast("bandobuddy has been updated. Tap here to use the new version.", 60000);
+    $("toast").classList.add("action");
+    $("toast").onclick = () => location.reload();
+    return;
+  }
+  try { sessionStorage.setItem("bandobuddy-updated-at", String(Date.now())); } catch (_) { /* private mode */ }
+  S.updateReady = false;
+  location.reload();
 }
 
 // Offering to install, unless this already is the installed app.

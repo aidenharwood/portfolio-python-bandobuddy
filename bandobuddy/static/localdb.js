@@ -290,6 +290,7 @@ self.LocalDB = (() => {
     const dateKind = (params.get("date") || "").trim();
     const dateFrom = (params.get("date_from") || "").trim(), dateTo = (params.get("date_to") || "").trim();
     const q = (params.get("q") || "").trim().slice(0, 80).toLowerCase();
+    const squashed = q.replace(/[\s-]+/g, "");
     const test = row => {
       if (row[c.score] < minScore) return false;
       if (bbox) {
@@ -303,8 +304,10 @@ self.LocalDB = (() => {
         const day = (row[c.dates] || {})[dateKind];
         if (!day || (dateFrom && day < dateFrom) || (dateTo && day >= dateTo)) return false;
       }
-      if (q && !(row[c.name] || "").toLowerCase().includes(q)
-          && !(row[c.aliases] || []).some(a => a.toLowerCase().includes(q))) return false;
+      if (q && ![row[c.name] || "", ...(row[c.aliases] || [])].some(n => {   // store.py's: spaces and hyphens aside
+        const low = n.toLowerCase();
+        return low.includes(q) || low.replace(/[\s-]+/g, "").includes(squashed);
+      })) return false;
       if (best) {   // store.py's best spots (config.BEST)
         const cond = row[c.condition] || "";
         if (!bestConditions.has(cond) && !/^Closed \d{4}$/.test(cond)) return false;

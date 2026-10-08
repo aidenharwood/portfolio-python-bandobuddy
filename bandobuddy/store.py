@@ -205,6 +205,15 @@ class Store:
             cur = db.execute("DELETE FROM od_items WHERE dataset = 'imported' AND ref LIKE ?", (f"{label}:%",))
             return cur.rowcount
 
+    def seen_since(self, source: str, since: str) -> bool:
+        """Has anything from the source been seen since then?"""
+        table = {"osm": "osm_items", "wikidata": "wd_items"}.get(source)
+        with self.connect() as db:
+            if table:
+                return db.execute(f"SELECT 1 FROM {table} WHERE last_seen >= ? LIMIT 1", (since,)).fetchone() is not None
+            return db.execute("SELECT 1 FROM od_items WHERE dataset = ? AND last_seen >= ? LIMIT 1",
+                              (source, since)).fetchone() is not None
+
     def mark_gone(self, source: str, before: str) -> int:
         """Items not seen by a complete crawl that started at `before` have left the source."""
         table = {"osm": "osm_items", "wikidata": "wd_items"}.get(source)
@@ -319,6 +328,12 @@ class Store:
                 "VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
                 [(source, _tile_id(*k), *k, tile["depth"] + 1, tile["crawl_id"]) for k in kids],
             )
+
+    def tiles_of(self, source: str, crawl_id: int) -> int:
+        """How many boxes a crawl has queued: none if it stopped before it got that far."""
+        with self.connect() as db:
+            return db.execute("SELECT COUNT(*) FROM tiles WHERE source = ? AND crawl_id = ?",
+                              (source, crawl_id)).fetchone()[0]
 
     def tile_counts(self, source: str) -> dict:
         with self.connect() as db:
@@ -485,8 +500,11 @@ class Store:
                 where.append(f"{field} < ?")
                 args.append(date_to)
         if q:
-            where.append("(name LIKE ? OR aliases LIKE ?)")   # "Bethel" finds Gripwood Quarry
-            args += [f"%{q}%", f"%{q}%"]
+            # "Bethel" finds Gripwood Quarry; "butser hill" finds Butserhill Lime Works, as the old map spells it.
+            squashed = re.sub(r"[\s-]+", "", q)
+            where.append("(name LIKE ? OR aliases LIKE ? OR REPLACE(REPLACE(name, ' ', ''), '-', '') LIKE ?"
+                         " OR REPLACE(REPLACE(aliases, ' ', ''), '-', '') LIKE ?)")
+            args += [f"%{q}%", f"%{q}%", f"%{squashed}%", f"%{squashed}%"]
         return " AND ".join(where), args
 
     def query_sites(self, limit: int = 3000, **filters) -> tuple[int, list[dict]]:

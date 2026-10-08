@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest import mock
 
 from bandobuddy import opendata
+from bandobuddy.scoring import _condition_from
 from bandobuddy.sites import build_sites
 from bandobuddy.store import Store
 from bandobuddy.updater import Updater
@@ -93,15 +94,30 @@ class FetcherTests(unittest.TestCase):
     def test_old_os_map_labels(self):
         # GB1900's labels, asked for by what they say, with the position under its own names.
         fetch = opendata.DATASETS["old_maps"].fetch
-        service = FakeService([{"numberMatched": 1, "features": [{"properties": {
-            "pin_id": "58bef0a12c66dc982c0151de", "final_text": "Butserhill Lime Works", "latitude": 50.97931,
-            "longitude": -0.96454}}]}])
+        label = lambda pin, text, lat, lng: {"properties": {"pin_id": pin, "final_text": text, "latitude": lat,  # noqa
+                                                            "longitude": lng, "parish": "BRADFORD ON AVON"}}
+        service = FakeService([
+            {"numberMatched": 1, "features": [label("p1", "Butserhill Lime Works", 50.97931, -0.96454)]},
+            # Then quarries and shafts: Bethel Quarry by Frome Road, with air shafts across the hill; a quarry with
+            # none near is a hole in the ground.
+            {"numberMatched": 7, "features": [label("p2", "Quarry", 51.339, -2.2501), label("p3", "Air Shaft", 51.339, -2.2559),
+                                              label("p4", "Air Shaft", 51.3392, -2.2584), label("p5", "Quarry", 51.36, -2.30),
+                                              # ...and one in a lead field, where the air shafts are the mine's
+                                              label("p6", "Quarry", 54.7, -2.2), label("p7", "Air Shaft", 54.701, -2.2),
+                                              label("p8", "Old Shafts", 54.7, -2.203)]},
+        ])
         rows = list(fetch(service, nothing))
         asked = service.calls[0][1]
         self.assertEqual((asked["sortBy"], asked["typeName"]), ("pin_id", "nls:gb1900_21_December"))
         self.assertIn("final_text_lower LIKE '%kiln%'", asked["CQL_FILTER"])
+        self.assertIn("'quarry'", service.calls[1][1]["CQL_FILTER"])
         self.assertEqual((rows[0]["lat"], rows[0]["lng"]), (50.97931, -0.96454))
-        from bandobuddy.scoring import _condition_from
+        self.assertEqual([(r["pin_id"], r.get("air_shafts")) for r in rows], [("p1", None), ("p2", 1)])  # 400 m; 580 m
+        bethel = opendata._old_map(rows[1])
+        self.assertEqual((bethel["name"], bethel["kind"], bethel["weight"]),
+                         ("Underground quarry, Bradford On Avon", "underground quarry", 20))
+        self.assertIn('marks "Quarry" here, with 1 air shaft within 500 m: worked underground', bethel["evidence"])
+        self.assertEqual(_condition_from(bethel["evidence"]), "Underground")
         judge = lambda text: opendata._old_map({"pin_id": "1", "final_text": text, "lat": 51.0, "lng": -1.0})  # noqa
         butser = judge("Butserhill Lime Works")         # at work then, but lime works leave lasting remains
         self.assertEqual((butser["name"], butser["kind"], butser["weight"]), ("Butserhill Lime Works", "lime works", 6))
@@ -263,6 +279,48 @@ class StoreAndSitesTests(unittest.TestCase):
         self.assertEqual(site["condition"], "Old military")
         self.assertIn("Canmore records an observation post here", site["reasons"])
         self.assertEqual(len(site["detail"]["open"]), 1)
+
+    def test_a_quarry_worked_underground_is_a_best_spot(self):
+        # Gripwood Quarry: Wikidata says "old quarry" (a hole in the ground, for best spots), the 1900 map shows its
+        # air shafts. Galleries to walk, so it's one of the best spots.
+        self.store.upsert_wd([{"qid": "Q4249906", "label": "Gripwood Quarry", "lat": 51.3415, "lng": -2.25693,
+                               "types": ["protected area", "quarry"], "states": [], "ended": None,
+                               "wiki": None}], self.now)
+        best = lambda: [s["name"] for s in self.store.full_sites(min_score=0, best=True)]   # noqa: E731
+        build_sites(self.store)
+        self.assertEqual(best(), [])
+        self.store.upsert_od([od("p1", 51.3413, -2.257, name="Underground quarry, Bradford On Avon", weight=20,
+                                 kind="underground quarry", dataset="old_maps",
+                                 evidence='The Ordnance Survey six-inch map of 1888-1913 marks "Quarry" here, with 2 '
+                                          'air shafts within 500 m: worked underground')], self.now)
+        build_sites(self.store)
+        site = self.store.full_sites(min_score=0)[0]
+        self.assertEqual((site["name"], site["kind"], site["condition"], site["category"]),
+                         ("Gripwood Quarry", "underground quarry", "Underground", "mines"))
+        self.assertEqual(best(), ["Gripwood Quarry"])
+        # Galleries under a village aren't the closed school on top of them, 40 m away.
+        self.store.upsert_od([od("s1", 51.3870, -2.2830, name="Monkton Farleigh School", weight=8, kind="school",
+                                 dataset="schools", evidence="Closed in 1990"),
+                              od("p2", 51.38736, -2.2830, name="Underground quarry, Monkton Farleigh", weight=20,
+                                 kind="underground quarry", dataset="old_maps",
+                                 evidence="... with 1 air shaft within 500 m: worked underground")], self.now)
+        build_sites(self.store)
+        conditions = {s["name"]: s["condition"] for s in self.store.full_sites(min_score=0)}
+        self.assertEqual((conditions["Monkton Farleigh School"], conditions["Underground quarry, Monkton Farleigh"]),
+                         ("Closed 1990", "Underground"))
+
+    def test_names_are_found_spaces_and_hyphens_aside(self):
+        # The old map runs Butser Hill together; Bradford-on-Avon comes with or without its hyphens.
+        self.store.upsert_od([od("p1", 50.9793, -0.9645, name="Butserhill Lime Works", weight=6, kind="lime works",
+                                 dataset="old_maps", evidence="marks it"),
+                              od("p2", 51.339, -2.2501, name="Underground quarry, Bradford-On-Avon", weight=20,
+                                 kind="underground quarry", dataset="old_maps", evidence="worked underground")],
+                             self.now)
+        build_sites(self.store)
+        found = lambda q: [s["name"] for s in self.store.full_sites(min_score=0, q=q)]   # noqa: E731
+        self.assertEqual(found("butser hill"), ["Butserhill Lime Works"])
+        self.assertEqual(found("bradford on avon"), ["Underground quarry, Bradford-On-Avon"])
+        self.assertEqual(found("lime works"), ["Butserhill Lime Works"])
 
     def test_a_register_record_can_stand_alone(self):
         self.store.upsert_od([od("42", 51.05, -1.72)], self.now)
